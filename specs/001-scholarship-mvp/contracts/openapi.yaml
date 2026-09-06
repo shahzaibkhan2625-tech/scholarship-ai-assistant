@@ -1,0 +1,666 @@
+openapi: 3.0.3
+info:
+  title: Scholarship AI Assistant API
+  version: "0.1.0"
+  description: >
+    API contracts for the MVP feature (specs/001-scholarship-mvp). Endpoints are
+    grouped by capability per blueprint §5.1; each group is tagged with the
+    blueprint phase that implements it. Auth endpoints (/auth/*) are Phase 0,
+    already implemented — included here for completeness only, unchanged.
+servers:
+  - url: /
+tags:
+  - name: auth
+    description: "Phase 0 (existing, unchanged)"
+  - name: profile
+    description: "Phase 1"
+  - name: url-match
+    description: "Phase 1"
+  - name: qa
+    description: "Phase 1"
+  - name: matching
+    description: "Phase 1 (match-my-profile)"
+  - name: discovery
+    description: "Phase 2"
+  - name: documents
+    description: "Phase 3"
+  - name: generation
+    description: "Phase 3 (CV/SOP)"
+  - name: application
+    description: "Phase 4 (planner, tracker, assistant, submission approval)"
+
+paths:
+  # ---------------------------------------------------------------------
+  # Phase 0 — existing, unchanged (documented for completeness only)
+  # ---------------------------------------------------------------------
+  /auth/signup:
+    post:
+      tags: [auth]
+      summary: Create an account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SignupRequest' }
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserResponse' }
+        '409': { description: Email already registered }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Log in
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '401': { description: Incorrect email or password }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Log out
+      responses:
+        '200': { description: Logged out }
+
+  # ---------------------------------------------------------------------
+  # Phase 1 — Profile (FR-PROFILE-1..4)
+  # ---------------------------------------------------------------------
+  /profile:
+    get:
+      tags: [profile]
+      summary: Get the current user's living profile
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Profile (including criteria classification and missing-info list)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        '404': { description: No profile yet created for this user }
+    put:
+      tags: [profile]
+      summary: Create or update the profile (partial updates supported — living profile, not a one-time form)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfileUpdateRequest' }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+
+  /profile/criteria:
+    post:
+      tags: [profile]
+      summary: Add or reclassify a profile criterion (hard_constraint / soft_preference / exclusion)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfileCriterionRequest' }
+      responses:
+        '200':
+          description: Updated criterion list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ProfileCriterion' }
+
+  /profile/import-cv:
+    post:
+      tags: [profile]
+      summary: Extract profile fields from an uploaded CV (extract_profile tool; suggestions only, user confirms before save)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: Extracted field suggestions (not yet persisted)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProfileUpdateRequest' }
+
+  # ---------------------------------------------------------------------
+  # Phase 1 — Scholarship URL Matching (FR-URL-1/2)
+  # ---------------------------------------------------------------------
+  /scholarships/match-url:
+    post:
+      tags: [url-match]
+      summary: Fetch an official scholarship URL, extract+verify requirements, and match against the profile
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, format: uri }
+      responses:
+        '200':
+          description: Explainable match verdict, or an explicit fetch-failure report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UrlMatchResult' }
+        '422':
+          description: URL could not be fetched — reported explicitly, never presented as "not eligible" (US2 Scenario 4)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FetchFailure' }
+
+  # ---------------------------------------------------------------------
+  # Phase 1 — Grounded Q&A (FR-QA-1..3)
+  # ---------------------------------------------------------------------
+  /scholarships/{scholarship_id}/qa:
+    post:
+      tags: [qa]
+      summary: Ask a grounded question about a specific scholarship
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: scholarship_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question: { type: string }
+      responses:
+        '200':
+          description: Grounded, labeled answer
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QaAnswer' }
+
+  # ---------------------------------------------------------------------
+  # Phase 1 — Match My Profile (FR-MATCH-1..6) — against already-stored scholarships
+  # ---------------------------------------------------------------------
+  /scholarships/{scholarship_id}/match:
+    post:
+      tags: [matching]
+      summary: Produce an explainable match verdict for one stored scholarship against the current profile
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: scholarship_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Match verdict (schema-locked, evidence-required)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MatchVerdict' }
+
+  /matches:
+    get:
+      tags: [matching]
+      summary: List all matches for the current user's profile, ranked deterministically
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Ranked match list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/MatchVerdict' }
+
+  # ---------------------------------------------------------------------
+  # Phase 2 — Discovery (FR-DISC-1..7, FR-COV-1)
+  # ---------------------------------------------------------------------
+  /discovery:
+    post:
+      tags: [discovery]
+      summary: Find candidate scholarships from governed sources matching the profile
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Ranked, source-attributed results plus a measured coverage summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DiscoveryResult' }
+
+  # ---------------------------------------------------------------------
+  # Phase 3 — Documents (FR-DOC-1..3)
+  # ---------------------------------------------------------------------
+  /applications/{application_id}/documents:
+    post:
+      tags: [documents]
+      summary: Upload a document, parse it, associate it, and check it against the target requirement
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: application_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, type]
+              properties:
+                file: { type: string, format: binary }
+                type: { $ref: '#/components/schemas/DocumentType' }
+      responses:
+        '200':
+          description: Parsed document with requirement-satisfaction status (or explicit parse-failure)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadedDocument' }
+        '422':
+          description: Parsing failed — user asked to retry/replace, never silently ignored (Edge Cases)
+
+  # ---------------------------------------------------------------------
+  # Phase 3 — CV / SOP generation (FR-GEN-1/2)
+  # ---------------------------------------------------------------------
+  /applications/{application_id}/generate/cv:
+    post:
+      tags: [generation]
+      summary: Generate a requirement-aware CV grounded strictly in profile + uploaded documents
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: application_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Generated CV with full source trace
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GeneratedDocument' }
+        '409':
+          description: Gap in required information — reported, not filled with invented content (US5 Scenario 5)
+
+  /applications/{application_id}/generate/sop:
+    post:
+      tags: [generation]
+      summary: Generate a requirement-aware SOP/motivation essay answering the university's specified questions
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: application_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Generated SOP with full source trace
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GeneratedDocument' }
+        '409':
+          description: Gap in required information — reported, not filled with invented content
+
+  # ---------------------------------------------------------------------
+  # Phase 4 — Application Planner / Tracker / Assistant / Submission Approval
+  # ---------------------------------------------------------------------
+  /applications:
+    post:
+      tags: [application]
+      summary: Start an application for a selected scholarship
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scholarship_id]
+              properties:
+                scholarship_id: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Created application
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Application' }
+    get:
+      tags: [application]
+      summary: Track all applications, deadlines, missing documents, and status (Application Tracker)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Applications with readiness assessment
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Application' }
+
+  /applications/{application_id}/plan:
+    post:
+      tags: [application]
+      summary: Generate/refresh the labeled application checklist (deterministic-mode button; same result as agentic mode)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: application_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Labeled checklist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApplicationPlan' }
+
+  /applications/{application_id}/assistant/next-step:
+    post:
+      tags: [application]
+      summary: >
+        Agentic mode: Application/Submission agent determines and executes the next step
+        (request missing detail/document, run a workflow, or present a result for approval).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: application_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Next-step result — identical shape to the deterministic-mode endpoints it wraps
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssistantStepResult' }
+
+  /applications/{application_id}/submission-approvals:
+    post:
+      tags: [application]
+      summary: >
+        Record an explicit, per-submission human approval. Scoped to one submission event only —
+        never carries forward to a different or later submission (constitution Principle III, FR-APP-3).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: application_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [submission_scope]
+              properties:
+                submission_scope: { type: string, description: "Identifies exactly which submission event this approval covers" }
+                notes: { type: string, nullable: true }
+      responses:
+        '201':
+          description: Recorded approval (staging only — no live external send exists in MVP, FR-APP-4)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubmissionApproval' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    # ---- Phase 0 (existing) ----
+    SignupRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+    TokenResponse:
+      type: object
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, default: bearer }
+    UserResponse:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        created_at: { type: string, format: date-time }
+
+    # ---- Shared value-status vocabulary (constitution Principle I) ----
+    ValueStatus:
+      type: string
+      enum: [known, unknown, not_applicable, conditional, conflicting]
+    Confidence:
+      type: string
+      enum: [verified, inferred, unknown]
+
+    # ---- Phase 1: Profile ----
+    ProfileCriterion:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        dimension: { type: string }
+        operator: { type: string }
+        value: {}
+        kind: { type: string, enum: [hard_constraint, soft_preference, exclusion] }
+        weight: { type: number, nullable: true }
+        note: { type: string, nullable: true }
+    ProfileCriterionRequest:
+      allOf:
+        - $ref: '#/components/schemas/ProfileCriterion'
+    MissingInfoItem:
+      type: object
+      properties:
+        dimension: { type: string }
+        reason: { type: string }
+    Profile:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, nullable: true }
+        nationality: { type: string, nullable: true }
+        country_of_residence: { type: string, nullable: true }
+        current_degree: { type: string, nullable: true }
+        target_degree_level: { type: string, enum: [BS, MS, PhD, other], nullable: true }
+        target_fields: { type: array, items: { type: string } }
+        target_countries: { type: array, items: { type: string } }
+        education_records: { type: array, items: { type: object } }
+        test_scores: { type: array, items: { type: object } }
+        experience: { type: array, items: { type: object } }
+        criteria: { type: array, items: { $ref: '#/components/schemas/ProfileCriterion' } }
+        missing_info: { type: array, items: { $ref: '#/components/schemas/MissingInfoItem' } }
+        updated_at: { type: string, format: date-time }
+    ProfileUpdateRequest:
+      type: object
+      description: Partial update — any subset of Profile's writable fields
+      properties:
+        name: { type: string }
+        nationality: { type: string }
+        country_of_residence: { type: string }
+        current_degree: { type: string }
+        target_degree_level: { type: string, enum: [BS, MS, PhD, other] }
+        target_fields: { type: array, items: { type: string } }
+        target_countries: { type: array, items: { type: string } }
+
+    # ---- Shared: scholarship field / evidence ----
+    FieldValue:
+      type: object
+      properties:
+        value: {}
+        value_status: { $ref: '#/components/schemas/ValueStatus' }
+        confidence: { $ref: '#/components/schemas/Confidence' }
+        evidence_snippet: { type: string, nullable: true }
+        source_url: { type: string, nullable: true }
+        last_verified_at: { type: string, format: date-time, nullable: true }
+
+    # ---- Phase 1: URL Match ----
+    UrlMatchResult:
+      type: object
+      properties:
+        scholarship_id: { type: string, format: uuid }
+        official_source: { type: string, format: uri }
+        verdict: { $ref: '#/components/schemas/MatchVerdict' }
+    FetchFailure:
+      type: object
+      properties:
+        url: { type: string, format: uri }
+        error: { type: string }
+        reported_as: { type: string, enum: [fetch_failure], description: "Never 'not eligible' — US2 Scenario 4" }
+
+    # ---- Phase 1: Q&A ----
+    QaAnswer:
+      type: object
+      properties:
+        answer_text: { type: string }
+        confidence: { $ref: '#/components/schemas/Confidence' }
+        source_url: { type: string, nullable: true }
+        source_id: { type: string, format: uuid, nullable: true }
+        last_verified_at: { type: string, format: date-time, nullable: true }
+        evidence_snippet: { type: string, nullable: true }
+
+    # ---- Phase 1: Matching ----
+    CriterionOutcome:
+      type: object
+      properties:
+        criterion: { type: string }
+        result: { type: string, enum: [pass, fail, unknown, inferred, met, unmet] }
+        evidence: { type: string, nullable: true }
+    MatchVerdict:
+      type: object
+      description: Fixed, schema-locked — never a free-text verdict (constitution Principle II)
+      properties:
+        scholarship_id: { type: string, format: uuid }
+        eligibility_verdict: { type: string, enum: [eligible, likely, possibly, not, unknown_requires_verification] }
+        match_strength: { type: string, enum: [strong, possible, not] }
+        hard_constraints: { type: array, items: { $ref: '#/components/schemas/CriterionOutcome' } }
+        soft_preferences: { type: array, items: { $ref: '#/components/schemas/CriterionOutcome' } }
+        exclusions_triggered: { type: array, items: { type: string } }
+        matched_criteria: { type: array, items: { type: string } }
+        failed_criteria: { type: array, items: { type: string } }
+        missing_information: { type: array, items: { type: string } }
+        unverified_criteria: { type: array, items: { type: string } }
+        required_documents: { type: array, items: { type: string } }
+        remaining_actions: { type: array, items: { type: string } }
+        evidence: { type: array, items: { type: string } }
+
+    # ---- Phase 2: Discovery ----
+    CoverageSummary:
+      type: object
+      properties:
+        sources_checked: { type: integer }
+        sources_failed: { type: integer }
+        countries_covered: { type: array, items: { type: string } }
+        gaps: { type: array, items: { type: string } }
+        claims_complete_coverage: { type: boolean, enum: [false], description: "MUST always be false — FR-DISC-7" }
+    DiscoveryResultItem:
+      type: object
+      properties:
+        scholarship_id: { type: string, format: uuid }
+        source_id: { type: string, format: uuid }
+        source_type: { type: string }
+        verification_status: { type: string, enum: [verified, unverified, conflicting] }
+    DiscoveryResult:
+      type: object
+      properties:
+        results: { type: array, items: { $ref: '#/components/schemas/DiscoveryResultItem' } }
+        coverage: { $ref: '#/components/schemas/CoverageSummary' }
+
+    # ---- Phase 3: Documents / Generation ----
+    DocumentType:
+      type: string
+      enum: [transcript, degree_certificate, cv, europass_cv, sop, motivation_letter, personal_statement,
+             study_plan, research_proposal, recommendation_info, certificate, language_test_doc,
+             gre_gmat_doc, portfolio, publication, work_experience_doc, character_certificate,
+             financial_doc, scholarship_specific_form, university_specific_form, other]
+    UploadedDocument:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        type: { $ref: '#/components/schemas/DocumentType' }
+        parsed_meta: { type: object, nullable: true }
+        satisfies_requirement_id: { type: string, format: uuid, nullable: true }
+        inconsistency_flags: { type: array, items: { type: string }, nullable: true }
+    GeneratedDocument:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [cv, sop, motivation, other] }
+        file_ref: { type: string }
+        source_trace:
+          type: array
+          items:
+            type: object
+            properties:
+              claim: { type: string }
+              grounded_in: { type: string, description: "profile field or document id" }
+
+    # ---- Phase 4: Application / Planner / Tracker / Assistant / Submission ----
+    ReadinessLabel:
+      type: string
+      enum: [complete, missing, user_must_obtain, ai_can_generate, needs_human_review, needs_official_verification]
+    ChecklistItem:
+      type: object
+      properties:
+        description: { type: string }
+        category: { type: string }
+        readiness_label: { $ref: '#/components/schemas/ReadinessLabel' }
+        due_date: { type: string, format: date, nullable: true }
+    ApplicationPlan:
+      type: object
+      properties:
+        application_id: { type: string, format: uuid }
+        checklist: { type: array, items: { $ref: '#/components/schemas/ChecklistItem' } }
+    Application:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        scholarship_id: { type: string, format: uuid }
+        status: { type: string }
+        checklist: { type: array, items: { $ref: '#/components/schemas/ChecklistItem' } }
+    AssistantStepResult:
+      type: object
+      properties:
+        step: { type: string }
+        result: {}
+        requires_user_input: { type: boolean }
+        requires_approval: { type: boolean }
+    SubmissionApproval:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        application_id: { type: string, format: uuid }
+        submission_scope: { type: string }
+        approved_by: { type: string, format: uuid }
+        approved_at: { type: string, format: date-time }
