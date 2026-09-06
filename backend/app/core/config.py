@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     )
 
     database_url: str = Field(alias="DATABASE_URL")
+    jwt_secret_key: str = Field(alias="JWT_SECRET_KEY")
 
     @field_validator("database_url")
     @classmethod
@@ -32,9 +33,10 @@ def get_settings() -> Settings:
     try:
         return Settings()
     except ValidationError as exc:
+        missing = ", ".join(str(error["loc"][0]) for error in exc.errors())
         raise RuntimeError(
-            "DATABASE_URL is not set. Define it in the environment or in "
-            f"{_REPO_ROOT_ENV_FILE} before starting the app."
+            f"Missing required setting(s): {missing}. Define them in the "
+            f"environment or in {_REPO_ROOT_ENV_FILE} before starting the app."
         ) from exc
 
 
