@@ -7,6 +7,13 @@ on:
 jobs:
   backend-tests:
     runs-on: ubuntu-latest
+    env:
+      # Dummy values so app.main / app.core.config can be imported during test
+      # collection without crashing. They intentionally cannot connect to a
+      # real database - DB-dependent tests skip themselves when a real
+      # connection isn't available.
+      DATABASE_URL: postgresql+psycopg://dummy:dummy@localhost/dummy
+      JWT_SECRET_KEY: dummy-ci-secret-not-real
 
     steps:
       - name: Checkout code

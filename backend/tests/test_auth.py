@@ -2,6 +2,8 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 
 def _get_client_and_session():
@@ -9,6 +11,12 @@ def _get_client_and_session():
         from app.data.repositories.db import SessionLocal
     except RuntimeError:
         pytest.skip("DATABASE_URL is not configured; skipping auth tests.")
+
+    try:
+        with SessionLocal() as session:
+            session.execute(text("SELECT 1"))
+    except OperationalError:
+        pytest.skip("Could not reach the configured database; skipping auth tests.")
 
     from app.main import app
 
