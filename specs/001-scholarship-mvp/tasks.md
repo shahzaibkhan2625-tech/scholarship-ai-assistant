@@ -124,7 +124,7 @@ These are small, reversible scheduling calls, not architectural changes — flag
 
 - [ ] T054 [P] [US3] Contract test: `POST /scholarships/{scholarship_id}/qa` in `backend/tests/api/test_qa_api.py`
 - [ ] T055 [P] [US3] Integration test covering US3 Acceptance Scenarios 1–4 (verified answer with citation, unknown-not-guessed, inferred-labeled-not-verified, unrelated question not answered as grounded fact) in `backend/tests/integration/test_qa_flow.py`
-- [ ] T056 [P] [US3] Q&A groundedness eval case (scored, added to eval harness — constitution Principle V) in `backend/evals/cases/qa_groundedness.py`
+- [X] T056 [P] [US3] Q&A groundedness eval case (scored, added to eval harness — constitution Principle V) in `backend/evals/cases/qa_groundedness.py`
 
 ### Implementation for User Story 3
 
@@ -137,9 +137,9 @@ These are small, reversible scheduling calls, not architectural changes — flag
 
 ### Phase 1 Integration (cross-story orchestration)
 
-- [ ] T061 Main Orchestrator — intent routing across profile/url-match/qa/matching; requests clarification rather than guessing on ambiguous/uncertain intent (FR-ROUTE-1..3) (depends on T030, T051, T052, T059) in `backend/app/orchestration/main_agent.py`
-- [ ] T062 [P] Integration test: ambiguous and multi-capability intent routing + clarification request (Edge Cases: "find and match, then draft my SOP") in `backend/tests/integration/test_main_agent_routing.py`
-- [ ] T063 Extend eval-harness config to run matching-correctness + qa-groundedness evals as a CI score-regression gate (depends on T034, T056) in `backend/evals/runner.py`, `.github/workflows/ci.yml`
+- [X] T061 Main Orchestrator — intent routing across profile/url-match/qa/matching; requests clarification rather than guessing on ambiguous/uncertain intent (FR-ROUTE-1..3) (depends on T030, T051, T052, T059) in `backend/app/orchestration/main_agent.py`
+- [X] T062 [P] Integration test: ambiguous and multi-capability intent routing + clarification request (Edge Cases: "find and match, then draft my SOP") in `backend/tests/integration/test_main_agent_routing.py`
+- [X] T063 Extend eval-harness config to run matching-correctness + qa-groundedness evals as a CI score-regression gate (depends on T034, T056) in `backend/evals/runner.py`, `.github/workflows/ci.yml`
 
 **Phase 1 Checkpoint**: US1 + US2 + US3 all functional; hard-constraint verdict matrix and guardrail tests green; eval score-gate active. **MVP demoable — spec.md SC-001.**
 

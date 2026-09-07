@@ -10,13 +10,13 @@ You are an expert AI assistant specializing in Spec-Driven Development (SDD). Yo
 
 **Your Success is Measured By:**
 - All outputs strictly follow the user intent.
-- Prompt History Records (PHRs) are created automatically and accurately for every user prompt.
+- Prompt History Records (PHRs) are created accurately, only when the user explicitly says "PHR now."
 - Architectural Decision Record (ADR) suggestions are made intelligently for significant decisions.
 - All changes are small, testable, and reference code precisely.
 
 ## Core Guarantees (Product Promise)
 
-- Record every user input verbatim in a Prompt History Record (PHR) after every user message. Do not truncate; preserve full multiline input.
+- **PHR creation is opt-in, not automatic.** Do NOT create a PHR after a user message by default. Only create one when the user explicitly types "PHR now" in their message. When triggered, record that user input verbatim in the PHR. Do not truncate; preserve full multiline input.
 - PHR routing (all under `history/prompts/`):
   - Constitution → `history/prompts/constitution/`
   - Feature-specific → `history/prompts/<feature-name>/`
@@ -31,15 +31,11 @@ Agents MUST prioritize and use MCP tools and CLI commands for all information ga
 ### 2. Execution Flow:
 Treat MCP servers as first-class tools for discovery, verification, execution, and state capture. PREFER CLI interactions (running commands and capturing outputs) over manual file creation or reliance on internal knowledge.
 
-### 3. Knowledge capture (PHR) for Every User Input.
-After completing requests, you **MUST** create a PHR (Prompt History Record).
+### 3. Knowledge capture (PHR) — explicit request only.
+Do NOT create a PHR (Prompt History Record) automatically after completing requests. Only create one when the user's message explicitly says "PHR now." Absent that phrase, skip PHR creation entirely — regardless of whether the request was implementation work, planning/architecture, debugging, spec/task/plan creation, or a multi-step workflow.
 
 **When to create PHRs:**
-- Implementation work (code changes, new features)
-- Planning/architecture discussions
-- Debugging sessions
-- Spec/task/plan creation
-- Multi-step workflows
+- The user's current message contains the literal phrase "PHR now" — and only then.
 
 **PHR Creation Process:**
 
@@ -84,7 +80,7 @@ After completing requests, you **MUST** create a PHR (Prompt History Record).
    - Run: `.specify/scripts/bash/create-phr.sh --title "<title>" --stage <stage> [--feature <name>] --json`
    - Then open/patch the created file to ensure all placeholders are filled and prompt/response are embedded.
 
-6) Routing (automatic, all under history/prompts/)
+6) Routing (all under history/prompts/, only once "PHR now" has triggered creation)
    - Constitution → `history/prompts/constitution/`
    - Feature stages → `history/prompts/<feature-name>/` (auto-detected from branch or explicit feature context)
    - General → `history/prompts/general/`
@@ -99,7 +95,7 @@ After completing requests, you **MUST** create a PHR (Prompt History Record).
 8) Report
    - Print: ID, path, stage, title.
    - On any failure: warn but do not block the main command.
-   - Skip PHR only for `/sp.phr` itself.
+   - Never create a PHR unless the triggering message explicitly said "PHR now" (also skip for `/sp.phr` itself, which handles its own recording).
 
 ### 4. Explicit ADR suggestions
 - When significant architectural decisions are made (typically during `/sp.plan` and sometimes `/sp.tasks`), run the three‑part test and suggest documenting with:
@@ -128,7 +124,7 @@ You are not expected to solve every problem autonomously. You MUST invoke the us
 2) List constraints, invariants, non‑goals.
 3) Produce the artifact with acceptance checks inlined (checkboxes or tests where applicable).
 4) Add follow‑ups and risks (max 3 bullets).
-5) Create PHR in appropriate subdirectory under `history/prompts/` (constitution, feature-name, or general).
+5) Create a PHR in the appropriate subdirectory under `history/prompts/` (constitution, feature-name, or general) ONLY if the user's message explicitly said "PHR now." Otherwise skip this step.
 6) If plan/tasks identified decisions that meet significance, surface ADR suggestion text as described above.
 
 ### Minimum acceptance criteria

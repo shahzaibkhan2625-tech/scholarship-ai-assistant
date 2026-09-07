@@ -33,6 +33,9 @@ jobs:
         working-directory: backend
         run: uv run pytest
 
+      # Scored, threshold-gated checks distinct from the pytest step above
+      # (constitution Principle V). Phase 1 gates matching-correctness
+      # (threshold 1.0 - Principle II zero-tolerance) and qa-groundedness.
       - name: Run eval score-gate
         working-directory: backend
         run: uv run python -m evals.runner
