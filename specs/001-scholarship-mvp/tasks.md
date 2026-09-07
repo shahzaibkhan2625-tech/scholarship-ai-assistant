@@ -153,15 +153,15 @@ These are small, reversible scheduling calls, not architectural changes — flag
 
 - [ ] T064 [P] [US4] Contract test: `POST /discovery` in `backend/tests/api/test_discovery_api.py`
 - [ ] T065 [P] [US4] Integration test covering US4 Acceptance Scenarios 1–5 (≥2 distinct source types with attribution, coverage summary never claims complete/100%, new source recorded as pending-not-authoritative, fetch failure logged as a gap not "no scholarships exist", conflicting sources surfaced unless the official>recent>reliable rule resolves them) in `backend/tests/integration/test_discovery_flow.py`
-- [ ] T066 [P] [US4] Source-registry compliance tests: non-`active` `source_id` blocks fetch; a `candidate_sources` row is never joined as authoritative before `approved` (constitution Principle IV, Development Workflow gate) in `backend/tests/sources/test_source_registry_compliance.py`
+- [X] T066 [P] [US4] Source-registry compliance tests: non-`active` `source_id` blocks fetch; a `candidate_sources` row is never joined as authoritative before `approved` (constitution Principle IV, Development Workflow gate) in `backend/tests/sources/test_source_registry_compliance.py`
 - [ ] T067 [P] [US4] Unit test: `conflict_resolution` policy (official > recent > reliable; unresolved ⇒ surfaced `conflicting`, never silently averaged) in `backend/tests/services/test_conflict_resolution.py`
 - [ ] T068 [P] [US4] Unit test: `coverage` counts/gaps computation, `claims_complete_coverage` always `false` in `backend/tests/services/test_coverage.py`
 
 ### Implementation for User Story 4
 
-- [ ] T069 [US4] SQLAlchemy + Pydantic models: `source_registry`, `candidate_sources`, `source_fetch_log`, `scholarship_sources` in `backend/app/models/source.py`
-- [ ] T070 [US4] Alembic migration for source-registry tables (depends on T069) in `backend/migrations/versions/{rev}_create_source_registry_tables.py`
-- [ ] T071 [US4] Source repository (depends on T070) in `backend/app/data/repositories/source_repo.py`
+- [X] T069 [US4] SQLAlchemy + Pydantic models: `source_registry`, `candidate_sources`, `source_fetch_log`, `scholarship_sources` in `backend/app/models/source.py`
+- [X] T070 [US4] Alembic migration for source-registry tables (depends on T069) in `backend/migrations/versions/{rev}_create_source_registry_tables.py`
+- [X] T071 [US4] Source repository (depends on T070) in `backend/app/data/repositories/source_repo.py`
 - [ ] T072 [P] [US4] Bounded retry policy for source fetches in `backend/app/sources/retry_policy.py`
 - [ ] T073 [US4] `api_connector` + `official_fetch` connector wrappers — reject any fetch whose `source_id` isn't `active` (depends on T071) in `backend/app/sources/connectors/api_connector.py`, `backend/app/sources/connectors/official_fetch.py`
 - [ ] T074 [P] [US4] `official_fetch` tool, registry-governed (depends on T073) in `backend/app/tools/official_fetch.py`

@@ -237,6 +237,105 @@ paths:
                 items: { $ref: '#/components/schemas/MatchVerdict' }
 
   # ---------------------------------------------------------------------
+  # Phase 2 (WS2.1) — Source Registry & governance (Blueprint §29)
+  # No POST /sources: an approved row enters only via the seed file or by
+  # approving a candidate_sources row below (constitution Principle IV).
+  # ---------------------------------------------------------------------
+  /sources:
+    get:
+      tags: [sources]
+      summary: List active (status=active) sources in the registry
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: country
+          in: query
+          required: false
+          schema: { type: string }
+        - name: source_type
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: Active sources only — never a pending/disabled/failing row
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SourceRegistryEntry' }
+
+  /sources/candidates:
+    get:
+      tags: [sources]
+      summary: List pending candidate sources awaiting operator review
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Pending candidates — never authoritative until approved
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CandidateSourceEntry' }
+
+  /sources/candidates/{candidate_id}/approve:
+    post:
+      tags: [sources]
+      summary: Promote a pending candidate into an active source_registry row
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: candidate_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        description: Reviewer-confirmed registry entry — a candidate's url/signals alone don't carry enough verified information to synthesize one
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceRegistryCreate' }
+      responses:
+        '200':
+          description: The newly active source_registry row
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceRegistryEntry' }
+        '404':
+          description: candidate_id not found
+        '409':
+          description: candidate already approved/rejected
+
+  /sources/candidates/{candidate_id}/reject:
+    post:
+      tags: [sources]
+      summary: Reject a pending candidate source
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: candidate_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: The rejected candidate (reason recorded in signals.rejection_reason)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CandidateSourceEntry' }
+        '404':
+          description: candidate_id not found
+        '409':
+          description: candidate already approved/rejected
+
+  # ---------------------------------------------------------------------
   # Phase 2 — Discovery (FR-DISC-1..7, FR-COV-1)
   # ---------------------------------------------------------------------
   /discovery:
@@ -576,6 +675,48 @@ components:
         evidence: { type: array, items: { type: string } }
 
     # ---- Phase 2: Discovery ----
+    # ---- Phase 2 (WS2.1): Source Registry & governance ----
+    SourceRegistryCreate:
+      type: object
+      required: [name, source_type, official_status, domain, access_method, reliability_level]
+      properties:
+        name: { type: string }
+        organization: { type: string, nullable: true }
+        country: { type: string, nullable: true }
+        region: { type: string, nullable: true }
+        source_type: { type: string, enum: [gov, national_education, university, department, provider, foundation, ngo, embassy, international_org, research, api, approved_aggregator] }
+        official_status: { type: string }
+        domain: { type: string, description: "Bare hostname — no scheme, no path" }
+        access_method: { type: string, enum: [api, mcp, web] }
+        discovery_role: { type: boolean, default: false }
+        verification_role: { type: boolean, default: false }
+        reliability_level: { type: string, enum: [high, medium, low] }
+        update_frequency: { type: string, nullable: true }
+        status: { type: string, enum: [active, pending, disabled, failing], default: active }
+        extraction_rules: { type: object }
+        constraints: { type: object }
+        last_checked_at: { type: string, format: date-time, nullable: true }
+        last_success_at: { type: string, format: date-time, nullable: true }
+        notes: { type: string, nullable: true }
+    SourceRegistryEntry:
+      allOf:
+        - { $ref: '#/components/schemas/SourceRegistryCreate' }
+        - type: object
+          required: [id]
+          properties:
+            id: { type: string, format: uuid }
+    CandidateSourceEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        discovered_from: { type: string, nullable: true }
+        url: { type: string }
+        proposed_type: { type: string, nullable: true }
+        signals: { type: object }
+        status: { type: string, enum: [pending, approved, rejected] }
+        reviewed_by: { type: string, format: uuid, nullable: true }
+        reviewed_at: { type: string, format: date-time, nullable: true }
+
     CoverageSummary:
       type: object
       properties:

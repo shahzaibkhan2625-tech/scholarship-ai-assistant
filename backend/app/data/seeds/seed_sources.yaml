@@ -1,0 +1,145 @@
+# Source Registry seed set (Blueprint §14, §29). Human-authored,
+# version-controlled — exactly five carefully researched sources across
+# distinct source_type/access_method combinations, per the Phase 2 DoD
+# ("profile-driven discovery across >=2 source types"). Do not add rows
+# here without governance review (docs/SOURCES.md) or an ADR; new sources
+# otherwise enter only via the candidate_sources -> approval flow (§29).
+#
+# source_type values match app.models.source.SourceType (data-model.md §3).
+# status is always "active" here — a seeded row is a pre-vetted, operator-
+# approved source, not a discovered candidate.
+
+- name: "DAAD Scholarship Database"
+  organization: "Deutscher Akademischer Austauschdienst"
+  country: DE
+  region: Europe
+  source_type: national_education
+  official_status: official
+  domain: www2.daad.de
+  access_method: web
+  discovery_role: true
+  verification_role: true
+  reliability_level: high
+  update_frequency: monthly
+  status: active
+  extraction_rules:
+    allowed_path_prefixes:
+      - /en/
+    list_page_url: "https://www2.daad.de/deutschland/stipendium/datenbank/en/"
+    detail_url_pattern: null
+    robots_checked: false
+  constraints:
+    min_request_delay_seconds: 2
+    user_agent: "ScholarshipAIAssistant/1.0 (+source-registry; contact: source-registry@scholarship-ai-assistant.local)"
+    max_pages_per_run: 25
+  last_checked_at: null
+  last_success_at: null
+  notes: null
+
+- name: "Erasmus Mundus Joint Masters Catalogue (EACEA)"
+  organization: "European Education and Culture Executive Agency"
+  country: EU
+  region: Europe
+  source_type: international_org
+  official_status: official
+  domain: www.eacea.ec.europa.eu
+  access_method: web
+  discovery_role: true
+  verification_role: false
+  reliability_level: high
+  update_frequency: annual
+  status: active
+  extraction_rules:
+    allowed_path_prefixes:
+      - /scholarships/emjmd-catalogue_en
+    list_page_url: "https://www.eacea.ec.europa.eu/scholarships/emjmd-catalogue_en"
+    detail_url_pattern: null
+    robots_checked: false
+  constraints:
+    min_request_delay_seconds: 2
+    user_agent: "ScholarshipAIAssistant/1.0 (+source-registry; contact: source-registry@scholarship-ai-assistant.local)"
+    max_pages_per_run: 25
+  last_checked_at: null
+  last_success_at: null
+  notes: null
+
+- name: "Stipendium Hungaricum"
+  organization: "Tempus Public Foundation"
+  country: HU
+  region: Europe
+  source_type: gov
+  official_status: official
+  domain: stipendiumhungaricum.hu
+  access_method: web
+  discovery_role: true
+  verification_role: true
+  reliability_level: high
+  update_frequency: annual
+  status: active
+  extraction_rules:
+    allowed_path_prefixes:
+      - /apply/
+    list_page_url: "https://stipendiumhungaricum.hu/apply/"
+    detail_url_pattern: null
+    robots_checked: false
+  constraints:
+    min_request_delay_seconds: 2
+    user_agent: "ScholarshipAIAssistant/1.0 (+source-registry; contact: source-registry@scholarship-ai-assistant.local)"
+    max_pages_per_run: 25
+  last_checked_at: null
+  last_success_at: null
+  notes: null
+
+- name: "HEC Pakistan - Learning Opportunities Abroad"
+  organization: "Higher Education Commission Pakistan"
+  country: PK
+  region: Asia
+  source_type: gov
+  official_status: official
+  domain: www.hec.gov.pk
+  access_method: web
+  discovery_role: true
+  verification_role: true
+  reliability_level: high
+  update_frequency: weekly
+  status: active
+  extraction_rules:
+    allowed_path_prefixes:
+      - /english/scholarshipsgrants/
+    list_page_url: "https://www.hec.gov.pk/english/scholarshipsgrants/Pages/default.aspx"
+    detail_url_pattern: null
+    robots_checked: false
+  constraints:
+    min_request_delay_seconds: 2
+    user_agent: "ScholarshipAIAssistant/1.0 (+source-registry; contact: source-registry@scholarship-ai-assistant.local)"
+    max_pages_per_run: 25
+  last_checked_at: null
+  last_success_at: null
+  notes: null
+
+- name: "KAUST Admissions"
+  organization: "King Abdullah University of Science and Technology"
+  country: SA
+  region: "Middle East"
+  source_type: university
+  official_status: official
+  domain: www.kaust.edu.sa
+  access_method: web
+  discovery_role: true
+  verification_role: true
+  reliability_level: high
+  update_frequency: quarterly
+  status: active
+  extraction_rules:
+    allowed_path_prefixes:
+      - /en/study/scholarships
+    list_page_url: "https://www.kaust.edu.sa/en/study/scholarships"
+    detail_url_pattern: null
+    robots_checked: false
+  constraints:
+    min_request_delay_seconds: 2
+    user_agent: "ScholarshipAIAssistant/1.0 (+source-registry; contact: source-registry@scholarship-ai-assistant.local)"
+    max_pages_per_run: 25
+  last_checked_at: null
+  last_success_at: null
+  notes: null

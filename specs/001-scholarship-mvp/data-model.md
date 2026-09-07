@@ -98,7 +98,7 @@ Value-status vocabulary (used throughout): `value_status ∈ {known, unknown, no
 
 ## 3. Source Registry Entry *(spec Key Entity 3 → `source_registry` + `candidate_sources` + `source_fetch_log`)*
 
-**`source_registry`**: id, name, organization, country, region, source_type enum(gov, national_education, university, department, provider, foundation, ngo, embassy, international_org, research, api, approved_aggregator), official_status, domain, access_method enum(api, mcp, web), discovery_role, verification_role, reliability_level, update_frequency, status enum(active, pending, disabled), extraction_rules jsonb, constraints jsonb, last_checked_at, last_success_at, notes.
+**`source_registry`**: id, name, organization, country, region, source_type enum(gov, national_education, university, department, provider, foundation, ngo, embassy, international_org, research, api, approved_aggregator), official_status, domain, access_method enum(api, mcp, web), discovery_role, verification_role, reliability_level, update_frequency, status enum(active, pending, disabled, failing), extraction_rules jsonb, constraints jsonb, last_checked_at, last_success_at, notes.
 
 **`candidate_sources`** *(controlled expansion — FR-DISC-5)*: id, discovered_from, url, proposed_type, signals jsonb, status enum(pending, approved, rejected), reviewed_by FK → users.id nullable, reviewed_at nullable.
 
@@ -106,7 +106,7 @@ Value-status vocabulary (used throughout): `value_status ∈ {known, unknown, no
 
 **Validation rules**: a connector MUST reject any fetch whose `source_id` is not `status = active` (constitution Principle IV) — enforced in the `sources/` connector layer, not just the DB. A row in `candidate_sources` MUST NOT be joined into any authoritative scholarship data path until `status = approved`.
 
-**State transitions**: `candidate_sources.status`: `pending → approved | rejected` (human-gated, `source_validate` workflow, Phase 2). `source_registry.status`: `active ⇄ disabled` (`failing` health state tracked via `source_fetch_log`, promoted to `disabled` per Phase 5 policy — not enforced in MVP beyond logging).
+**State transitions**: `candidate_sources.status`: `pending → approved | rejected` (human-gated, `source_validate` workflow, Phase 2). `source_registry.status`: `active ⇄ disabled`, plus a `failing` state (WS2.1, `source_repo.get_active_sources`/`get_source_by_id` gate on `active` only, so `failing` is excluded exactly like `disabled`) for a source whose fetch health is degrading per `source_fetch_log` but has not yet been operator-disabled; promotion `failing → disabled` per Phase 5 policy is not automated in MVP.
 
 ---
 
