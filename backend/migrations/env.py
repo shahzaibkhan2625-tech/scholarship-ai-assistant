@@ -8,6 +8,11 @@ from alembic import context
 from app.core.config import settings
 from app.data.repositories.db import Base
 from app.models import user  # noqa: F401  (registers User with Base.metadata)
+from app.models import profile  # noqa: F401  (registers profile tables with Base.metadata)
+from app.models import scholarship  # noqa: F401  (registers scholarship tables with Base.metadata)
+from app.models import requirement  # noqa: F401  (registers requirements with Base.metadata)
+from app.models import funding  # noqa: F401  (registers funding_details with Base.metadata)
+from app.models import match  # noqa: F401  (registers matches with Base.metadata)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

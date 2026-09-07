@@ -16,6 +16,19 @@ class Settings(BaseSettings):
     database_url: str = Field(alias="DATABASE_URL")
     jwt_secret_key: str = Field(alias="JWT_SECRET_KEY")
 
+    # Optional: free-tier external services (Gemini LLM, Qdrant Cloud vectors).
+    # Not required so CI (which sets only DATABASE_URL/JWT_SECRET_KEY dummies)
+    # can still import the app; code paths that need them raise/skip explicitly
+    # when unset, mirroring the DATABASE_URL-unreachable skip pattern in tests.
+    qdrant_url: str | None = Field(default=None, alias="QDRANT_URL")
+    qdrant_api_key: str | None = Field(default=None, alias="QDRANT_API_KEY")
+    gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
+
+    @field_validator("qdrant_url", "qdrant_api_key", "gemini_api_key")
+    @classmethod
+    def _strip_whitespace(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
     @field_validator("database_url")
     @classmethod
     def _use_psycopg_driver(cls, value: str) -> str:
