@@ -174,12 +174,12 @@ These are small, reversible scheduling calls, not architectural changes — flag
 - [ ] T081 [P] [US4] `dedup` service in `backend/app/services/dedup.py`
 - [ ] T082 [P] [US4] `verification` service — freshness window, `lifecycle_status` transitions in `backend/app/services/verification.py`
 - [ ] T083 [P] [US4] `conflict_resolution` service — official > recent > reliable in `backend/app/services/conflict_resolution.py`
-- [ ] T084 [US4] `coverage` service — measured summary (checked/failed/gaps) in `backend/app/services/coverage.py`
-- [ ] T085 [P] [US4] `rerank` tool, optional/flagged in `backend/app/tools/rerank.py`
-- [ ] T086 [US4] `source_validate` workflow — human-approval-gated candidate-source promotion (depends on T078) in `backend/app/workflows/source_validate/graph.py`
-- [ ] T087 [US4] `ingestion` workflow — extract → normalize → dedup → verify → classify pipeline (depends on T079, T080, T081, T082, T083) in `backend/app/workflows/ingestion/graph.py`
-- [ ] T088 [US4] `DiscoveryResult`/`CoverageSummary` schemas (depends on T069) in `backend/app/schemas/discovery.py`
-- [ ] T089 [US4] Discovery agent — governed sources only, multi-dimension query support (depends on T087, T084, T088) in `backend/app/agents/discovery/agent.py`
+- [X] T084 [US4] `coverage` service — measured summary (checked/failed/gaps) in `backend/app/services/coverage.py`
+- [X] T085 [P] [US4] `rerank` tool, optional/flagged in `backend/app/tools/rerank.py`
+- [X] T086 [US4] `source_validate` workflow — human-approval-gated candidate-source promotion (depends on T078) in `backend/app/workflows/source_validate/graph.py`
+- [X] T087 [US4] `ingestion` workflow — extract → normalize → dedup → verify → classify pipeline (depends on T079, T080, T081, T082, T083) in `backend/app/workflows/ingestion/graph.py`
+- [X] T088 [US4] `DiscoveryResult`/`CoverageSummary` schemas (depends on T069) in `backend/app/schemas/discovery.py`
+- [X] T089 [US4] Discovery agent — governed sources only, multi-dimension query support (depends on T087, T084, T088) in `backend/app/agents/discovery/agent.py`
 - [ ] T090 [US4] Discovery API endpoint: `POST /discovery` (depends on T089) in `backend/app/api/discovery.py`
 - [ ] T091 [US4] Extend orchestrator to route discovery intent (depends on T090) in `backend/app/orchestration/main_agent.py`
 - [ ] T092 [US4] Wire `discovery` router into the app (depends on T090) in `backend/app/main.py`

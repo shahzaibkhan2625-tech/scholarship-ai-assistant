@@ -173,6 +173,36 @@ def _classify_node(state: IngestionState) -> dict:
     return _run_stage(state, "classify", _do, retryable=True)
 
 
+def _db_backed_existing(db, name: str) -> tuple[list[dedup_service.DedupCandidate], dict[str, dict]]:
+    """Real, already-persisted rows matching `name` — dedup must be checked
+    against what's actually in the DB, not only against whatever snapshot a
+    caller happens to pass via `existing_candidates`/`existing_records`
+    (T087 fix). Returned dict entries use the same `existing_records` shape
+    `derive_conflicts` already expects from a caller-supplied snapshot."""
+    candidates: list[dedup_service.DedupCandidate] = []
+    records: dict[str, dict] = {}
+    for row in scholarship_repo.find_by_name(db, name):
+        field_rows = scholarship_repo.get_field_rows(db, row.id)
+        university = next((fr.value for fr in field_rows if fr.key == "university" and fr.value), None)
+        candidates.append(
+            dedup_service.DedupCandidate(id=str(row.id), name=row.name, university=university, intake=row.intake, text=row.name)
+        )
+        fields = {
+            key: getattr(row, key) for key in _SCHOLARSHIP_COLUMN_KEYS if key != "name" and getattr(row, key, None) is not None
+        }
+        for fr in field_rows:
+            if fr.value is not None:
+                fields.setdefault(fr.key, fr.value)
+        records[str(row.id)] = {
+            "fields": fields,
+            "source_id": "existing",
+            "retrieved_at": row.retrieved_at,
+            "is_official": row.verification_status == VerificationStatus.VERIFIED,
+            "reliability": "high" if row.verification_status == VerificationStatus.VERIFIED else "medium",
+        }
+    return candidates, records
+
+
 def _dedup_node(state: IngestionState) -> dict:
     if state.get("error"):
         return {}
@@ -186,8 +216,14 @@ def _dedup_node(state: IngestionState) -> dict:
             intake=raw.get("intake"),
             text=raw.get("name"),
         )
-        result = dedup_service.find_duplicate(candidate, state.get("existing_candidates") or [])
-        return {"dedup_result": result}
+        db_candidates, db_records = _db_backed_existing(state["db"], candidate.name)
+        existing = [*db_candidates, *(state.get("existing_candidates") or [])]
+        result = dedup_service.find_duplicate(candidate, existing)
+        # Caller-supplied existing_records (if any) win on key collision; the
+        # DB-derived snapshot fills in the rest so derive_conflicts can see
+        # real persisted duplicates too, not only caller-provided ones.
+        merged_records = {**db_records, **(state.get("existing_records") or {})}
+        return {"dedup_result": result, "existing_records": merged_records}
 
     return _run_stage(state, "dedup", _do, retryable=True)
 
@@ -334,6 +370,21 @@ def _missing_flagged_fields(
     return missing
 
 
+def _resolve_dedup_match(db, dedup_result) -> Scholarship | None:
+    """A `merge_with_existing` decision only names a real persisted row when
+    `matched_id` is an actual Scholarship UUID that still exists — a
+    caller-supplied synthetic snapshot id (used purely to drive conflict
+    derivation against data that isn't itself a DB row) resolves to None
+    here, which correctly falls back to inserting a fresh row for it."""
+    if dedup_result is None or dedup_result.decision != dedup_service.DedupDecision.MERGE_WITH_EXISTING:
+        return None
+    try:
+        matched_uuid = uuid.UUID(dedup_result.matched_id)
+    except (TypeError, ValueError):
+        return None
+    return scholarship_repo.get_by_id(db, matched_uuid)
+
+
 def _store_node(state: IngestionState) -> dict:
     if state.get("error"):
         return {}
@@ -346,9 +397,54 @@ def _store_node(state: IngestionState) -> dict:
         if validation_error is not None:
             raise ValueError(validation_error)
 
+        matched_scholarship = _resolve_dedup_match(db, state.get("dedup_result"))
+        conflict_resolutions = state.get("conflict_resolutions") or {}
+
+        if matched_scholarship is not None:
+            # Blueprint §31/§32: a genuine duplicate is never stored as a
+            # second scholarships row. Only the new provenance is recorded,
+            # and any field-level disagreement (already derived+resolved by
+            # derive_conflicts/conflict_resolution above) is attached to the
+            # EXISTING record rather than a fresh one.
+            db.add(
+                ScholarshipSource(
+                    scholarship_id=matched_scholarship.id,
+                    source_id=state["source_id"],
+                    url=state["source_url"],
+                    verified_at=datetime.now(timezone.utc) if state.get("official_source_confirmed") else None,
+                    verification_status=(
+                        VerificationStatus.VERIFIED
+                        if state.get("official_source_confirmed")
+                        else VerificationStatus.UNVERIFIED
+                    ),
+                )
+            )
+            for key, resolution in conflict_resolutions.items():
+                matched_scholarship.fields.append(
+                    ScholarshipField(
+                        key=key,
+                        value=(
+                            [{"source_id": v.source_id, "value": v.value} for v in resolution.conflicting_values]
+                            if resolution.value_status == "conflicting"
+                            else resolution.value
+                        ),
+                        value_status=resolution.value_status,
+                        confidence="verified" if resolution.resolved_by == "official" else "inferred",
+                        source_id=resolution.winning_source_id,
+                    )
+                )
+                if resolution.value_status == "conflicting":
+                    matched_scholarship.verification_status = VerificationStatus.CONFLICTING
+            db.commit()
+
+            source_repo.log_fetch(
+                db,
+                SourceFetchLogCreate(source_id=state["source_id"], status=FetchStatus.OK, retry_count=0, items_found=1),
+            )
+            return {"scholarship": matched_scholarship, "incomplete_fields": []}
+
         normalized_by_key = {nf.key: nf for nf in state.get("normalized_fields", [])}
         classification = state.get("classification")
-        conflict_resolutions = state.get("conflict_resolutions") or {}
 
         def _column_value(key: str, fallback: str | None = None):
             nf = normalized_by_key.get(key)

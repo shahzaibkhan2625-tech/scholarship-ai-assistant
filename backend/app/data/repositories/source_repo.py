@@ -43,6 +43,19 @@ def get_active_sources(
     return list(db.execute(stmt).scalars().all())
 
 
+def get_all_sources(db: Session) -> list[SourceRegistry]:
+    """Every configured source regardless of status — for admin/coverage
+    reporting (T084) only. Never used to gate a fetch; `get_active_sources`/
+    `get_source_by_id` remain the sole authoritative-fetch gate."""
+    return list(db.execute(select(SourceRegistry)).scalars().all())
+
+
+def get_all_fetch_logs(db: Session) -> list[SourceFetchLog]:
+    """Every fetch-log row across all sources — for coverage aggregation
+    (T084) only, so it doesn't need to re-query per source."""
+    return list(db.execute(select(SourceFetchLog)).scalars().all())
+
+
 def get_source_by_id(db: Session, source_id: uuid.UUID) -> SourceRegistry | None:
     stmt = select(SourceRegistry).where(
         SourceRegistry.id == source_id, SourceRegistry.status == SourceStatus.ACTIVE

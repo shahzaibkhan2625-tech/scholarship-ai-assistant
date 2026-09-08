@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     qdrant_api_key: str | None = Field(default=None, alias="QDRANT_API_KEY")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
 
+    # Blueprint A3: reranker is OFF by default to control cost/latency; only
+    # ever enabled explicitly via this flag.
+    rerank_enabled: bool = Field(default=False, alias="RERANK_ENABLED")
+
     @field_validator("qdrant_url", "qdrant_api_key", "gemini_api_key")
     @classmethod
     def _strip_whitespace(cls, value: str | None) -> str | None:

@@ -238,6 +238,55 @@ def test_dedup_match_with_differing_fields_auto_derives_conflict_without_caller_
     assert conflict_field.value_status == "conflicting"
 
 
+def test_two_ingestion_runs_for_the_same_scholarship_from_different_sources_merge_into_one_row(db):
+    """T087 fix: `dedup_result` must actually be acted on by STORE. Two
+    independent `run_ingestion` calls for a record with identical
+    (name, university, intake) — the deterministic dedup key — but from two
+    different sources must result in exactly ONE scholarships row, with
+    BOTH source_ids present in scholarship_sources, not two separate rows."""
+
+    session, created_sources, created_scholarships = db
+    source_a = _active_source(session, created_sources)
+    source_b = _active_source(session, created_sources)
+
+    raw = {
+        "name": "Merge Fixture Scholarship",
+        "university": "Test Merge University",
+        "intake": "Fall 2027",
+        "country": "Germany",
+        "funding_status": "fully_funded",
+        "deadline": "2027-06-01",
+    }
+
+    with patch("app.workflows.ingestion.graph.classify_service.classify_candidate", return_value=_FAKE_CLASSIFICATION):
+        result_a = run_ingestion(
+            session, source_id=source_a.id, source_url="https://example.test/merge-a", raw=dict(raw)
+        )
+        result_b = run_ingestion(
+            session, source_id=source_b.id, source_url="https://example.test/merge-b", raw=dict(raw)
+        )
+
+    assert result_a.get("error") is None
+    assert result_b.get("error") is None
+
+    scholarship_a = result_a["scholarship"]
+    scholarship_b = result_b["scholarship"]
+    created_scholarships.append(scholarship_a.id)
+
+    # The second run must have merged into the first, not created a second row.
+    assert scholarship_b.id == scholarship_a.id
+
+    matching_rows = (
+        session.query(Scholarship).filter(Scholarship.name == "Merge Fixture Scholarship").all()
+    )
+    assert len(matching_rows) == 1
+
+    sources = (
+        session.query(ScholarshipSource).filter(ScholarshipSource.scholarship_id == scholarship_a.id).all()
+    )
+    assert {s.source_id for s in sources} == {source_a.id, source_b.id}
+
+
 def test_missing_soft_required_fields_are_stored_but_flagged_incomplete(db):
     """Blueprint §31: degree_level, country, deadline-or-status, and at least
     one official source are required before STORE, but (unlike `name`) are
