@@ -151,6 +151,21 @@ def reject_candidate_source(
     return candidate
 
 
+def mark_source_failing(db: Session, source_id: uuid.UUID) -> SourceRegistry | None:
+    """Flips a source to `failing` after retries are exhausted (§33). Looks up
+    by id directly (not `get_source_by_id`, which filters to `active` only)
+    since a source that is already `failing`/`disabled` is still a valid
+    target for this — it only ever tightens status, never fabricates a row."""
+
+    source = db.get(SourceRegistry, source_id)
+    if source is None:
+        return None
+    source.status = SourceStatus.FAILING
+    db.commit()
+    db.refresh(source)
+    return source
+
+
 def log_fetch(db: Session, data: SourceFetchLogCreate) -> SourceFetchLog:
     payload = data.model_dump(exclude_unset=False)
     if payload.get("started_at") is None:

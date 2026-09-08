@@ -162,11 +162,11 @@ These are small, reversible scheduling calls, not architectural changes — flag
 - [X] T069 [US4] SQLAlchemy + Pydantic models: `source_registry`, `candidate_sources`, `source_fetch_log`, `scholarship_sources` in `backend/app/models/source.py`
 - [X] T070 [US4] Alembic migration for source-registry tables (depends on T069) in `backend/migrations/versions/{rev}_create_source_registry_tables.py`
 - [X] T071 [US4] Source repository (depends on T070) in `backend/app/data/repositories/source_repo.py`
-- [ ] T072 [P] [US4] Bounded retry policy for source fetches in `backend/app/sources/retry_policy.py`
-- [ ] T073 [US4] `api_connector` + `official_fetch` connector wrappers — reject any fetch whose `source_id` isn't `active` (depends on T071) in `backend/app/sources/connectors/api_connector.py`, `backend/app/sources/connectors/official_fetch.py`
-- [ ] T074 [P] [US4] `official_fetch` tool, registry-governed (depends on T073) in `backend/app/tools/official_fetch.py`
-- [ ] T075 [P] [US4] `search` tool — scoped to governed sources, not unrestricted web search (FR-DISC-2) in `backend/app/tools/search.py`
-- [ ] T076 [P] [US4] `api_connector` tool in `backend/app/tools/api_connector.py`
+- [X] T072 [P] [US4] Bounded retry policy for source fetches in `backend/app/sources/retry_policy.py`
+- [X] T073 [US4] `api_connector` + `official_fetch` connector wrappers — reject any fetch whose `source_id` isn't `active` (depends on T071) in `backend/app/sources/connectors/api_connector.py`, `backend/app/sources/connectors/official_fetch.py`
+- [X] T074 [P] [US4] `official_fetch` tool, registry-governed (depends on T073) in `backend/app/tools/official_fetch.py`
+- [X] T075 [P] [US4] `search` tool — scoped to governed sources, not unrestricted web search (FR-DISC-2) in `backend/app/tools/search.py`
+- [X] T076 [P] [US4] `api_connector` tool in `backend/app/tools/api_connector.py`
 - [ ] T077 [P] [US4] `classify` tool — rules + LLM fallback for fuzzy classification in `backend/app/tools/classify.py`
 - [ ] T078 [US4] `source_registry` service — registry CRUD, active-only gating (depends on T071) in `backend/app/services/source_registry.py`
 - [ ] T079 [P] [US4] `normalize` service in `backend/app/services/normalize.py`
