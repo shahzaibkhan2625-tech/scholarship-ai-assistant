@@ -180,9 +180,9 @@ These are small, reversible scheduling calls, not architectural changes — flag
 - [X] T087 [US4] `ingestion` workflow — extract → normalize → dedup → verify → classify pipeline (depends on T079, T080, T081, T082, T083) in `backend/app/workflows/ingestion/graph.py`
 - [X] T088 [US4] `DiscoveryResult`/`CoverageSummary` schemas (depends on T069) in `backend/app/schemas/discovery.py`
 - [X] T089 [US4] Discovery agent — governed sources only, multi-dimension query support (depends on T087, T084, T088) in `backend/app/agents/discovery/agent.py`
-- [ ] T090 [US4] Discovery API endpoint: `POST /discovery` (depends on T089) in `backend/app/api/discovery.py`
-- [ ] T091 [US4] Extend orchestrator to route discovery intent (depends on T090) in `backend/app/orchestration/main_agent.py`
-- [ ] T092 [US4] Wire `discovery` router into the app (depends on T090) in `backend/app/main.py`
+- [X] T090 [US4] Discovery API endpoint: `POST /discovery` (depends on T089) in `backend/app/api/discovery.py`
+- [X] T091 [US4] Extend orchestrator to route discovery intent (depends on T090) in `backend/app/orchestration/main_agent.py`
+- [X] T092 [US4] Wire `discovery` router into the app (depends on T090) in `backend/app/main.py`
 
 **Phase 2 Checkpoint**: US4 independently functional; source-registry compliance + conflict-resolution tests green — spec.md SC-002/SC-003 demoable.
 

@@ -196,13 +196,27 @@ def test_log_fetch_records_failure_not_silently_dropped(db):
 
 
 def test_no_direct_post_sources_route_exists():
+    """This FastAPI version (0.141.1) wraps each `include_router` call in an
+    opaque `_IncludedRouter` on `app.routes` rather than exposing its
+    sub-routes' full paths directly — a naive `route.path == "/sources"`
+    scan over `app.routes` never matches anything routed through an
+    included router (which is how every real route in this app, including
+    a hypothetical governance-violating `POST /sources`, would be added),
+    making that scan a false-positive pass regardless of what's actually
+    registered. The prefix from `include_context` must be joined with each
+    sub-route's own path before comparing (mirrors the presence-test in
+    tests/api/test_discovery_api.py::test_discovery_route_registered_in_app)."""
     from app.main import app
 
-    offending = [
-        route
-        for route in app.routes
-        if getattr(route, "path", None) == "/sources" and "POST" in getattr(route, "methods", set())
-    ]
+    offending = []
+    for route in app.routes:
+        prefix = getattr(getattr(route, "include_context", None), "prefix", "") or ""
+        sub_routes = getattr(getattr(route, "original_router", None), "routes", None) or [route]
+        for sub in sub_routes:
+            full_path = f"{prefix}{getattr(sub, 'path', '') or ''}"
+            if full_path == "/sources" and "POST" in (getattr(sub, "methods", None) or set()):
+                offending.append(sub)
+
     assert offending == []
 
 

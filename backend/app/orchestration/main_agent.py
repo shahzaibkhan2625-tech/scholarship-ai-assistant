@@ -20,6 +20,7 @@ from enum import Enum
 
 from sqlalchemy.orm import Session
 
+from app.agents.discovery.agent import run_discovery
 from app.agents.research_qa.agent import answer_question
 from app.data.repositories import match_repo, scholarship_repo
 from app.models.user import User
@@ -39,19 +40,21 @@ class Intent(str, Enum):
     MATCH_EXISTING = "match_existing"
     LIST_MATCHES = "list_matches"
     QA = "qa"
+    DISCOVERY = "discovery"
 
 
-# Capabilities that exist later on the roadmap (Phase 2+) but are not built
-# yet. Mentioning one of these must never be silently ignored or misrouted
-# onto a Phase 1 capability — it always forces a clarification request.
+# Capabilities that exist later on the roadmap but are not built yet.
+# Mentioning one of these must never be silently ignored or misrouted onto
+# another capability — it always forces a clarification request. (Discovery
+# was in this list through Phase 1; Phase 2/T089-T091 built it, so it now
+# routes via _DISCOVERY_KEYWORDS below instead of landing here.)
 _UNSUPPORTED_CAPABILITY_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
-    (re.compile(r"\bfind\b.{0,30}\bscholarship", re.I), "finding new scholarships (discovery) isn't available yet"),
-    (re.compile(r"\bdiscover\b|\bsearch for scholarship", re.I), "finding new scholarships (discovery) isn't available yet"),
     (re.compile(r"\b(draft|write|generate)\b.{0,20}\b(sop|cv|statement of purpose)\b", re.I), "drafting a CV or SOP isn't available yet"),
 )
 
 _PROFILE_KEYWORDS = ("my profile", "update my", "my gpa", "my education", "my test score", "my experience", "profile criteria")
 _LIST_MATCH_KEYWORDS = ("my matches", "list my matches", "matches so far", "what have i matched")
+_DISCOVERY_KEYWORDS = ("find scholarships", "discover", "search for scholarships", "what scholarships match me")
 _MATCH_KEYWORDS = ("match", "eligib", "am i eligible", "qualify")
 _QA_KEYWORDS = ("?", "what is", "what's", "how much", "when is", "does it", "is there", "can i")
 
@@ -112,18 +115,25 @@ def route_message(
 
     wants_profile = any(k in lowered for k in _PROFILE_KEYWORDS)
     wants_list_matches = any(k in lowered for k in _LIST_MATCH_KEYWORDS)
-    wants_match = any(k in lowered for k in _MATCH_KEYWORDS) and not wants_list_matches
+    wants_discovery = any(k in lowered for k in _DISCOVERY_KEYWORDS)
+    # "what scholarships match me" contains "match" but is a discovery
+    # request, not an eligibility check against a specific scholarship - it
+    # must not also fan out to matching.
+    wants_match = any(k in lowered for k in _MATCH_KEYWORDS) and not wants_list_matches and not wants_discovery
     # An eligibility-phrased question ("Am I eligible for this one?") is a
     # matching request, not a general content question - it must not also
     # fan out to Q&A just because it happens to end in "?".
-    wants_qa = any(k in lowered for k in _QA_KEYWORDS) and not wants_match
+    wants_qa = any(k in lowered for k in _QA_KEYWORDS) and not wants_match and not wants_discovery
 
     actions: list[RoutedAction] = []
 
     if wants_profile:
         actions.append(RoutedAction(intent=Intent.PROFILE))
 
-    if urls and (wants_match or not (wants_profile or wants_qa or wants_list_matches)):
+    if wants_discovery:
+        actions.append(RoutedAction(intent=Intent.DISCOVERY))
+
+    if urls and (wants_match or not (wants_profile or wants_qa or wants_list_matches or wants_discovery)):
         # An explicit match request, or a bare link with no other signal —
         # the single unambiguous default for a bare link is to match it.
         for url in urls:
@@ -229,5 +239,10 @@ def handle_message(
         elif action.intent is Intent.QA:
             answer = answer_question(action.question, str(action.scholarship_id))
             results.append(ActionResult(Intent.QA, answer))
+
+        elif action.intent is Intent.DISCOVERY:
+            profile = get_or_create_profile(db, user.id)
+            run = run_discovery(db, profile)
+            results.append(ActionResult(Intent.DISCOVERY, run.discovery_result))
 
     return OrchestratorResponse(results=tuple(results))

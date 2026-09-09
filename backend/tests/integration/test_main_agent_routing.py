@@ -25,15 +25,16 @@ from app.rag.retrieve import RetrievedChunk
 
 def test_edge_case_multi_capability_message_with_unbuilt_capability_requires_clarification() -> None:
     """spec.md Edge Case: "find and match scholarships for me, then draft my
-    SOP" spans discovery (find) and generation (draft SOP) - neither built in
-    Phase 1 - plus matching (which is). The router must not guess which part
-    to honor; it must ask for clarification instead of silently dropping the
-    unsupported parts or misrouting the whole message."""
+    SOP" spans discovery (find), matching, and generation (draft SOP).
+    Discovery and matching are both built (Phase 2/T091 wired discovery in),
+    but SOP generation still isn't - the router must not guess which part to
+    honor; it must ask for clarification instead of silently dropping the
+    unsupported part or partially executing the rest of the message."""
     decision = route_message("find and match scholarships for me, then draft my SOP")
 
     assert decision.needs_clarification is True
     assert not decision.actions
-    assert "discovery" in decision.clarification_message.lower() or "find" in decision.clarification_message.lower()
+    assert "sop" in decision.clarification_message.lower()
 
 
 def test_draft_sop_alone_requires_clarification_not_misrouted() -> None:
@@ -117,6 +118,62 @@ def test_list_matches_phrase_alone_routes_to_list_matches() -> None:
     assert decision.actions[0].intent is Intent.LIST_MATCHES
 
 
+# --- Discovery intent (T091: discovery is now built, no longer unsupported) -------
+
+
+def test_find_scholarships_phrase_routes_to_discovery() -> None:
+    decision = route_message("find scholarships for me")
+
+    assert decision.needs_clarification is False
+    assert len(decision.actions) == 1
+    assert decision.actions[0].intent is Intent.DISCOVERY
+
+
+def test_discover_keyword_routes_to_discovery() -> None:
+    decision = route_message("discover scholarships I might be eligible for")
+
+    assert decision.needs_clarification is False
+    assert decision.actions[0].intent is Intent.DISCOVERY
+
+
+def test_search_for_scholarships_phrase_routes_to_discovery() -> None:
+    decision = route_message("search for scholarships now")
+
+    assert decision.needs_clarification is False
+    assert decision.actions[0].intent is Intent.DISCOVERY
+
+
+def test_what_scholarships_match_me_routes_to_discovery_not_matching() -> None:
+    """Contains the word "match" but is a discovery request, not an
+    eligibility check against a specific scholarship - must not be
+    misrouted to MATCH_EXISTING or require scholarship context."""
+    decision = route_message("what scholarships match me")
+
+    assert decision.needs_clarification is False
+    assert len(decision.actions) == 1
+    assert decision.actions[0].intent is Intent.DISCOVERY
+
+
+# --- Regression: existing routes are unaffected by the discovery branch -----------
+
+
+def test_bare_url_still_routes_to_url_match_after_discovery_branch_added() -> None:
+    decision = route_message("https://example.test/scholarships/some-award")
+
+    assert decision.needs_clarification is False
+    assert len(decision.actions) == 1
+    assert decision.actions[0].intent is Intent.URL_MATCH
+
+
+def test_qa_with_scholarship_context_still_routes_to_qa_after_discovery_branch_added() -> None:
+    scholarship_id = uuid.uuid4()
+    decision = route_message("What is the stipend?", active_scholarship_id=scholarship_id)
+
+    assert decision.needs_clarification is False
+    assert len(decision.actions) == 1
+    assert decision.actions[0].intent is Intent.QA
+
+
 # --- Dispatch: requires a real user + DB session ----------------------------------
 
 
@@ -189,3 +246,43 @@ def test_dispatch_declines_unbuilt_capability_without_touching_db(authed_user, d
 
     assert response.needs_clarification is True
     assert not response.results
+
+
+def test_dispatch_discovery_intent_calls_discovery_handler(authed_user, db_session_factory) -> None:
+    """T091: a discovery-phrased message dispatches onto the T089 Discovery
+    Agent's `run_discovery`, mocked here so this is a pure routing/dispatch
+    test rather than a re-test of T089's internals."""
+    from datetime import datetime, timezone
+
+    from app.agents.discovery.agent import DiscoveryRunResult
+    from app.schemas.discovery import CoverageSummary, DiscoveryResult
+
+    _, _, user_id = authed_user["client"], authed_user["headers"], authed_user["user_id"]
+    fake_result = DiscoveryRunResult(
+        query_plan=[],
+        discovery_result=DiscoveryResult(
+            results=[],
+            coverage=CoverageSummary(
+                as_of=datetime.now(timezone.utc),
+                sources_configured=0,
+                sources_active=0,
+                sources_checked=0,
+                sources_failed=0,
+            ),
+        ),
+        fetch_errors=[],
+    )
+
+    with db_session_factory() as session:
+        from app.models.user import User
+
+        user = session.get(User, user_id)
+
+        with patch("app.orchestration.main_agent.run_discovery", return_value=fake_result) as mock_run:
+            response = handle_message(session, user, "find scholarships for me")
+
+    assert mock_run.called
+    assert response.needs_clarification is False
+    assert len(response.results) == 1
+    assert response.results[0].intent is Intent.DISCOVERY
+    assert response.results[0].payload is fake_result.discovery_result
