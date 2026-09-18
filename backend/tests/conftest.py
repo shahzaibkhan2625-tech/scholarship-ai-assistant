@@ -4,12 +4,45 @@ every DB-touching test skips itself (mirrors tests/test_db_connection.py)
 when DATABASE_URL is absent or unreachable, and every fixture that creates
 data cleans it up afterward."""
 
+import re
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
+
+
+def find_registered_routes(app, method: str, path: str | re.Pattern) -> list:
+    """Locate routes actually registered on `app`, matching against real
+    sub-routes rather than `app.routes` entries directly.
+
+    This FastAPI version (0.141.1) wraps each `include_router` call in an
+    opaque `_IncludedRouter` on `app.routes` rather than exposing its
+    sub-routes' full paths directly — a naive `route.path` scan over
+    `app.routes` never matches anything routed through an included router
+    (which is how every real route in this app is added), making such a scan
+    a false positive/negative regardless of what's actually registered. The
+    prefix from `include_context` must be joined with each sub-route's own
+    path before comparing.
+
+    `path` is either an exact string (equality match) or a compiled regex
+    (`re.fullmatch`) for callers who don't know the future path template's
+    parameter name (e.g. asserting a not-yet-implemented dynamic route)."""
+    matches = []
+    for route in app.routes:
+        prefix = getattr(getattr(route, "include_context", None), "prefix", "") or ""
+        sub_routes = getattr(getattr(route, "original_router", None), "routes", None) or [route]
+        for sub in sub_routes:
+            if method not in (getattr(sub, "methods", None) or set()):
+                continue
+            full_path = f"{prefix}{getattr(sub, 'path', '') or ''}"
+            if isinstance(path, re.Pattern):
+                if path.fullmatch(full_path):
+                    matches.append(sub)
+            elif full_path == path:
+                matches.append(sub)
+    return matches
 
 
 def _require_db():

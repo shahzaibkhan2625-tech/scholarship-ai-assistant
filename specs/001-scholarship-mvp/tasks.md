@@ -194,7 +194,7 @@ These are small, reversible scheduling calls, not architectural changes — flag
 
 ### Tests for User Story 5 (write first, must fail before implementation)
 
-- [ ] T093 [P] [US5] Contract test: `POST /applications` (minimal create — see Resolution note 3), `POST /applications/{id}/documents` in `backend/tests/api/test_documents_api.py`
+- [X] T093 [P] [US5] Contract test: `POST /applications` (minimal create — see Resolution note 3), `POST /applications/{id}/documents` in `backend/tests/api/test_documents_api.py`
 - [ ] T094 [P] [US5] Contract test: `POST /applications/{id}/generate/cv`, `POST /applications/{id}/generate/sop` in `backend/tests/api/test_generation_api.py`
 - [ ] T095 [P] [US5] Integration test covering US5 Acceptance Scenarios 1–5 (transcript parsed/associated/requirement-satisfied, GPA inconsistency flagged not silently resolved, Europass/specified-questions format compliance, every claim traceable, gap reported not invented) in `backend/tests/integration/test_document_generation_flow.py`
 - [ ] T096 [P] [US5] Anti-hallucination eval case: generated CV/SOP claims are 100% traceable (SC-004) in `backend/evals/cases/generation_groundedness.py`
@@ -202,11 +202,11 @@ These are small, reversible scheduling calls, not architectural changes — flag
 
 ### Implementation for User Story 5
 
-- [ ] T098 [US5] Minimal `applications` model — `id, user_id FK, scholarship_id FK, status, created_at` only; `tasks`/`submission_approvals` added in Phase 4 (Resolution note 3) in `backend/app/models/application.py`
-- [ ] T099 [US5] SQLAlchemy + Pydantic models: `application_documents`, `generated_documents` in `backend/app/models/document.py`
-- [ ] T100 [US5] Alembic migration for `applications`(minimal) + `application_documents` + `generated_documents` (depends on T098, T099) in `backend/migrations/versions/{rev}_create_document_tables.py`
-- [ ] T101 [US5] Application repository — minimal create/get; extended in Phase 4 (depends on T100) in `backend/app/data/repositories/application_repo.py`
-- [ ] T102 [US5] Document repository (depends on T100) in `backend/app/data/repositories/document_repo.py`
+- [X] T098 [US5] Minimal `applications` model — `id, user_id FK, scholarship_id FK, status, created_at` only; `tasks`/`submission_approvals` added in Phase 4 (Resolution note 3) in `backend/app/models/application.py`
+- [X] T099 [US5] SQLAlchemy + Pydantic models: `application_documents`, `generated_documents` in `backend/app/models/document.py`
+- [X] T100 [US5] Alembic migration for `applications`(minimal) + `application_documents` + `generated_documents` (depends on T098, T099) in `backend/migrations/versions/{rev}_create_document_tables.py`
+- [X] T101 [US5] Application repository — minimal create/get; extended in Phase 4 (depends on T100) in `backend/app/data/repositories/application_repo.py`
+- [X] T102 [US5] Document repository (depends on T100) in `backend/app/data/repositories/document_repo.py`
 - [ ] T103 [P] [US5] Local-filesystem object-storage abstraction (S3-compatible interface later) in `backend/app/data/files/storage.py`
 - [ ] T104 [P] [US5] `pdf_parse` tool in `backend/app/tools/pdf_parse.py`
 - [ ] T105 [US5] `doc_pipeline` workflow — accept upload → parse → associate → compare against target requirement → flag inconsistencies (depends on T102, T103, T104) in `backend/app/workflows/doc_pipeline/graph.py`

@@ -93,20 +93,10 @@ def test_discovery_with_no_candidates_still_returns_explicit_empty_array_and_cov
 
 def test_discovery_route_registered_in_app() -> None:
     """Proves presence (mirrors the "no direct POST /sources" absence test
-    in tests/sources/test_source_registry_compliance.py). This FastAPI
-    version wraps each `include_router` call in an opaque `_IncludedRouter`
-    on `app.routes` rather than exposing its routes' full paths directly, so
-    the prefix from `include_context` is joined with each sub-route's path
-    before comparing."""
+    in tests/sources/test_source_registry_compliance.py) using the shared
+    `find_registered_routes` helper, which unwraps the `include_context.prefix`
+    each `include_router` call hides sub-routes behind."""
     from app.main import app
+    from tests.conftest import find_registered_routes
 
-    matches = []
-    for route in app.routes:
-        prefix = getattr(getattr(route, "include_context", None), "prefix", "") or ""
-        sub_routes = getattr(getattr(route, "original_router", None), "routes", None) or [route]
-        for sub in sub_routes:
-            full_path = f"{prefix}{getattr(sub, 'path', '') or ''}"
-            if full_path == "/discovery" and "POST" in (getattr(sub, "methods", None) or set()):
-                matches.append(sub)
-
-    assert len(matches) == 1
+    assert len(find_registered_routes(app, "POST", "/discovery")) == 1
