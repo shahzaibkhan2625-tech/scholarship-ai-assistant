@@ -1,0 +1,20 @@
+# Podman runtime override (VM deployment only).
+# Use this file INSTEAD OF docker-compose.yml on the Oracle VM.
+#
+# Why: Podman does not reliably forward `ports: "8000:8000"` from host
+# localhost to the container. The container runs, `podman ps` shows the
+# mapping, the container's internal IP responds — but host localhost:8000
+# times out with zero requests reaching Uvicorn. `network_mode: host`
+# makes Uvicorn bind directly on the host network namespace.
+#
+# Local development uses docker-compose.yml (real Docker) unchanged.
+#
+# VM: /usr/local/bin/podman-compose -f docker-compose.podman.yml up -d --build
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    network_mode: "host"
+    env_file:
+      - .env
