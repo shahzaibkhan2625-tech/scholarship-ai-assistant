@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from app.api.application import router as application_router
 from app.api.auth import router as auth_router
 from app.api.discovery import router as discovery_router
 from app.api.matching import router as matching_router
@@ -17,6 +18,7 @@ app.include_router(matching_router, tags=["matching"])
 app.include_router(qa_router, prefix="/scholarships", tags=["qa"])
 app.include_router(sources_router, tags=["sources"])
 app.include_router(discovery_router, prefix="/discovery", tags=["discovery"])
+app.include_router(application_router, tags=["application"])
 
 
 @app.get("/health")

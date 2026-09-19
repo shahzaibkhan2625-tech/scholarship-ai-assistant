@@ -4,6 +4,7 @@ from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _REPO_ROOT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
+_DEFAULT_STORAGE_ROOT = Path(__file__).resolve().parents[2] / "data" / "storage"
 
 
 class Settings(BaseSettings):
@@ -27,6 +28,11 @@ class Settings(BaseSettings):
     # Blueprint A3: reranker is OFF by default to control cost/latency; only
     # ever enabled explicitly via this flag.
     rerank_enabled: bool = Field(default=False, alias="RERANK_ENABLED")
+
+    # Local-filesystem object-storage root (T103). Uploaded/generated document
+    # bytes live under here; `file_ref` values persisted in the DB are always
+    # relative to this root, never an absolute path.
+    storage_root: str = Field(default=str(_DEFAULT_STORAGE_ROOT), alias="STORAGE_ROOT")
 
     @field_validator("qdrant_url", "qdrant_api_key", "gemini_api_key")
     @classmethod

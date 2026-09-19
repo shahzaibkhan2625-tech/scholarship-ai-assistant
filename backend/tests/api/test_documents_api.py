@@ -12,9 +12,28 @@ import uuid
 import pytest
 
 from app.models.application import Application
+from app.models.document import ApplicationDocument, GeneratedDocument
 from app.models.scholarship import Scholarship
 from app.models.user import User
 from tests.conftest import find_registered_routes
+
+
+def _delete_applications_and_children(session, application_ids: list[uuid.UUID]) -> None:
+    """Child-first cleanup for a batch of `applications` rows: any
+    `application_documents`/`generated_documents` referencing them, then the
+    `applications` rows themselves. Shared by `scholarship` and
+    `application_for` below since both may need to remove rows neither of
+    them tracked (e.g. one created directly via `POST /applications`)."""
+    if not application_ids:
+        return
+    session.query(ApplicationDocument).filter(ApplicationDocument.application_id.in_(application_ids)).delete(
+        synchronize_session=False
+    )
+    session.query(GeneratedDocument).filter(GeneratedDocument.application_id.in_(application_ids)).delete(
+        synchronize_session=False
+    )
+    session.query(Application).filter(Application.id.in_(application_ids)).delete(synchronize_session=False)
+    session.commit()
 
 
 @pytest.fixture
@@ -30,6 +49,15 @@ def scholarship(db_session_factory):
     yield scholarship_id
 
     session = db_session_factory()
+    # Any application referencing this scholarship must go first, regardless
+    # of how it was created (`application_for` already cleans up its own,
+    # but e.g. `POST /applications` in test_create_application_... creates
+    # one this fixture never tracked) — otherwise the delete below trips
+    # `applications_scholarship_id_fkey`.
+    orphaned_ids = [
+        app_id for (app_id,) in session.query(Application.id).filter(Application.scholarship_id == scholarship_id)
+    ]
+    _delete_applications_and_children(session, orphaned_ids)
     existing = session.get(Scholarship, scholarship_id)
     if existing is not None:
         session.delete(existing)
@@ -91,11 +119,7 @@ def application_for(db_session_factory, scholarship):
     yield _create
 
     session = db_session_factory()
-    for application_id in created_ids:
-        row = session.get(Application, application_id)
-        if row is not None:
-            session.delete(row)
-    session.commit()
+    _delete_applications_and_children(session, created_ids)
     session.close()
 
 

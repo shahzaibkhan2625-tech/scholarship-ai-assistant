@@ -18,6 +18,9 @@ venv/
 env/
 uv.lock.bak
 
+# Local object storage (uploaded/generated documents)
+backend/data/storage/
+
 # Node
 node_modules/
 npm-debug.log*
