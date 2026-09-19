@@ -38,7 +38,7 @@ class UploadedDocument(BaseModel):
     type: DocumentType
     parsed_meta: dict | None = None
     satisfies_requirement_id: uuid.UUID | None = None
-    inconsistency_flags: list[str] | None = None
+    inconsistency_flags: list[dict] | None = None
 
 
 class GeneratedDocument(BaseModel):

@@ -8,14 +8,40 @@ in a later slice; this file defines the contract they must satisfy then.
 
 import re
 import uuid
+from unittest.mock import patch
 
+import pymupdf
 import pytest
 
 from app.models.application import Application
 from app.models.document import ApplicationDocument, GeneratedDocument
 from app.models.scholarship import Scholarship
 from app.models.user import User
+from app.tools.extract_document_fields import ExtractedDocumentFields
 from tests.conftest import find_registered_routes
+
+
+def _text_pdf_bytes(text: str = "Hello world sample transcript text") -> bytes:
+    """Builds a real, valid, parseable PDF in-memory (mirrors
+    `tests/tools/test_pdf_parse.py`) rather than a checked-in binary fixture
+    or hand-typed fake bytes — `pdf_parse` (T104) genuinely opens this."""
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), text)
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def _image_only_pdf_bytes() -> bytes:
+    doc = pymupdf.open()
+    page = doc.new_page()
+    pix = pymupdf.Pixmap(pymupdf.csRGB, (0, 0, 50, 50), False)
+    pix.set_rect(pix.irect, (200, 0, 0))
+    page.insert_image(pymupdf.Rect(10, 10, 60, 60), pixmap=pix)
+    data = doc.tobytes()
+    doc.close()
+    return data
 
 
 def _delete_applications_and_children(session, application_ids: list[uuid.UUID]) -> None:
@@ -181,12 +207,25 @@ def test_upload_document_returns_201_with_expected_shape(authed_user, applicatio
     client, headers = authed_user["client"], authed_user["headers"]
     application_id = application_for(authed_user["user_id"])
 
-    response = client.post(
-        f"/applications/{application_id}/documents",
-        headers=headers,
-        files={"file": ("transcript.pdf", b"%PDF-1.4 fake", "application/pdf")},
-        data={"type": "transcript"},
-    )
+    # The target scholarship (see `scholarship` fixture) declares no
+    # requirements at all, so there is nothing for doc_pipeline to associate
+    # or satisfy-check against regardless of what this file parses to —
+    # `type`/`parsed_meta`/`satisfies_requirement_id` on the response reflect
+    # that: `type` is never reclassified in this slice, and `parsed_meta`
+    # stays null because extraction has nothing informative to report for
+    # generic filler text. The LLM extraction call itself is mocked (as
+    # every other LLM-touching test in this suite does) so this stays a
+    # fast, deterministic contract test.
+    with patch(
+        "app.workflows.doc_pipeline.graph.extract_document_fields",
+        return_value=ExtractedDocumentFields(),
+    ):
+        response = client.post(
+            f"/applications/{application_id}/documents",
+            headers=headers,
+            files={"file": ("transcript.pdf", _text_pdf_bytes(), "application/pdf")},
+            data={"type": "transcript"},
+        )
 
     assert response.status_code == 201
     body = response.json()
@@ -194,3 +233,56 @@ def test_upload_document_returns_201_with_expected_shape(authed_user, applicatio
     assert body["type"] == "unclassified"
     assert body["parsed_meta"] is None
     assert body["satisfies_requirement_id"] is None
+
+
+def test_upload_corrupt_document_returns_422_and_preserves_the_row(authed_user, application_for, db_session_factory) -> None:
+    """Edge Cases: "a document upload fails to parse -> the user is told
+    parsing failed and asked to retry/replace, not silently ignored." The
+    file + row must already be durably persisted before parsing runs, so the
+    upload is retryable and the failure is inspectable even after a 422."""
+    client, headers = authed_user["client"], authed_user["headers"]
+    application_id = application_for(authed_user["user_id"])
+
+    response = client.post(
+        f"/applications/{application_id}/documents",
+        headers=headers,
+        files={"file": ("corrupt.pdf", b"%PDF-1.4 this is not a real pdf body", "application/pdf")},
+        data={"type": "transcript"},
+    )
+
+    assert response.status_code == 422
+
+    session = db_session_factory()
+    rows = (
+        session.query(ApplicationDocument)
+        .filter(ApplicationDocument.application_id == application_id)
+        .all()
+    )
+    session.close()
+
+    assert len(rows) == 1
+    assert rows[0].parsed_meta is None
+    assert rows[0].inconsistency_flags is not None
+    assert any(flag.get("type") == "parse_error" for flag in rows[0].inconsistency_flags)
+
+
+def test_upload_scanned_document_returns_201_with_needs_ocr_flag(authed_user, application_for) -> None:
+    """A PDF that opens and parses fine but has no extractable text (a
+    scanned/image-only document) is neither a parse failure nor "the
+    document contains no information" — it must be reported as needing OCR
+    or a text-based copy, with a normal 201."""
+    client, headers = authed_user["client"], authed_user["headers"]
+    application_id = application_for(authed_user["user_id"])
+
+    response = client.post(
+        f"/applications/{application_id}/documents",
+        headers=headers,
+        files={"file": ("scan.pdf", _image_only_pdf_bytes(), "application/pdf")},
+        data={"type": "transcript"},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["parsed_meta"] is None
+    assert body["inconsistency_flags"] is not None
+    assert any(flag.get("type") == "needs_ocr" for flag in body["inconsistency_flags"])

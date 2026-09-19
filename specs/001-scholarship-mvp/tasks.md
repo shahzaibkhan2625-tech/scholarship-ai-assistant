@@ -209,10 +209,10 @@ These are small, reversible scheduling calls, not architectural changes — flag
 - [X] T102 [US5] Document repository (depends on T100) in `backend/app/data/repositories/document_repo.py`
 - [X] T103 [P] [US5] Local-filesystem object-storage abstraction (S3-compatible interface later) in `backend/app/data/files/storage.py`
 - [X] T104 [P] [US5] `pdf_parse` tool in `backend/app/tools/pdf_parse.py`
-- [ ] T105 [US5] `doc_pipeline` workflow — accept upload → parse → associate → compare against target requirement → flag inconsistencies (depends on T102, T103, T104) in `backend/app/workflows/doc_pipeline/graph.py`
+- [X] T105 [US5] `doc_pipeline` workflow — accept upload → parse → associate → compare against target requirement → flag inconsistencies (depends on T102, T103, T104) in `backend/app/workflows/doc_pipeline/graph.py`
 - [X] T106 [US5] `UploadedDocument`/`GeneratedDocument`/`DocumentType` schemas + minimal `Application` schema (depends on T099) in `backend/app/schemas/document.py`
 - [X] T107 [US5] Minimal application-create endpoint: `POST /applications` (depends on T101) in `backend/app/api/application.py`
-- [ ] T108 [US5] Documents API endpoint: `POST /applications/{id}/documents`, `422` on parse failure — user asked to retry, never silently ignored (depends on T105, T106) in `backend/app/api/documents.py`
+- [X] T108 [US5] Documents API endpoint: `POST /applications/{id}/documents`, `422` on parse failure — user asked to retry, never silently ignored (depends on T105, T106) in `backend/app/api/documents.py`
 - [ ] T109 [US5] `cv_gen` workflow — requirement-aware, format-specific (e.g. Europass), `ground_check`-gated (depends on T019, T020, T102) in `backend/app/workflows/cv_gen/graph.py`
 - [ ] T110 [US5] `sop_gen` workflow — answers scholarship-specific questions, `ground_check`-gated (depends on T019, T020, T102) in `backend/app/workflows/sop_gen/graph.py`
 - [ ] T111 [US5] Generation API endpoints: `POST /applications/{id}/generate/cv`, `/generate/sop`, `409` on an information gap — reported, never filled with invented content (depends on T109, T110) in `backend/app/api/generation.py`

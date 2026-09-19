@@ -55,6 +55,7 @@ def update_application_document(
     type: DocumentType | None = None,
     parsed_meta: dict | None = None,
     satisfies_requirement_id: uuid.UUID | None = None,
+    inconsistency_flags: list | None = None,
 ) -> ApplicationDocument:
     if document.user_id != user_id:
         raise PermissionError(f"document {document.id} does not belong to user {user_id}")
@@ -65,6 +66,8 @@ def update_application_document(
         document.parsed_meta = parsed_meta
     if satisfies_requirement_id is not None:
         document.satisfies_requirement_id = satisfies_requirement_id
+    if inconsistency_flags is not None:
+        document.inconsistency_flags = inconsistency_flags
     db.commit()
     db.refresh(document)
     return document

@@ -78,7 +78,7 @@ class ApplicationDocument(Base):
     satisfies_requirement_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("requirements.id"), nullable=True
     )
-    inconsistency_flags: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    inconsistency_flags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     checksum: Mapped[str] = mapped_column(String, nullable=False)
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
