@@ -1,8 +1,10 @@
 """`ground_check` tool — deterministic (non-LLM) lexical-overlap check that a
 claim is substantiated by retrieved evidence text. Constitution's "harness
 discipline" requires grounding checks to be automatic, non-LLM verification
-of agent output, not another LLM call trusting itself. Reused by Q&A now
-(US3) and by CV/SOP generation in Phase 3."""
+of agent output, not another LLM call trusting itself. Currently used by Q&A
+(US3, `app/rag/grounding.py`) only — CV/SOP generation (Phase 3) calls
+`verify_claim_grounded` below instead; see its docstring and
+`ground_check()`'s own for why."""
 
 import re
 from dataclasses import dataclass
@@ -30,7 +32,20 @@ class GroundCheckResult:
 def ground_check(claim: str, evidence_texts: list[str], *, threshold: float = 0.6) -> GroundCheckResult:
     """Returns grounded=True only if some evidence text covers >= `threshold`
     of the claim's significant words. An empty claim or no evidence is never
-    grounded — callers must treat that as Unknown, not as a pass."""
+    grounded — callers must treat that as Unknown, not as a pass.
+
+    **Known limitation — do not use this for generation grounding.** The
+    `_significant_words` filter drops short tokens (`len(w) >= 3`), which
+    incidentally drops single/double-digit numbers ("2", "5"). That means a
+    claim that *overstates* a real number ("5 years" when the source says "2
+    years") can pass on lexical overlap of the surrounding words alone —
+    proven by
+    `tests/tools/test_ground_check.py::test_bare_ground_check_overlap_alone_does_not_catch_numeric_overstatement`.
+    This function's behaviour is intentionally left unchanged here (its only
+    current caller, `app/rag/grounding.py`'s Q&A grounding, is untouched by
+    that decision). Any new caller doing generation-style grounding (CV/SOP
+    and similar) MUST use `verify_claim_grounded` below instead, which layers
+    a numeric-consistency check on top."""
     claim_words = _significant_words(claim)
     if not claim_words or not evidence_texts:
         return GroundCheckResult(grounded=False, overlap_score=0.0, matched_evidence=None)

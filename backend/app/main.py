@@ -4,6 +4,7 @@ from app.api.application import router as application_router
 from app.api.auth import router as auth_router
 from app.api.discovery import router as discovery_router
 from app.api.documents import router as documents_router
+from app.api.generation import router as generation_router
 from app.api.matching import router as matching_router
 from app.api.profile import router as profile_router
 from app.api.qa import router as qa_router
@@ -21,6 +22,7 @@ app.include_router(sources_router, tags=["sources"])
 app.include_router(discovery_router, prefix="/discovery", tags=["discovery"])
 app.include_router(application_router, tags=["application"])
 app.include_router(documents_router, tags=["documents"])
+app.include_router(generation_router, tags=["generation"])
 
 
 @app.get("/health")

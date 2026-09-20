@@ -30,6 +30,7 @@ that survived the gate, the exact profile field / document id / requirement
 id it came from — a generated CV with an empty `source_trace` is a bug, and
 `render` never runs at all when the gate is blocked."""
 
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any, TypedDict
 
@@ -133,6 +134,21 @@ class CvGenState(TypedDict, total=False):
     rendered_text: str | None
 
 
+def _fmt_decimal(value: Any) -> str:
+    """Numeric facts (GPA, GPA scale) round-trip through Postgres `NUMERIC`
+    as `Decimal`, which can drop a whole number's trailing `.0` (`4` instead
+    of `4.0`). Left as-is, a fact ending "...GPA 3.8/4." reads exactly like a
+    truncated "4.0" — the draft LLM reliably "corrects" it to "4.0" on its
+    own, and `verify_claim_grounded`'s numeric-literal check (T097) then
+    rejects that claim as an unsupported overstatement, purely on formatting.
+    Always rendering one decimal place removes that whole failure mode
+    without changing the actual value."""
+    d = Decimal(str(value))
+    if d == d.to_integral_value():
+        d = d.quantize(Decimal("1.0"))
+    return str(d)
+
+
 def _profile_facts(profile: Any) -> list[AllowedFact]:
     if profile is None:
         return []
@@ -146,8 +162,8 @@ def _profile_facts(profile: Any) -> list[AllowedFact]:
     for er in profile.education_records:
         parts = [p for p in (er.degree, f"in {er.field}" if er.field else None, f"from {er.university}" if er.university else None) if p]
         if er.gpa is not None:
-            scale = f"/{er.gpa_scale}" if er.gpa_scale else ""
-            parts.append(f"with GPA {er.gpa}{scale}")
+            scale = f"/{_fmt_decimal(er.gpa_scale)}" if er.gpa_scale else ""
+            parts.append(f"with GPA {_fmt_decimal(er.gpa)}{scale}")
         if not parts:
             continue
         span = f" ({er.start}–{er.end})" if er.start or er.end else ""

@@ -14,6 +14,10 @@ rebuilt (research.md D7).
 - `qa_groundedness` (T056, backend/evals/cases/qa_groundedness.py) scores
   the Research/Q&A agent's confidence labeling against fixed, mocked
   question/source pairs.
+- `generation_groundedness` (T096, backend/evals/cases/generation_groundedness.py)
+  scores CV/SOP claim traceability against spec.md SC-004's 100% target — a
+  zero-tolerance gate like `matching_correctness`, since a single silently
+  fabricated claim is exactly the failure this feature exists to prevent.
 """
 
 from collections.abc import Callable
@@ -21,6 +25,7 @@ from dataclasses import dataclass
 
 THRESHOLD = 0.5
 _MATCHING_CORRECTNESS_THRESHOLD = 1.0
+_GENERATION_GROUNDEDNESS_THRESHOLD = 1.0
 
 
 @dataclass(frozen=True)
@@ -56,9 +61,20 @@ def _score_qa_groundedness() -> float:
     return score()
 
 
+def _score_generation_groundedness() -> float:
+    from evals.cases.generation_groundedness import score
+
+    return score()
+
+
 CASES: list[EvalCase] = [
     EvalCase(name="matching_correctness", score_fn=_score_matching_correctness, threshold=_MATCHING_CORRECTNESS_THRESHOLD),
     EvalCase(name="qa_groundedness", score_fn=_score_qa_groundedness),
+    EvalCase(
+        name="generation_groundedness",
+        score_fn=_score_generation_groundedness,
+        threshold=_GENERATION_GROUNDEDNESS_THRESHOLD,
+    ),
 ]
 
 

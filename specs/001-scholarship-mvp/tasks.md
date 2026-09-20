@@ -196,8 +196,8 @@ These are small, reversible scheduling calls, not architectural changes — flag
 
 - [X] T093 [P] [US5] Contract test: `POST /applications` (minimal create — see Resolution note 3), `POST /applications/{id}/documents` in `backend/tests/api/test_documents_api.py`
 - [X] T094 [P] [US5] Contract test: `POST /applications/{id}/generate/cv`, `POST /applications/{id}/generate/sop` in `backend/tests/api/test_generation_api.py`
-- [ ] T095 [P] [US5] Integration test covering US5 Acceptance Scenarios 1–5 (transcript parsed/associated/requirement-satisfied, GPA inconsistency flagged not silently resolved, Europass/specified-questions format compliance, every claim traceable, gap reported not invented) in `backend/tests/integration/test_document_generation_flow.py`
-- [ ] T096 [P] [US5] Anti-hallucination eval case: generated CV/SOP claims are 100% traceable (SC-004) in `backend/evals/cases/generation_groundedness.py`
+- [X] T095 [P] [US5] Integration test covering US5 Acceptance Scenarios 1–5 (transcript parsed/associated/requirement-satisfied, GPA inconsistency flagged not silently resolved, Europass/specified-questions format compliance, every claim traceable, gap reported not invented) in `backend/tests/integration/test_document_generation_flow.py`
+- [X] T096 [P] [US5] Anti-hallucination eval case: generated CV/SOP claims are 100% traceable (SC-004) in `backend/evals/cases/generation_groundedness.py`
 - [X] T097 [P] [US5] Unit test: `ground_check` blocks generation on an untraceable claim in `backend/tests/tools/test_ground_check.py`
 
 ### Implementation for User Story 5
@@ -214,9 +214,9 @@ These are small, reversible scheduling calls, not architectural changes — flag
 - [X] T107 [US5] Minimal application-create endpoint: `POST /applications` (depends on T101) in `backend/app/api/application.py`
 - [X] T108 [US5] Documents API endpoint: `POST /applications/{id}/documents`, `422` on parse failure — user asked to retry, never silently ignored (depends on T105, T106) in `backend/app/api/documents.py`
 - [X] T109 [US5] `cv_gen` workflow — requirement-aware, format-specific (e.g. Europass), `ground_check`-gated (depends on T019, T020, T102) in `backend/app/workflows/cv_gen/graph.py`
-- [ ] T110 [US5] `sop_gen` workflow — answers scholarship-specific questions, `ground_check`-gated (depends on T019, T020, T102) in `backend/app/workflows/sop_gen/graph.py`
-- [ ] T111 [US5] Generation API endpoints: `POST /applications/{id}/generate/cv`, `/generate/sop`, `409` on an information gap — reported, never filled with invented content (depends on T109, T110) in `backend/app/api/generation.py`
-- [ ] T112 [US5] Wire minimal `application` + `documents` + `generation` routers into the app (depends on T107, T108, T111) in `backend/app/main.py`
+- [X] T110 [US5] `sop_gen` workflow — answers scholarship-specific questions, `ground_check`-gated (depends on T019, T020, T102) in `backend/app/workflows/sop_gen/graph.py`
+- [X] T111 [US5] Generation API endpoints: `POST /applications/{id}/generate/cv`, `/generate/sop`, `409` on an information gap — reported, never filled with invented content (depends on T109, T110) in `backend/app/api/generation.py`
+- [X] T112 [US5] Wire minimal `application` + `documents` + `generation` routers into the app (depends on T107, T108, T111) in `backend/app/main.py`
 
 **Phase 3 Checkpoint**: US5 independently functional; zero-fabrication eval (T096) green — spec.md SC-004 demoable.
 
