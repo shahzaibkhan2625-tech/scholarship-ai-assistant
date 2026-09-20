@@ -15,8 +15,8 @@ import pytest
 
 from app.agents.discovery.agent import run_discovery
 from app.data.repositories import source_repo
-from app.models.scholarship import Scholarship, ScholarshipField
-from app.models.source import FetchStatus, ScholarshipSource, SourceFetchLog, SourceRegistry
+from app.models.scholarship import Scholarship
+from app.models.source import FetchStatus, SourceRegistry
 from app.schemas.source import SourceFetchLogCreate, SourceRegistryCreate
 from app.services.classify import ClassifiedScholarshipFields
 from app.tools.api_connector import ApiConnectorOutput
@@ -25,25 +25,16 @@ from app.tools.official_fetch import OfficialFetchOutput
 
 @pytest.fixture
 def db(db_session_factory):
+    """`db_session_factory` binds this session to a per-test transaction that
+    is rolled back at teardown, so every row created here -- tracked in
+    `created_sources`/`created_scholarships` or not -- is discarded without
+    needing hand-written, FK-ordered deletes."""
     session = db_session_factory()
     created_sources: list[uuid.UUID] = []
     created_scholarships: list[uuid.UUID] = []
     try:
         yield session, created_sources, created_scholarships
     finally:
-        for scholarship_id in created_scholarships:
-            session.query(ScholarshipField).filter(ScholarshipField.scholarship_id == scholarship_id).delete()
-            session.query(ScholarshipSource).filter(ScholarshipSource.scholarship_id == scholarship_id).delete()
-            row = session.get(Scholarship, scholarship_id)
-            if row is not None:
-                session.delete(row)
-        session.commit()
-        for source_id in created_sources:
-            session.query(SourceFetchLog).filter(SourceFetchLog.source_id == source_id).delete()
-            row = session.get(SourceRegistry, source_id)
-            if row is not None:
-                session.delete(row)
-        session.commit()
         session.close()
 
 
@@ -71,13 +62,23 @@ def _profile(**overrides) -> SimpleNamespace:
     return SimpleNamespace(**defaults)
 
 
+def _ok_fetch_official(_db, source_id, url) -> OfficialFetchOutput:
+    """Stub for the `fetch_official` mock boundary (see module docstring).
+    The active-source baseline in the DB includes web/official sources
+    outside any single test's own fixtures (e.g. the "field" dimension
+    matches every active discovery-role source, not just the one a test
+    creates), so without this every test would also make a real HTTP
+    request to those sources' domains."""
+    return OfficialFetchOutput(source_id=source_id, source_url=url, status="ok", content="")
+
+
 def test_query_plan_spans_at_least_two_distinct_dimensions(db):
     session, created_sources, _ = db
     _active_api_source(session, created_sources)
     profile = _profile()
 
     ok_output = ApiConnectorOutput(source_id=uuid.uuid4(), query="x", status="ok", records=[])
-    run = run_discovery(session, profile, fetch_api=lambda *a, **k: ok_output)
+    run = run_discovery(session, profile, fetch_official=_ok_fetch_official, fetch_api=lambda *a, **k: ok_output)
 
     dimensions = {step.dimension for step in run.query_plan}
     assert len(dimensions) >= 2
@@ -91,7 +92,7 @@ def test_output_always_includes_a_coverage_summary_even_in_the_happy_path(db):
     profile = _profile()
 
     ok_output = ApiConnectorOutput(source_id=uuid.uuid4(), query="x", status="ok", records=[])
-    run = run_discovery(session, profile, fetch_api=lambda *a, **k: ok_output)
+    run = run_discovery(session, profile, fetch_official=_ok_fetch_official, fetch_api=lambda *a, **k: ok_output)
 
     assert run.fetch_errors == []
     assert run.discovery_result.coverage is not None
@@ -112,7 +113,7 @@ def test_tool_failure_surfaces_as_a_coverage_gap_not_a_silent_empty_result(db):
         )
         return ApiConnectorOutput(source_id=source_id, query=query, status="fail", records=[], error="upstream unavailable")
 
-    run = run_discovery(session, profile, fetch_api=failing_fetch_api)
+    run = run_discovery(session, profile, fetch_official=_ok_fetch_official, fetch_api=failing_fetch_api)
 
     # Not a silent "no results" — the failure is traced explicitly...
     assert run.fetch_errors != []
@@ -131,7 +132,7 @@ def test_tool_call_raising_an_exception_also_surfaces_as_a_traced_failure_not_a_
     def raising_fetch_api(*_args, **_kwargs):
         raise RuntimeError("connector blew up")
 
-    run = run_discovery(session, profile, fetch_api=raising_fetch_api)
+    run = run_discovery(session, profile, fetch_official=_ok_fetch_official, fetch_api=raising_fetch_api)
 
     assert any("connector blew up" in err for err in run.fetch_errors)
     assert run.discovery_result.coverage is not None  # still attached despite the exception
@@ -176,7 +177,7 @@ def test_found_candidate_is_handed_to_the_existing_ingestion_workflow(db):
         return ApiConnectorOutput(source_id=source_id, query=query, status="ok", records=records)
 
     with patch("app.workflows.ingestion.graph.classify_service.classify_candidate", return_value=_FAKE_CLASSIFICATION):
-        run = run_discovery(session, profile, fetch_api=fetch_api_by_query)
+        run = run_discovery(session, profile, fetch_official=_ok_fetch_official, fetch_api=fetch_api_by_query)
 
     assert run.fetch_errors == []
     assert len(run.discovery_result.results) == 1

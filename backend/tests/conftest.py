@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import sessionmaker
 
 
 def find_registered_routes(app, method: str, path: str | re.Pattern) -> list:
@@ -62,14 +63,46 @@ def _require_db():
 
 @pytest.fixture
 def db_session_factory():
-    return _require_db()
+    """A session factory bound to a single connection wrapped in one outer
+    transaction for the duration of the test, rolled back at teardown --
+    SQLAlchemy's standard "join an external transaction" pattern for test
+    isolation -- instead of relying on hand-written, FK-ordered deletes.
+
+    `join_transaction_mode="create_savepoint"` means a `session.commit()`
+    made by code under test (including FastAPI endpoints exercised through
+    the `client` fixture below, via its `get_db` override) only releases a
+    SAVEPOINT and immediately opens a new one; it can never end the outer
+    transaction, so the rollback here always discards everything."""
+    _require_db()  # skips the test if DATABASE_URL is unset/unreachable
+    from app.data.repositories.db import engine
+
+    connection = engine.connect()
+    outer_transaction = connection.begin()
+    TestingSessionLocal = sessionmaker(bind=connection, autoflush=False, join_transaction_mode="create_savepoint")
+
+    yield TestingSessionLocal
+
+    outer_transaction.rollback()
+    connection.close()
 
 
 @pytest.fixture
 def client(db_session_factory):
+    from app.data.repositories.db import get_db
     from app.main import app
 
-    return TestClient(app)
+    def _override_get_db():
+        session = db_session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_db] = _override_get_db
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
 
 
 def _delete_user_cascade(session, user_id: uuid.UUID) -> None:

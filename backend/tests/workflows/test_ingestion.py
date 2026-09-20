@@ -14,7 +14,7 @@ import pytest
 
 from app.data.repositories import source_repo
 from app.models.scholarship import LifecycleStatus, Scholarship, ScholarshipField
-from app.models.source import ScholarshipSource, SourceFetchLog, SourceRegistry
+from app.models.source import ScholarshipSource, SourceRegistry
 from app.schemas.source import SourceRegistryCreate
 from app.services.classify import ClassifiedScholarshipFields
 from app.services.conflict_resolution import ConflictResolution
@@ -24,24 +24,16 @@ from app.workflows.ingestion.graph import run_ingestion
 
 @pytest.fixture
 def db(db_session_factory):
+    """`db_session_factory` binds this session to a per-test transaction that
+    is rolled back at teardown, so every row created here -- tracked in
+    `created_sources`/`created_scholarships` or not -- is discarded without
+    needing hand-written, FK-ordered deletes."""
     session = db_session_factory()
     created_sources: list[uuid.UUID] = []
     created_scholarships: list[uuid.UUID] = []
     try:
         yield session, created_sources, created_scholarships
     finally:
-        for scholarship_id in created_scholarships:
-            session.query(ScholarshipSource).filter(ScholarshipSource.scholarship_id == scholarship_id).delete()
-            row = session.get(Scholarship, scholarship_id)
-            if row is not None:
-                session.delete(row)
-        session.commit()
-        for source_id in created_sources:
-            session.query(SourceFetchLog).filter(SourceFetchLog.source_id == source_id).delete()
-            row = session.get(SourceRegistry, source_id)
-            if row is not None:
-                session.delete(row)
-        session.commit()
         session.close()
 
 
