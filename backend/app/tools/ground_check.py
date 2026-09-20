@@ -51,3 +51,28 @@ def ground_check(claim: str, evidence_texts: list[str], *, threshold: float = 0.
         overlap_score=best_score,
         matched_evidence=best_evidence if best_score >= threshold else None,
     )
+
+
+_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def verify_claim_grounded(claim: str, evidence_texts: list[str], *, threshold: float = 0.6) -> GroundCheckResult:
+    """Stricter grounding gate, layered on top of `ground_check` rather than
+    modifying it, for callers (CV/SOP generation) where a claim that
+    *overstates* a real number must be rejected, not passed. `ground_check`'s
+    significant-word filter drops short numeric tokens (`len(w) >= 3` excludes
+    single/double-digit numbers like "2" or "5"), so lexical overlap of the
+    surrounding words alone cannot tell "5 years of experience" apart from a
+    source that says "2 years of experience" — both overlap 100% on
+    {"years", "experience"}. This function additionally requires every number
+    literal in the claim to appear in the matched evidence text. Every
+    existing `ground_check` caller (`app.rag.grounding`) is untouched."""
+    result = ground_check(claim, evidence_texts, threshold=threshold)
+    if not result.grounded:
+        return result
+
+    claim_numbers = set(_NUMBER_RE.findall(claim))
+    evidence_numbers = set(_NUMBER_RE.findall(result.matched_evidence or ""))
+    if claim_numbers and not claim_numbers.issubset(evidence_numbers):
+        return GroundCheckResult(grounded=False, overlap_score=result.overlap_score, matched_evidence=None)
+    return result

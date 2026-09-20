@@ -87,12 +87,15 @@ def create_generated_document(
     application_id: uuid.UUID,
     type: GeneratedDocumentType,
     file_ref: str,
+    *,
+    source_trace: list | None = None,
 ) -> GeneratedDocument:
     document = GeneratedDocument(
         user_id=user_id,
         application_id=application_id,
         type=type,
         file_ref=file_ref,
+        source_trace=source_trace,
     )
     db.add(document)
     db.commit()
