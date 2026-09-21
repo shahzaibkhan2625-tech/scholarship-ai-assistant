@@ -19,6 +19,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 from app.models.document import DocumentType, GeneratedDocumentType
+from app.schemas.plan import ChecklistItem
 from app.tools.pdf_parse import ParsedDocument
 
 __all__ = [
@@ -61,3 +62,4 @@ class ApplicationRead(BaseModel):
     scholarship_id: uuid.UUID
     status: str
     created_at: datetime
+    checklist: list[ChecklistItem] = []

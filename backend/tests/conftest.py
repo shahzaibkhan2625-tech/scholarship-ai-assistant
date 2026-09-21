@@ -106,6 +106,8 @@ def client(db_session_factory):
 
 
 def _delete_user_cascade(session, user_id: uuid.UUID) -> None:
+    from app.models.application import Application, SubmissionApproval, Task
+    from app.models.document import ApplicationDocument, GeneratedDocument
     from app.models.match import Match
     from app.models.profile import EducationRecord, Experience, MissingInfo, Profile, ProfileCriterion, TestScore
     from app.models.user import User
@@ -120,6 +122,25 @@ def _delete_user_cascade(session, user_id: uuid.UUID) -> None:
         session.delete(profile)
 
     session.query(Match).filter(Match.user_id == user_id).delete()
+
+    # Phase 4 (T118/T120/T126): applications and everything FK-chained to
+    # them must go before the user row, or the user delete below violates
+    # applications_user_id_fkey (and application_documents/tasks' own FKs).
+    application_ids = [
+        row[0] for row in session.query(Application.id).filter(Application.user_id == user_id).all()
+    ]
+    if application_ids:
+        session.query(SubmissionApproval).filter(SubmissionApproval.application_id.in_(application_ids)).delete(
+            synchronize_session=False
+        )
+        session.query(Task).filter(Task.application_id.in_(application_ids)).delete(synchronize_session=False)
+        session.query(GeneratedDocument).filter(GeneratedDocument.application_id.in_(application_ids)).delete(
+            synchronize_session=False
+        )
+        session.query(ApplicationDocument).filter(ApplicationDocument.application_id.in_(application_ids)).delete(
+            synchronize_session=False
+        )
+        session.query(Application).filter(Application.id.in_(application_ids)).delete(synchronize_session=False)
 
     user = session.get(User, user_id)
     if user is not None:

@@ -49,7 +49,7 @@ def scholarship_with_requirement(db_session_factory):
             key="transcript",
             mandatory=True,
             value_status="known",
-            confidence="high",
+            confidence="verified",
         )
     )
     session.commit()

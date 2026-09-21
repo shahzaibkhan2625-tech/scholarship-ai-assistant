@@ -40,8 +40,14 @@ def list_for_user(db: Session, user_id: uuid.UUID) -> list[Application]:
 
 
 def list_tasks(db: Session, user_id: uuid.UUID, application_id: uuid.UUID) -> list[Task]:
-    """The checklist (FR-PLAN-2) for one application, owned by `user_id`."""
-    stmt = select(Task).where(Task.user_id == user_id, Task.application_id == application_id)
+    """The checklist (FR-PLAN-2) for one application, owned by `user_id`.
+    Explicitly ordered (never relying on Postgres's unordered row return) so
+    two reads of an unchanged checklist always render in the same order."""
+    stmt = (
+        select(Task)
+        .where(Task.user_id == user_id, Task.application_id == application_id)
+        .order_by(Task.category, Task.description, Task.id)
+    )
     return list(db.execute(stmt).scalars().all())
 
 
