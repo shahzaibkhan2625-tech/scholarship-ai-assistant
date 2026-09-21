@@ -228,22 +228,22 @@ These are small, reversible scheduling calls, not architectural changes — flag
 
 ### Tests for User Story 6 (write first, must fail before implementation)
 
-- [ ] T113 [P] [US6] Contract test: `GET /applications` (tracker), `POST /applications/{id}/plan` in `backend/tests/api/test_application_api.py`
+- [X] T113 [P] [US6] Contract test: `GET /applications` (tracker), `POST /applications/{id}/plan` in `backend/tests/api/test_application_api.py`
 - [ ] T114 [P] [US6] Contract test: `POST /applications/{id}/assistant/next-step`, `POST /applications/{id}/submission-approvals` in `backend/tests/api/test_application_assistant_api.py`
 - [ ] T115 [P] [US6] Integration test covering US6 Acceptance Scenarios 1–5 (every checklist item carries exactly one of the six readiness labels, missing-vs-AI-can-generate distinguished, nothing transmitted before explicit approval, an earlier approval does not carry forward to a new submission, agentic mode and deterministic mode produce identical checklists for the same inputs) in `backend/tests/integration/test_application_planning_flow.py`
 - [ ] T116 [P] [US6] Submission-approval scoping test: an approval for one `submission_scope` MUST NOT authorize a different/later submission (constitution Principle III, FR-APP-3) in `backend/tests/services/test_submission_approval_scope.py`
-- [ ] T117 [P] [US6] Static/contract test asserting no live-external-send endpoint or code path exists anywhere in the API surface (FR-APP-4) in `backend/tests/api/test_no_live_submission.py`
+- [X] T117 [P] [US6] Static/contract test asserting no live-external-send endpoint or code path exists anywhere in the API surface (FR-APP-4) in `backend/tests/api/test_no_live_submission.py`
 
 ### Implementation for User Story 6
 
-- [ ] T118 [US6] SQLAlchemy + Pydantic models: `tasks`, `submission_approvals` (extends `applications` from Phase 3) in `backend/app/models/application.py`
-- [ ] T119 [US6] Alembic migration for `tasks` + `submission_approvals` (depends on T118) in `backend/migrations/versions/{rev}_create_application_planning_tables.py`
-- [ ] T120 [US6] Extend application repository with plan/tracker/readiness queries (depends on T119) in `backend/app/data/repositories/application_repo.py`
+- [X] T118 [US6] SQLAlchemy + Pydantic models: `tasks`, `submission_approvals` (extends `applications` from Phase 3) in `backend/app/models/application.py`
+- [X] T119 [US6] Alembic migration for `tasks` + `submission_approvals` (depends on T118) in `backend/migrations/versions/{rev}_create_application_planning_tables.py`
+- [X] T120 [US6] Extend application repository with plan/tracker/readiness queries (depends on T119) in `backend/app/data/repositories/application_repo.py`
 - [ ] T121 [US6] `readiness` service — recomputes `readiness_label` from document/generation state, never hand-edited (depends on T120) in `backend/app/services/readiness.py`
 - [ ] T122 [US6] `app_plan` workflow — verified requirements → six-label checklist; single workflow, two entry points so agentic and deterministic modes are provably identical (depends on T121) in `backend/app/workflows/app_plan/graph.py`
 - [ ] T123 [US6] `submit_prep` workflow — stops at `[APPROVAL GATE]`/`[FINAL APPROVAL GATE]`; no live-send code path exists (depends on T120) in `backend/app/workflows/submit_prep/graph.py`
 - [ ] T124 [US6] Application/Submission agent — drafts/assembles/stages materials only; wraps `app_plan`/`submit_prep`; exposes step-by-step and deterministic entry points (depends on T122, T123) in `backend/app/agents/application/agent.py`
-- [ ] T125 [US6] `ApplicationPlan`/`ChecklistItem`/`ReadinessLabel`/`AssistantStepResult` schemas (depends on T118) in `backend/app/schemas/plan.py`
+- [X] T125 [US6] `ApplicationPlan`/`ChecklistItem`/`ReadinessLabel`/`AssistantStepResult` schemas (depends on T118) in `backend/app/schemas/plan.py`
 - [ ] T126 [US6] `GET /applications` (tracker) + `POST /applications/{id}/plan` endpoints (depends on T122, T125) in `backend/app/api/application.py`
 - [ ] T127 [US6] Assistant + submission-approval endpoints: `POST /applications/{id}/assistant/next-step`, `POST /applications/{id}/submission-approvals` (append-only; never edited/reused) (depends on T124, T123) in `backend/app/api/application.py`
 - [ ] T128 [US6] Extend orchestrator to route application-planning/assistant intents (depends on T126, T127) in `backend/app/orchestration/main_agent.py`
