@@ -14,14 +14,21 @@ validator that a caller could bypass.
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
 from app.models.application import ReadinessLabel
 
-__all__ = ["ReadinessLabel", "ChecklistItem", "ApplicationPlan", "AssistantStepResult"]
+__all__ = [
+    "ReadinessLabel",
+    "ChecklistItem",
+    "ApplicationPlan",
+    "AssistantStepResult",
+    "SubmissionApprovalRequest",
+    "SubmissionApprovalResponse",
+]
 
 
 class ChecklistItem(BaseModel):
@@ -52,3 +59,31 @@ class AssistantStepResult(BaseModel):
     result: Any = None
     requires_user_input: bool = False
     requires_approval: bool = False
+
+
+class SubmissionApprovalRequest(BaseModel):
+    """`POST /applications/{id}/submission-approvals` request body
+    (contracts/openapi.yaml). `submission_scope` identifies exactly which
+    submission event this approval covers (FR-APP-3) -- never inferred."""
+
+    submission_scope: str
+    notes: str | None = None
+
+
+class SubmissionApprovalResponse(BaseModel):
+    """Response shape per contracts/openapi.yaml's `SubmissionApproval`
+    schema, PLUS `content_fingerprint` (approved phase4c_design.md A3): the
+    contract is silent, not explicit, on that field (no
+    `additionalProperties: false`, no exclusion note like `FetchFailure.
+    reported_as` or `CoverageSummary.claims_complete_coverage` carry) --
+    including it lets the user see exactly what content they approved,
+    which is the entire point of ADR-0004's scope+content-bound approval."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    application_id: uuid.UUID
+    submission_scope: str
+    content_fingerprint: str
+    approved_by: uuid.UUID
+    approved_at: datetime

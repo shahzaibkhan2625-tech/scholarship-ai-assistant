@@ -20,6 +20,7 @@ from enum import Enum
 
 from sqlalchemy.orm import Session
 
+from app.agents.application.agent import run_application_assistant
 from app.agents.discovery.agent import run_discovery
 from app.agents.research_qa.agent import answer_question
 from app.data.repositories import match_repo, scholarship_repo
@@ -41,6 +42,7 @@ class Intent(str, Enum):
     LIST_MATCHES = "list_matches"
     QA = "qa"
     DISCOVERY = "discovery"
+    APPLICATION_ASSISTANT = "application_assistant"
 
 
 # Capabilities that exist later on the roadmap but are not built yet.
@@ -57,6 +59,14 @@ _LIST_MATCH_KEYWORDS = ("my matches", "list my matches", "matches so far", "what
 _DISCOVERY_KEYWORDS = ("find scholarships", "discover", "search for scholarships", "what scholarships match me")
 _MATCH_KEYWORDS = ("match", "eligib", "am i eligible", "qualify")
 _QA_KEYWORDS = ("?", "what is", "what's", "how much", "when is", "does it", "is there", "can i")
+_APPLICATION_ASSISTANT_KEYWORDS = (
+    "next step",
+    "what's next",
+    "what should i do next",
+    "continue my application",
+    "am i ready to submit",
+    "help me finish my application",
+)
 
 
 @dataclass(frozen=True)
@@ -65,6 +75,7 @@ class RoutedAction:
     url: str | None = None
     question: str | None = None
     scholarship_id: uuid.UUID | None = None
+    application_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -94,13 +105,17 @@ def route_message(
     text: str,
     *,
     active_scholarship_id: uuid.UUID | None = None,
+    active_application_id: uuid.UUID | None = None,
 ) -> RoutingDecision:
     """Deterministic, keyword-based routing. `active_scholarship_id` is the
     scholarship currently in view/context (e.g. the page the user is on),
     used to resolve intents like "match this" or "what is the deadline?"
     that refer to a scholarship without naming it explicitly. Without that
     context, such requests cannot be resolved without guessing which
-    scholarship is meant, so they fall back to clarification."""
+    scholarship is meant, so they fall back to clarification.
+    `active_application_id` is the same idea for the application-assistant
+    intent — the specific in-progress application ("next step", "am I ready
+    to submit") a message without an explicit id refers to."""
     for pattern, reason in _UNSUPPORTED_CAPABILITY_PATTERNS:
         if pattern.search(text):
             return _clarify(
@@ -116,14 +131,23 @@ def route_message(
     wants_profile = any(k in lowered for k in _PROFILE_KEYWORDS)
     wants_list_matches = any(k in lowered for k in _LIST_MATCH_KEYWORDS)
     wants_discovery = any(k in lowered for k in _DISCOVERY_KEYWORDS)
+    wants_application_assistant = any(k in lowered for k in _APPLICATION_ASSISTANT_KEYWORDS)
     # "what scholarships match me" contains "match" but is a discovery
     # request, not an eligibility check against a specific scholarship - it
     # must not also fan out to matching.
     wants_match = any(k in lowered for k in _MATCH_KEYWORDS) and not wants_list_matches and not wants_discovery
     # An eligibility-phrased question ("Am I eligible for this one?") is a
     # matching request, not a general content question - it must not also
-    # fan out to Q&A just because it happens to end in "?".
-    wants_qa = any(k in lowered for k in _QA_KEYWORDS) and not wants_match and not wants_discovery
+    # fan out to Q&A just because it happens to end in "?". Similarly,
+    # "what's next" / "what should I do next" is an application-assistant
+    # request, not a general content question, even though it contains
+    # "what's" - it must not also fan out to Q&A.
+    wants_qa = (
+        any(k in lowered for k in _QA_KEYWORDS)
+        and not wants_match
+        and not wants_discovery
+        and not wants_application_assistant
+    )
 
     actions: list[RoutedAction] = []
 
@@ -132,6 +156,14 @@ def route_message(
 
     if wants_discovery:
         actions.append(RoutedAction(intent=Intent.DISCOVERY))
+
+    if wants_application_assistant:
+        if active_application_id is None:
+            return _clarify(
+                "Which application would you like me to check? Please open a "
+                "specific in-progress application first."
+            )
+        actions.append(RoutedAction(intent=Intent.APPLICATION_ASSISTANT, application_id=active_application_id))
 
     if urls and (wants_match or not (wants_profile or wants_qa or wants_list_matches or wants_discovery)):
         # An explicit match request, or a bare link with no other signal —
@@ -202,12 +234,16 @@ def handle_message(
     text: str,
     *,
     active_scholarship_id: uuid.UUID | None = None,
+    active_application_id: uuid.UUID | None = None,
 ) -> OrchestratorResponse:
     """Routes `text` and dispatches each resulting action onto the real
-    Phase 1 capability (profile / url-match / matching / Q&A), in order.
-    Returns a clarification instead of executing anything when the intent
-    is uncertain, ambiguous, or references an unbuilt capability."""
-    decision = route_message(text, active_scholarship_id=active_scholarship_id)
+    capability (profile / url-match / matching / Q&A / discovery /
+    application-assistant), in order. Returns a clarification instead of
+    executing anything when the intent is uncertain, ambiguous, or
+    references an unbuilt capability."""
+    decision = route_message(
+        text, active_scholarship_id=active_scholarship_id, active_application_id=active_application_id
+    )
     if decision.needs_clarification:
         return OrchestratorResponse(needs_clarification=True, clarification_message=decision.clarification_message)
 
@@ -244,5 +280,9 @@ def handle_message(
             profile = get_or_create_profile(db, user.id)
             run = run_discovery(db, profile)
             results.append(ActionResult(Intent.DISCOVERY, run.discovery_result))
+
+        elif action.intent is Intent.APPLICATION_ASSISTANT:
+            step_result = run_application_assistant(db, user.id, action.application_id)
+            results.append(ActionResult(Intent.APPLICATION_ASSISTANT, step_result))
 
     return OrchestratorResponse(results=tuple(results))

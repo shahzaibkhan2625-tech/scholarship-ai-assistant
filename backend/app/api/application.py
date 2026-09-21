@@ -19,13 +19,21 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.agents.application.agent import run_application_assistant
 from app.api.deps import get_current_user
-from app.data.repositories import application_repo, scholarship_repo
+from app.data.repositories import application_repo, document_repo, scholarship_repo
 from app.data.repositories.db import get_db
 from app.models.user import User
 from app.schemas.document import ApplicationCreate, ApplicationRead
-from app.schemas.plan import ApplicationPlan, ChecklistItem
+from app.schemas.plan import (
+    ApplicationPlan,
+    AssistantStepResult,
+    ChecklistItem,
+    SubmissionApprovalRequest,
+    SubmissionApprovalResponse,
+)
 from app.workflows.app_plan.graph import run_app_plan
+from app.workflows.submit_prep.graph import compute_content_fingerprint
 
 router = APIRouter()
 
@@ -90,3 +98,55 @@ def generate_application_plan(
     if plan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
     return plan
+
+
+@router.post("/applications/{application_id}/assistant/next-step", response_model=AssistantStepResult)
+def get_assistant_next_step(
+    application_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> AssistantStepResult:
+    """Agentic mode (T124): determines and executes the next step by calling
+    `run_application_assistant` -- no planning/labelling/fingerprinting logic
+    here, that all lives in the shared `run_app_plan`/`run_submit_prep`
+    workflows the agent itself calls."""
+    result = run_application_assistant(db, current_user.id, application_id)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
+    return result
+
+
+@router.post(
+    "/applications/{application_id}/submission-approvals",
+    response_model=SubmissionApprovalResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_application_submission_approval(
+    application_id: uuid.UUID,
+    body: SubmissionApprovalRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SubmissionApprovalResponse:
+    """Records an explicit, per-submission human approval (FR-APP-3,
+    constitution Principle III). `content_fingerprint` is computed here via
+    the SAME `compute_content_fingerprint` `submit_prep` uses -- never
+    reimplemented -- so an approval is bound to the exact content it was
+    given for."""
+    application = application_repo.get_by_id_for_user(db, current_user.id, application_id)
+    if application is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
+
+    application_documents = document_repo.list_application_documents_for_application(
+        db, current_user.id, application_id
+    )
+    generated_documents = document_repo.list_generated_documents_for_application(
+        db, current_user.id, application_id
+    )
+    content_fingerprint = compute_content_fingerprint(application_documents, generated_documents)
+
+    approval = application_repo.create_submission_approval(
+        db, current_user.id, application_id, body.submission_scope, content_fingerprint, body.notes
+    )
+    if approval is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
+    return SubmissionApprovalResponse.model_validate(approval)
