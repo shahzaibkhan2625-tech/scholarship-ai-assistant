@@ -19,6 +19,17 @@ The table remains strictly append-only:
 
 **Deliberately not decided here:** the exact content-fingerprint algorithm (e.g. a SHA-256 digest of the assembled case's serialized content, vs. a monotonic version/sequence number tied to the application's generated-materials state). `content_fingerprint` is typed as an opaque string with no algorithm enforced at the schema or repository layer. This slice (T118/T119/T120) only adds the storage column and INSERT/SELECT access; computing what goes into it is the `submit_prep` workflow's responsibility (T123, out of scope here) and its final-gate check (out of scope here) is the only place that will need to decide the algorithm and re-derive a fingerprint to compare against a stored approval.
 
+**Decided in 4C (T123):** `content_fingerprint = sha256(json.dumps(package, sort_keys=True, separators=(",", ":")))`, where `package` is a canonical structure built from:
+
+- Every `ApplicationDocument` for the application: `id`, `type`, `satisfies_requirement_id`, `checksum` — sorted by `id`.
+- Every `GeneratedDocument` for the application: `id`, `type` — sorted by `id`.
+
+Deliberately excluded: `uploaded_at`/`generated_at` (timestamps, never content), `file_ref` (a storage key, not the content), `parsed_meta`/`inconsistency_flags` (annotations, not submitted substance), and database row order (Postgres gives no ordering guarantee; the explicit sorts above are what make the serialization canonical). `checksum` is set once at upload and never mutated, so it stands in for the uploaded bytes without re-reading the file.
+
+**Documented assumption:** `GeneratedDocument` identity is captured by `id` alone only because `generated_documents` is append-only today — a regeneration always creates a new row with a new `id` (no update path exists in `document_repo.py`), so `id` already changes whenever generated content changes. If an in-place edit path for generated documents is ever added, this assumption breaks and the fingerprint would need to hash the generated content itself.
+
+This design fails toward false invalidation (safe) rather than false validation (dangerous): every included field changes only when real submission content changes, and two borderline-but-included fields (`type`, `satisfies_requirement_id`) err toward over-inclusion — worst case, an unnecessary re-approval prompt, never a stale approval silently covering changed content. See `backend/app/workflows/submit_prep/graph.py`'s `compute_content_fingerprint` for the implementation.
+
 ## Consequences
 
 ### Positive
@@ -29,8 +40,8 @@ The table remains strictly append-only:
 
 ### Negative
 
-- **Known limitation, unresolved:** until `submit_prep` (T123) is built, nothing computes or validates `content_fingerprint` — the column exists and can be written with any string a caller supplies. The repository layer trusts its caller to pass a real fingerprint; enforcing that it was actually derived from the assembled case is future work.
-- A future engineer choosing the fingerprint algorithm could pick a scheme that changes on cosmetic edits (e.g. whitespace/formatting-only regeneration) and unnecessarily invalidates an approval whose actual content didn't materially change — this ADR intentionally leaves the false-invalidation-vs-false-validation tradeoff to that later decision rather than presupposing one.
+- ~~**Known limitation, unresolved:** until `submit_prep` (T123) is built, nothing computes or validates `content_fingerprint`.~~ **Resolved in 4C:** `submit_prep` (T123) now computes it via `compute_content_fingerprint` and gates on it via `is_submission_authorized` (T116); see "Decided in 4C" above.
+- The chosen algorithm still trusts `checksum`/`id`/`type`/`satisfies_requirement_id` as faithful content-identity proxies rather than hashing raw file bytes directly — sound today given `ApplicationDocument.checksum`'s immutability and `GeneratedDocument`'s append-only rows (documented assumption above), but a future schema change to either table could silently invalidate that proxy relationship without touching this ADR.
 - This is a schema extension beyond both Blueprint §14 and data-model.md §9's original text; a reader relying on data-model.md alone without checking this ADR would miss the column's existence and rationale.
 
 ## Alternatives Considered
@@ -45,5 +56,5 @@ The table remains strictly append-only:
 - Data Model: `specs/001-scholarship-mvp/data-model.md` §9 (Submission Approval)
 - Constitution: `.specify/memory/constitution.md`, Principle III (Human Approval Before Any Live External Submission)
 - Related ADRs: [ADR-0001](0001-source-registry-governance-and-seed-sources.md), [ADR-0002](0002-ingestion-dedup-merge-does-not-reconcile-scalar-columns.md), [ADR-0003](0003-lexical-grounding-fails-safe-toward-false-rejection.md)
-- Related code: `backend/app/models/application.py` (`SubmissionApproval`), `backend/app/data/repositories/application_repo.py` (`create_submission_approval`, `list_submission_approvals`), `backend/migrations/versions/ad4826bd57e6_create_application_planning_tables.py`
-- Not yet built (referenced as future consumers): `backend/app/workflows/submit_prep/graph.py` (T123), `POST /applications/{id}/submission-approvals` (T127)
+- Related code: `backend/app/models/application.py` (`SubmissionApproval`), `backend/app/data/repositories/application_repo.py` (`create_submission_approval`, `list_submission_approvals`), `backend/migrations/versions/ad4826bd57e6_create_application_planning_tables.py`, `backend/app/workflows/submit_prep/graph.py` (T123, closes the fingerprint decision above), `backend/app/services/submission_approval.py` (T116, `is_submission_authorized`)
+- Not yet built (referenced as future consumers): `POST /applications/{id}/submission-approvals` (T127), `POST /applications/{id}/assistant/next-step` (T128)
