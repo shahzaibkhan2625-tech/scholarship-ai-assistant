@@ -10,6 +10,8 @@ info:
 servers:
   - url: /
 tags:
+  - name: infra
+    description: "Process liveness, not tied to a phase"
   - name: auth
     description: "Phase 0 (existing, unchanged)"
   - name: profile
@@ -30,6 +32,24 @@ tags:
     description: "Phase 4 (planner, tracker, assistant, submission approval)"
 
 paths:
+  # ---------------------------------------------------------------------
+  # Infra — process liveness (not JWT-protected, not tied to a phase)
+  # ---------------------------------------------------------------------
+  /health:
+    get:
+      tags: [infra]
+      summary: Process liveness check
+      responses:
+        '200':
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [ok] }
+
   # ---------------------------------------------------------------------
   # Phase 0 — existing, unchanged (documented for completeness only)
   # ---------------------------------------------------------------------
@@ -72,7 +92,13 @@ paths:
       tags: [auth]
       summary: Log out
       responses:
-        '200': { description: Logged out }
+        '200':
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { type: string }
 
   # ---------------------------------------------------------------------
   # Phase 1 — Profile (FR-PROFILE-1..4)
@@ -123,6 +149,8 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/ProfileCriterion' }
+        '422':
+          description: Invalid criterion kind
 
   /profile/import-cv:
     post:
@@ -135,6 +163,7 @@ paths:
           multipart/form-data:
             schema:
               type: object
+              required: [file]
               properties:
                 file: { type: string, format: binary }
       responses:
@@ -349,6 +378,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DiscoveryResult' }
+        '422':
+          description: Profile setup is required before discovery can run
 
   # ---------------------------------------------------------------------
   # Phase 3 — Documents (FR-DOC-1..3)
@@ -374,7 +405,7 @@ paths:
                 file: { type: string, format: binary }
                 type: { $ref: '#/components/schemas/DocumentType' }
       responses:
-        '200':
+        '201':
           description: Parsed document with requirement-satisfaction status (or explicit parse-failure)
           content:
             application/json:
@@ -579,6 +610,7 @@ components:
     ProfileCriterionRequest:
       allOf:
         - $ref: '#/components/schemas/ProfileCriterion'
+      required: [dimension, operator, kind]
     MissingInfoItem:
       type: object
       properties:
@@ -595,23 +627,90 @@ components:
         target_degree_level: { type: string, enum: [BS, MS, PhD, other], nullable: true }
         target_fields: { type: array, items: { type: string } }
         target_countries: { type: array, items: { type: string } }
-        education_records: { type: array, items: { type: object } }
-        test_scores: { type: array, items: { type: object } }
-        experience: { type: array, items: { type: object } }
+        education_records: { type: array, items: { $ref: '#/components/schemas/EducationRecordOut' } }
+        test_scores: { type: array, items: { $ref: '#/components/schemas/TestScoreOut' } }
+        experience: { type: array, items: { $ref: '#/components/schemas/ExperienceOut' } }
         criteria: { type: array, items: { $ref: '#/components/schemas/ProfileCriterion' } }
         missing_info: { type: array, items: { $ref: '#/components/schemas/MissingInfoItem' } }
         updated_at: { type: string, format: date-time }
     ProfileUpdateRequest:
       type: object
-      description: Partial update — any subset of Profile's writable fields
+      description: >
+        Partial update — any subset of Profile's writable fields (living profile, not a
+        one-time form). `education_records`/`test_scores`/`experience`, when present,
+        replace that satellite table's rows wholesale for this profile.
       properties:
         name: { type: string }
         nationality: { type: string }
         country_of_residence: { type: string }
         current_degree: { type: string }
-        target_degree_level: { type: string, enum: [BS, MS, PhD, other] }
+        target_degree_level: { type: string, enum: [BS, MS, PhD, other], nullable: true }
         target_fields: { type: array, items: { type: string } }
         target_countries: { type: array, items: { type: string } }
+        education_records: { type: array, items: { $ref: '#/components/schemas/EducationRecordIn' } }
+        test_scores: { type: array, items: { $ref: '#/components/schemas/TestScoreIn' } }
+        experience: { type: array, items: { $ref: '#/components/schemas/ExperienceIn' } }
+
+    EducationRecordIn:
+      type: object
+      properties:
+        degree: { type: string, nullable: true }
+        field: { type: string, nullable: true }
+        university: { type: string, nullable: true }
+        gpa: { type: number, nullable: true }
+        gpa_scale: { type: number, nullable: true }
+        start: { type: string, format: date, nullable: true }
+        end: { type: string, format: date, nullable: true }
+    EducationRecordOut:
+      allOf:
+        - $ref: '#/components/schemas/EducationRecordIn'
+        - type: object
+          required: [id]
+          properties:
+            id: { type: string, format: uuid }
+
+    TestType:
+      type: string
+      enum: [IELTS, TOEFL, PTE, GRE, GMAT, other]
+    TestStatus:
+      type: string
+      enum: [have, planned, none]
+    TestScoreIn:
+      type: object
+      required: [test_type, status]
+      properties:
+        test_type: { $ref: '#/components/schemas/TestType' }
+        status: { $ref: '#/components/schemas/TestStatus' }
+        score: { type: number, nullable: true }
+        taken_at: { type: string, format: date, nullable: true }
+    TestScoreOut:
+      allOf:
+        - $ref: '#/components/schemas/TestScoreIn'
+        - type: object
+          required: [id]
+          properties:
+            id: { type: string, format: uuid }
+
+    ExperienceKind:
+      type: string
+      enum: [work, research, publication, project]
+    ExperienceIn:
+      type: object
+      required: [kind]
+      properties:
+        kind: { $ref: '#/components/schemas/ExperienceKind' }
+        title: { type: string, nullable: true }
+        org: { type: string, nullable: true }
+        detail: { type: string, nullable: true }
+        start: { type: string, format: date, nullable: true }
+        end: { type: string, format: date, nullable: true }
+    ExperienceOut:
+      allOf:
+        - $ref: '#/components/schemas/ExperienceIn'
+        - type: object
+          required: [id]
+          properties:
+            id: { type: string, format: uuid }
 
     # ---- Shared: scholarship field / evidence ----
     FieldValue:
@@ -711,7 +810,11 @@ components:
         id: { type: string, format: uuid }
         discovered_from: { type: string, nullable: true }
         url: { type: string }
-        proposed_type: { type: string, nullable: true }
+        proposed_type:
+          type: string
+          nullable: true
+          enum: [gov, national_education, university, department, provider, foundation, ngo,
+                 embassy, international_org, research, api, approved_aggregator]
         signals: { type: object }
         status: { type: string, enum: [pending, approved, rejected] }
         reviewed_by: { type: string, format: uuid, nullable: true }
@@ -785,10 +888,12 @@ components:
         checklist: { type: array, items: { $ref: '#/components/schemas/ChecklistItem' } }
     Application:
       type: object
+      required: [id, scholarship_id, status, created_at]
       properties:
         id: { type: string, format: uuid }
         scholarship_id: { type: string, format: uuid }
         status: { type: string }
+        created_at: { type: string, format: date-time }
         checklist: { type: array, items: { $ref: '#/components/schemas/ChecklistItem' } }
     AssistantStepResult:
       type: object
@@ -799,9 +904,13 @@ components:
         requires_approval: { type: boolean }
     SubmissionApproval:
       type: object
+      required: [id, application_id, submission_scope, content_fingerprint, approved_by, approved_at]
       properties:
         id: { type: string, format: uuid }
         application_id: { type: string, format: uuid }
         submission_scope: { type: string }
+        content_fingerprint:
+          type: string
+          description: "Approved deviation from this schema (ADR-0004 / phase4c_design.md A3): lets the user see exactly what content they approved."
         approved_by: { type: string, format: uuid }
         approved_at: { type: string, format: date-time }

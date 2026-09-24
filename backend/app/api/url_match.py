@@ -17,7 +17,11 @@ class MatchUrlRequest(BaseModel):
     url: HttpUrl
 
 
-@router.post("/match-url", response_model=UrlMatchResult)
+@router.post(
+    "/match-url",
+    response_model=UrlMatchResult,
+    responses={422: {"model": FetchFailure, "description": "URL could not be fetched"}},
+)
 def match_url(
     payload: MatchUrlRequest,
     current_user: User = Depends(get_current_user),

@@ -9,7 +9,12 @@ from app.schemas.auth import LoginRequest, SignupRequest, TokenResponse, UserRes
 router = APIRouter()
 
 
-@router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/signup",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={409: {"description": "Email already registered"}},
+)
 def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> User:
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing is not None:
@@ -22,7 +27,11 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> User:
     return user
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    responses={401: {"description": "Incorrect email or password"}},
+)
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
     invalid_credentials = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

@@ -34,7 +34,11 @@ def _has_discovery_criteria(profile: Profile) -> bool:
     )
 
 
-@router.post("", response_model=DiscoveryResult)
+@router.post(
+    "",
+    response_model=DiscoveryResult,
+    responses={422: {"description": "Profile setup is required before discovery can run"}},
+)
 def discover(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),

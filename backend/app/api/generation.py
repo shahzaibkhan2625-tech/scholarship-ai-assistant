@@ -45,7 +45,11 @@ def _get_owned_application(db: Session, current_user: User, application_id: uuid
     return application
 
 
-@router.post("/applications/{application_id}/generate/cv", response_model=GeneratedDocumentSchema)
+@router.post(
+    "/applications/{application_id}/generate/cv",
+    response_model=GeneratedDocumentSchema,
+    responses={409: {"description": "Gap in required information — reported, not filled with invented content (US5 Scenario 5)"}},
+)
 def generate_cv(
     application_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
@@ -65,7 +69,11 @@ def generate_cv(
     return GeneratedDocumentSchema.model_validate(final_state["generated_document"])
 
 
-@router.post("/applications/{application_id}/generate/sop", response_model=GeneratedDocumentSchema)
+@router.post(
+    "/applications/{application_id}/generate/sop",
+    response_model=GeneratedDocumentSchema,
+    responses={409: {"description": "Gap in required information — reported, not filled with invented content"}},
+)
 def generate_sop(
     application_id: uuid.UUID,
     current_user: User = Depends(get_current_user),

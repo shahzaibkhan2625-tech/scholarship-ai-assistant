@@ -47,7 +47,14 @@ def list_pending_candidates(
     return [CandidateSourceRead.model_validate(candidate) for candidate in candidates]
 
 
-@router.post("/sources/candidates/{candidate_id}/approve", response_model=SourceRegistryRead)
+@router.post(
+    "/sources/candidates/{candidate_id}/approve",
+    response_model=SourceRegistryRead,
+    responses={
+        404: {"description": "candidate_id not found"},
+        409: {"description": "candidate already approved/rejected"},
+    },
+)
 def approve_candidate(
     candidate_id: uuid.UUID,
     source_data: SourceRegistryCreate,
@@ -63,7 +70,14 @@ def approve_candidate(
     return SourceRegistryRead.model_validate(source)
 
 
-@router.post("/sources/candidates/{candidate_id}/reject", response_model=CandidateSourceRead)
+@router.post(
+    "/sources/candidates/{candidate_id}/reject",
+    response_model=CandidateSourceRead,
+    responses={
+        404: {"description": "candidate_id not found"},
+        409: {"description": "candidate already approved/rejected"},
+    },
+)
 def reject_candidate(
     candidate_id: uuid.UUID,
     body: CandidateSourceReject,

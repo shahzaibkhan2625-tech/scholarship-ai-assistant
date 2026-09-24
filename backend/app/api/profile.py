@@ -50,7 +50,11 @@ def put_profile(
     return ProfileSchema.model_validate(profile)
 
 
-@router.post("/criteria", response_model=list[ProfileCriterionSchema])
+@router.post(
+    "/criteria",
+    response_model=list[ProfileCriterionSchema],
+    responses={422: {"description": "Invalid criterion kind"}},
+)
 def post_criteria(
     payload: ProfileCriterionRequest,
     current_user: User = Depends(get_current_user),
