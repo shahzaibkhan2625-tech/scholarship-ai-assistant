@@ -2,8 +2,11 @@
 (US1 Acceptance Scenario 3; data-model.md profile_criteria validation rule).
 Pure unit tests — no DB required, transient ORM objects only."""
 
+import uuid
+
 import pytest
 
+from app.data.repositories import profile_repo
 from app.models.profile import DegreeLevel, EducationRecord, Profile
 from app.services.profile import InvalidCriterionKindError, compute_missing_info, upsert_criterion
 
@@ -84,3 +87,66 @@ def test_valid_criterion_kinds_are_accepted_values(kind: str) -> None:
     from app.services.profile import _VALID_KINDS
 
     assert kind in _VALID_KINDS
+
+
+# T132 hardening: profile_repo's six object-based mutators must reject a
+# caller-supplied user_id that does not match the loaded Profile's owner,
+# mirroring document_repo's `if document.user_id != user_id: raise
+# PermissionError(...)` guard. The check is the first line of each function
+# (before any DB access), so — same as test_upsert_criterion_rejects_invalid_kind
+# above — db is never touched on the rejected path and a transient Profile
+# suffices; no fixture/session needed.
+
+
+def _foreign_user_id(profile: Profile) -> uuid.UUID:
+    other = uuid.uuid4()
+    while other == profile.user_id:
+        other = uuid.uuid4()
+    return other
+
+
+def test_update_fields_rejects_mismatched_user_id() -> None:
+    profile = Profile(user_id=uuid.uuid4())
+    with pytest.raises(PermissionError):
+        profile_repo.update_fields(None, _foreign_user_id(profile), profile, {"nationality": "Pakistani"})
+
+
+def test_upsert_criterion_repo_rejects_mismatched_user_id() -> None:
+    profile = Profile(user_id=uuid.uuid4())
+    with pytest.raises(PermissionError):
+        profile_repo.upsert_criterion(
+            None,
+            _foreign_user_id(profile),
+            profile,
+            criterion_id=None,
+            dimension="nationality",
+            operator="=",
+            value="Pakistani",
+            kind="hard_constraint",
+            weight=None,
+            note=None,
+        )
+
+
+def test_replace_education_records_rejects_mismatched_user_id() -> None:
+    profile = Profile(user_id=uuid.uuid4())
+    with pytest.raises(PermissionError):
+        profile_repo.replace_education_records(None, _foreign_user_id(profile), profile, [])
+
+
+def test_replace_test_scores_rejects_mismatched_user_id() -> None:
+    profile = Profile(user_id=uuid.uuid4())
+    with pytest.raises(PermissionError):
+        profile_repo.replace_test_scores(None, _foreign_user_id(profile), profile, [])
+
+
+def test_replace_experience_rejects_mismatched_user_id() -> None:
+    profile = Profile(user_id=uuid.uuid4())
+    with pytest.raises(PermissionError):
+        profile_repo.replace_experience(None, _foreign_user_id(profile), profile, [])
+
+
+def test_replace_missing_info_rejects_mismatched_user_id() -> None:
+    profile = Profile(user_id=uuid.uuid4())
+    with pytest.raises(PermissionError):
+        profile_repo.replace_missing_info(None, _foreign_user_id(profile), profile, [])

@@ -36,7 +36,10 @@ def get_or_create_for_user(db: Session, user_id: uuid.UUID) -> Profile:
     return create_for_user(db, user_id)
 
 
-def update_fields(db: Session, profile: Profile, updates: dict) -> Profile:
+def update_fields(db: Session, user_id: uuid.UUID, profile: Profile, updates: dict) -> Profile:
+    if profile.user_id != user_id:
+        raise PermissionError(f"profile {profile.id} does not belong to user {user_id}")
+
     for field, value in updates.items():
         if value is not None:
             setattr(profile, field, value)
@@ -47,6 +50,7 @@ def update_fields(db: Session, profile: Profile, updates: dict) -> Profile:
 
 def upsert_criterion(
     db: Session,
+    user_id: uuid.UUID,
     profile: Profile,
     *,
     criterion_id: uuid.UUID | None,
@@ -60,6 +64,9 @@ def upsert_criterion(
     """Reclassifying a criterion (changing `kind`) is an update to the same
     row, never a new row, so matching always reads the current classification
     (data-model.md `profile_criteria` validation rule)."""
+    if profile.user_id != user_id:
+        raise PermissionError(f"profile {profile.id} does not belong to user {user_id}")
+
     criterion: ProfileCriterion | None = None
     if criterion_id is not None:
         criterion = next((c for c in profile.criteria if c.id == criterion_id), None)
@@ -80,7 +87,10 @@ def upsert_criterion(
     return criterion
 
 
-def replace_education_records(db: Session, profile: Profile, rows: list[dict]) -> None:
+def replace_education_records(db: Session, user_id: uuid.UUID, profile: Profile, rows: list[dict]) -> None:
+    if profile.user_id != user_id:
+        raise PermissionError(f"profile {profile.id} does not belong to user {user_id}")
+
     for existing in list(profile.education_records):
         db.delete(existing)
     db.flush()
@@ -89,7 +99,10 @@ def replace_education_records(db: Session, profile: Profile, rows: list[dict]) -
     db.refresh(profile)
 
 
-def replace_test_scores(db: Session, profile: Profile, rows: list[dict]) -> None:
+def replace_test_scores(db: Session, user_id: uuid.UUID, profile: Profile, rows: list[dict]) -> None:
+    if profile.user_id != user_id:
+        raise PermissionError(f"profile {profile.id} does not belong to user {user_id}")
+
     for existing in list(profile.test_scores):
         db.delete(existing)
     db.flush()
@@ -98,7 +111,10 @@ def replace_test_scores(db: Session, profile: Profile, rows: list[dict]) -> None
     db.refresh(profile)
 
 
-def replace_experience(db: Session, profile: Profile, rows: list[dict]) -> None:
+def replace_experience(db: Session, user_id: uuid.UUID, profile: Profile, rows: list[dict]) -> None:
+    if profile.user_id != user_id:
+        raise PermissionError(f"profile {profile.id} does not belong to user {user_id}")
+
     for existing in list(profile.experience):
         db.delete(existing)
     db.flush()
@@ -107,9 +123,12 @@ def replace_experience(db: Session, profile: Profile, rows: list[dict]) -> None:
     db.refresh(profile)
 
 
-def replace_missing_info(db: Session, profile: Profile, items: list[dict]) -> list[MissingInfo]:
+def replace_missing_info(db: Session, user_id: uuid.UUID, profile: Profile, items: list[dict]) -> list[MissingInfo]:
     """Recomputes the full missing-info list for a profile (never silently
     omitted — FR-PROFILE-3)."""
+    if profile.user_id != user_id:
+        raise PermissionError(f"profile {profile.id} does not belong to user {user_id}")
+
     for existing in list(profile.missing_info):
         db.delete(existing)
     db.flush()

@@ -41,16 +41,16 @@ def update_profile(
     experience: list[dict] | None = None,
 ) -> Profile:
     profile = profile_repo.get_or_create_for_user(db, user_id)
-    profile = profile_repo.update_fields(db, profile, updates)
+    profile = profile_repo.update_fields(db, user_id, profile, updates)
 
     if education_records is not None:
-        profile_repo.replace_education_records(db, profile, education_records)
+        profile_repo.replace_education_records(db, user_id, profile, education_records)
     if test_scores is not None:
-        profile_repo.replace_test_scores(db, profile, test_scores)
+        profile_repo.replace_test_scores(db, user_id, profile, test_scores)
     if experience is not None:
-        profile_repo.replace_experience(db, profile, experience)
+        profile_repo.replace_experience(db, user_id, profile, experience)
 
-    recompute_missing_info(db, profile)
+    recompute_missing_info(db, user_id, profile)
     return profile
 
 
@@ -74,6 +74,7 @@ def upsert_criterion(
     profile = profile_repo.get_or_create_for_user(db, user_id)
     profile_repo.upsert_criterion(
         db,
+        user_id,
         profile,
         criterion_id=criterion_id,
         dimension=dimension,
@@ -104,5 +105,5 @@ def compute_missing_info(profile: Profile) -> list[dict]:
     return missing
 
 
-def recompute_missing_info(db: Session, profile: Profile) -> list:
-    return profile_repo.replace_missing_info(db, profile, compute_missing_info(profile))
+def recompute_missing_info(db: Session, user_id: uuid.UUID, profile: Profile) -> list:
+    return profile_repo.replace_missing_info(db, user_id, profile, compute_missing_info(profile))
