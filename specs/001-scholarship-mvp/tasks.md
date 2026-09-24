@@ -28,6 +28,7 @@ These are small, reversible scheduling calls, not architectural changes — flag
 2. **Q&A (US3) has no persisted table** per data-model.md §5 ("stateless structured responses... not stored entities in MVP") — no model/migration task is generated for US3; it is schema-only (`schemas/qa.py`) plus the agent.
 3. **A minimal `applications` table + `POST /applications` ships in Phase 3**, not Phase 4, because `contracts/openapi.yaml`'s `/applications/{application_id}/documents` (Phase 3) requires a real `application_id` to exist. Phase 3 creates `applications(id, user_id, scholarship_id, status, created_at)` and the bare create endpoint only; Phase 4 adds `tasks` + `submission_approvals` and the remaining planner/tracker/assistant/approval endpoints onto that same table/router file. This avoids either an unenforced FK or moving the full US6 feature earlier.
 4. **`workflows/source_monitor/`** is explicitly "designed only, NOT built in MVP (Phase 5)" per plan.md's Project Structure — no task is generated for it anywhere below.
+5. **Listing-page extraction for `web`-access-method sources is deliberately deferred (Phase 2, US4).** `official_fetch`/web sources are still invoked in the discovery flow — registry gating, retries, and coverage/fetch-log accounting are all exercised for every source type, not just APIs — but their raw HTML is not parsed into multiple structured candidates in this slice; no listing-page extraction tool exists yet. Only `api_connector`-sourced records (already-structured dicts) reach `results`. First noted as an implementation-time interpretation in the module docstring of `backend/app/agents/discovery/agent.py` (lines 23–34, "Interpretation note... Building a listing-page extractor is left to a follow-up slice"); formally tracked here per the T130 live-verification investigation (`docs/t130-verification-log.md`). Follow-up task: T135.
 
 ---
 
@@ -183,6 +184,8 @@ These are small, reversible scheduling calls, not architectural changes — flag
 - [X] T090 [US4] Discovery API endpoint: `POST /discovery` (depends on T089) in `backend/app/api/discovery.py`
 - [X] T091 [US4] Extend orchestrator to route discovery intent (depends on T090) in `backend/app/orchestration/main_agent.py`
 - [X] T092 [US4] Wire `discovery` router into the app (depends on T090) in `backend/app/main.py`
+- [ ] T135 [US4] Build listing-page extraction tool for web-access-method discovery sources (currently: `official_fetch`/web sources contribute to coverage/fetch-log only, never to `results` — see Resolution note 5) in `backend/app/tools/extract_listing.py`
+  (numbered after T130-T134 for historical reasons — it belongs to Phase 2's scope, not a phase after Final Phase.)
 
 **Phase 2 Checkpoint**: US4 independently functional; source-registry compliance + conflict-resolution tests green — spec.md SC-002/SC-003 demoable.
 

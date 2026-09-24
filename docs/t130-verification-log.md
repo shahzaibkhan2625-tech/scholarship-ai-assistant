@@ -102,6 +102,8 @@ The comment itself admits the blueprint "don't spell this out literally" — i.e
 
 **Conclusion — and why it matters:** all 5 currently-registered sources use `access_method: web` (confirmed by direct DB query: EACEA, Stipendium Hungaricum, KAUST, DAAD, HEC Pakistan — zero use `api`). Since web-sourced candidates never reach `results` by design of this undocumented interpretation, **discovery currently returns zero results for 100% of the registry, unconditionally** — this is not a corner case, it is the only case. Given Phase 2 has previously been marked complete/verified/deployed, and FR-DISC-4 makes no exception for this, **this should be logged as a real, un-deferred gap against Phase 2's completion status**, not folded in as "already known" — nothing in the project's own documentation supports treating it as already known or accepted.
 
+**Update:** this gap is now formally tracked — `specs/001-scholarship-mvp/tasks.md` Resolution note 5 (Phase 2 section) documents it as a deliberately deferred decision, with follow-up task **T135** ("Build listing-page extraction tool for web-access-method discovery sources") added, unchecked, at the end of Phase 2's task list.
+
 ### US5 — Documents, CV, SOP
 
 | Scenario | Result |
