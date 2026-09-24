@@ -172,3 +172,73 @@ Order: `submission_approvals` → `tasks` → `generated_documents` → `applica
 
 All target tables verified at 0 rows post-cleanup via fresh (non-stale-ORM-object) queries. `source_fetch_log` confirmed unchanged, preserved as the true record that this verification run happened.
 
+## Bugs 1+2 re-verified (post-fix, commit `32a47f5`)
+
+Targeted re-verification against the freshly rebuilt server (confirmed up via `GET
+/docs` → 200) — real HTTP requests, no mocking, same methodology as the original run
+above. Not a full T130 re-run; scoped to exactly the two scenarios Bug 1 and Bug 2
+broke. New, clearly-tagged identity used (`t130-reverify+9a84f182@t130-verify.dev`,
+user_id `40868cc2-a5a3-40b8-a943-aafeee034eca`) — separate from the T130 verification
+identity and its cleanup record above, which this run did not touch.
+
+The original run's scholarship (`c2eab1e9-3394-45d2-b376-d6117bf10b22`) was confirmed
+**not** resolvable in the Neon DB (`Scholarship` row absent — expected, since T130's own
+cleanup deleted it; only its now-orphaned Qdrant points remained, which is what the
+retroactive Bug 2 index fix was proven against separately). A fresh verification
+scholarship was created via `match-url` against the same URL as the original run
+(`https://www.chevening.org/scholarships/`), which doubles as the Bug 1 regression
+check.
+
+### US2 — `match-url` first-try success (Bug 1 regression check)
+
+| Call | Result |
+|---|---|
+| `POST /scholarships/match-url` (first attempt, no retry) | **PASS** — `200`, scholarship_id `1f5b9b11-e962-41ad-8f3a-ecce01960b30`, 25.09s elapsed. Previously 500'd on first attempt with `qdrant_client.http.exceptions.ResponseHandlingException: timed out` (Bug 1); 25s exceeds the old unset-timeout default (~5s) that caused that failure, so this elapsed time is itself evidence the higher timeout was both necessary and is now in effect, not that the operation happened to be fast this time. |
+
+### US3 — Q&A (Bug 2 regression check)
+
+| Question | Status | Confidence | Result |
+|---|---|---|---|
+| "What is the stipend?" | `200` | `unknown` | **PASS** (Bug 2) — no 500. See content note below re: confidence label. |
+| "What is the policy on bringing a spouse or dependents?" | `200` | `unknown` | **PASS** (Bug 2 + matches quickstart Scenario 2's expected `confidence: unknown` for a fact the source never states) |
+| "What's the weather like today?" (off-topic) | `200` | `unknown` | **PASS** (Bug 2) — endpoint no longer crashes; this call hit `/scholarships/{id}/qa` directly, bypassing Main Agent routing, so it doesn't exercise Scenario 4's "should decline/redirect" routing behavior — that's a Main Agent concern, out of scope for this Bug 1/2 check. |
+
+All three previously failed with a hard `500` on every call (100% reproduction rate,
+per the original log). All three now return `200`. **Bug 2 is fixed.**
+
+**Content-level note, not a defect:** all three answers came back `confidence: unknown`
+with the generic "could not confirm" text, rather than Scenario 1's expected
+`confidence: verified` for the stipend question. Diagnosed directly (read-only) against
+Qdrant before concluding this: 7 chunks are genuinely ingested and indexed for this
+scholarship, and `retrieve()` returns 5 real, plausibly-relevant chunks for the stipend
+query (scores 0.47–0.55) — this is not an empty-retrieval symptom of Bug 1/2 recurring.
+The retrieved chunks are drawn from `chevening.org/scholarships/`, a general
+overview/FAQ landing page (country lists, high-level program description) that does not
+itself state a stipend figure or a spousal-accompaniment policy — the same page the
+original T130 run already found lacks explicit criteria facts (US2 Scenario 2's
+nationality finding, same URL). `unknown` here is the deterministically-correct,
+never-guess output for this page's actual content (constitution Principle I), not a
+new bug. A live demonstration of the `confidence: verified` path would need a page that
+actually states a stipend figure — out of scope for this Bug 1/2 check.
+
+### Cleanup
+
+Same ORM-cascade approach as the original run. Rows created by this re-verification
+only (T130's identity/rows untouched):
+
+| Table | Before | After |
+|---|---:|---:|
+| users | 1 | 0 |
+| profiles | 1 | 0 |
+| matches | 1 | 0 |
+| scholarships | 1 | 0 |
+| requirements | 5 | 0 |
+| funding_details | 1 | 0 |
+
+All confirmed at 0 via fresh post-cleanup queries, plus explicit existence checks on
+the exact `user_id`/`scholarship_id` this run created and cascade checks on their
+`requirements`/`funding_details` rows.
+
+**Conclusion: Bug 1 and Bug 2 are both confirmed fixed, end-to-end, against the live
+stack.** `tasks.md` not yet updated, per instruction — pending separately.
+
