@@ -267,6 +267,8 @@ These are small, reversible scheduling calls, not architectural changes — flag
 - [X] T134 Full eval-suite run + CI score-regression gate verification across matching-correctness, qa-groundedness, generation-groundedness, and source-registry-compliance cases in `backend/evals/runner.py` — 3 of 4 categories run and PASS (matching_correctness 1.0/1.0, qa_groundedness 1.0/0.5, generation_groundedness 1.0/1.0). source_registry_compliance has no eval case implemented — deferred as follow-up task T137 rather than built here.
 - [ ] T136 Fix OpenAPI contract gaps surfaced by T133's stricter drift check (missing required arrays on MatchVerdict, QaAnswer, TokenResponse, UserResponse, GeneratedDocument, ApplicationPlan, AssistantStepResult, DiscoveryResult; enum-vs-bare-string inlining)
 - [ ] T137 Build source_registry_compliance eval case (backend/evals/cases/) — currently missing from backend/evals/runner.py's CASES list; Phase 2's governance/registry-compliance behavior is covered by unit tests (test_discovery_agent.py etc.) but has no quality-scored eval case per T134's original 4-category spec.
+- [ ] T138 Add real (unmocked) Qdrant + Gemini smoke test and a deep-ci.yml workflow (workflow_dispatch + weekly schedule) to run it — the entire test suite currently mocks every LLM/vector-store boundary, so no automated check exists that those live services are reachable and functional; only manual verification (T130) has ever exercised them for real. Needs repo secrets for QDRANT_URL, QDRANT_API_KEY, GEMINI_API_KEY.
+- [ ] T139 Replace deprecated HTTP_422_UNPROCESSABLE_ENTITY with HTTP_422_UNPROCESSABLE_CONTENT (StarletteDeprecationWarning, 4 call sites surfaced by the CI run at commit 65cee1f).
 
 ---
 
