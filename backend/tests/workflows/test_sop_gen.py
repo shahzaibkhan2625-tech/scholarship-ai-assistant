@@ -3,11 +3,11 @@ conventions — real DB (skip-if-unreachable), every row created is torn down,
 the LLM draft/polish calls are mocked (never a real API call in this suite).
 
 Added in this slice specifically to cover the workflow's own logic
-deterministically: the live-network contract tests in
-`tests/api/test_generation_api.py` exercise the real Gemini free-tier API,
-whose daily quota (20 requests/day for `gemini-2.5-flash`) is easily
-exhausted during iteration on prompt wording — these tests give durable,
-quota-free coverage of the same grounding/outline/polish-gate behavior."""
+deterministically: `tests/api/test_generation_api.py` also mocks the LLM
+boundary (it never calls the real Gemini API), but only exercises the
+happy path through the API layer — these tests give durable, focused
+coverage of the same grounding/outline/polish-gate behavior at the
+workflow level."""
 
 import uuid
 from unittest.mock import patch

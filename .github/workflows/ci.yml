@@ -7,12 +7,25 @@ on:
 jobs:
   backend-tests:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: scholarship_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
-      # Dummy values so app.main / app.core.config can be imported during test
-      # collection without crashing. They intentionally cannot connect to a
-      # real database - DB-dependent tests skip themselves when a real
-      # connection isn't available.
-      DATABASE_URL: postgresql+psycopg://dummy:dummy@localhost/dummy
+      # Real Postgres service container above - DB-dependent tests run for
+      # real in CI instead of self-skipping. JWT_SECRET_KEY stays a CI-only
+      # dummy; nothing reads it as a real secret.
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/scholarship_ci
       JWT_SECRET_KEY: dummy-ci-secret-not-real
 
     steps:
@@ -28,6 +41,10 @@ jobs:
       - name: Install dependencies
         working-directory: backend
         run: uv sync
+
+      - name: Run database migrations
+        working-directory: backend
+        run: uv run alembic upgrade head
 
       - name: Run tests
         working-directory: backend
