@@ -578,11 +578,13 @@ components:
         password: { type: string }
     TokenResponse:
       type: object
+      required: [access_token]
       properties:
         access_token: { type: string }
         token_type: { type: string, default: bearer }
     UserResponse:
       type: object
+      required: [id, email, created_at]
       properties:
         id: { type: string, format: uuid }
         email: { type: string, format: email }
@@ -599,9 +601,10 @@ components:
     # ---- Phase 1: Profile ----
     ProfileCriterion:
       type: object
+      required: [id, dimension, operator, kind]
       properties:
         id: { type: string, format: uuid }
-        dimension: { type: string }
+        dimension: { type: string, enum: [degree, funding, field, country, nationality, language, test, gpa, spouse_dependent, other] }
         operator: { type: string }
         value: {}
         kind: { type: string, enum: [hard_constraint, soft_preference, exclusion] }
@@ -613,11 +616,13 @@ components:
       required: [dimension, operator, kind]
     MissingInfoItem:
       type: object
+      required: [dimension, reason]
       properties:
         dimension: { type: string }
         reason: { type: string }
     Profile:
       type: object
+      required: [id, updated_at]
       properties:
         id: { type: string, format: uuid }
         name: { type: string, nullable: true }
@@ -726,12 +731,14 @@ components:
     # ---- Phase 1: URL Match ----
     UrlMatchResult:
       type: object
+      required: [scholarship_id, official_source, verdict]
       properties:
         scholarship_id: { type: string, format: uuid }
         official_source: { type: string, format: uri }
         verdict: { $ref: '#/components/schemas/MatchVerdict' }
     FetchFailure:
       type: object
+      required: [url, error]
       properties:
         url: { type: string, format: uri }
         error: { type: string }
@@ -740,6 +747,7 @@ components:
     # ---- Phase 1: Q&A ----
     QaAnswer:
       type: object
+      required: [answer_text, confidence]
       properties:
         answer_text: { type: string }
         confidence: { $ref: '#/components/schemas/Confidence' }
@@ -751,12 +759,14 @@ components:
     # ---- Phase 1: Matching ----
     CriterionOutcome:
       type: object
+      required: [criterion, result]
       properties:
         criterion: { type: string }
         result: { type: string, enum: [pass, fail, unknown, inferred, met, unmet] }
         evidence: { type: string, nullable: true }
     MatchVerdict:
       type: object
+      required: [scholarship_id, eligibility_verdict, match_strength]
       description: Fixed, schema-locked — never a free-text verdict (constitution Principle II)
       properties:
         scholarship_id: { type: string, format: uuid }
@@ -822,7 +832,11 @@ components:
 
     CoverageSummary:
       type: object
+      required: [as_of, sources_configured, sources_active, sources_checked, sources_failed]
       properties:
+        as_of: { type: string, format: date-time }
+        sources_configured: { type: integer }
+        sources_active: { type: integer }
         sources_checked: { type: integer }
         sources_failed: { type: integer }
         countries_covered: { type: array, items: { type: string } }
@@ -830,6 +844,7 @@ components:
         claims_complete_coverage: { type: boolean, enum: [false], description: "MUST always be false — FR-DISC-7" }
     DiscoveryResultItem:
       type: object
+      required: [scholarship_id, source_id, source_type, verification_status]
       properties:
         scholarship_id: { type: string, format: uuid }
         source_id: { type: string, format: uuid }
@@ -837,6 +852,7 @@ components:
         verification_status: { type: string, enum: [verified, unverified, conflicting] }
     DiscoveryResult:
       type: object
+      required: [coverage]
       properties:
         results: { type: array, items: { $ref: '#/components/schemas/DiscoveryResultItem' } }
         coverage: { $ref: '#/components/schemas/CoverageSummary' }
@@ -850,6 +866,7 @@ components:
              financial_doc, scholarship_specific_form, university_specific_form, other]
     UploadedDocument:
       type: object
+      required: [id, type]
       properties:
         id: { type: string, format: uuid }
         type: { $ref: '#/components/schemas/DocumentType' }
@@ -858,6 +875,7 @@ components:
         inconsistency_flags: { type: array, items: { type: string }, nullable: true }
     GeneratedDocument:
       type: object
+      required: [id, type, file_ref]
       properties:
         id: { type: string, format: uuid }
         type: { type: string, enum: [cv, sop, motivation, other] }
@@ -876,6 +894,7 @@ components:
       enum: [complete, missing, user_must_obtain, ai_can_generate, needs_human_review, needs_official_verification]
     ChecklistItem:
       type: object
+      required: [description, category, readiness_label]
       properties:
         description: { type: string }
         category: { type: string }
@@ -883,6 +902,7 @@ components:
         due_date: { type: string, format: date, nullable: true }
     ApplicationPlan:
       type: object
+      required: [application_id]
       properties:
         application_id: { type: string, format: uuid }
         checklist: { type: array, items: { $ref: '#/components/schemas/ChecklistItem' } }
@@ -897,6 +917,7 @@ components:
         checklist: { type: array, items: { $ref: '#/components/schemas/ChecklistItem' } }
     AssistantStepResult:
       type: object
+      required: [step]
       properties:
         step: { type: string }
         result: {}
