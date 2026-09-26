@@ -32,3 +32,9 @@ dev = [
     "httpx>=0.28.1",
     "pytest>=9.1.1",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "smoke: live external-service checks (Qdrant/Gemini) - run only via deep-ci.yml or explicit -m smoke",
+]
+addopts = "-m 'not smoke'"

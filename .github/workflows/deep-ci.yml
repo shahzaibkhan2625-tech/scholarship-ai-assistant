@@ -1,0 +1,35 @@
+name: Deep CI (live services)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Monday 06:00 UTC - start-of-week signal (not a weekend, when a failure
+    # would go unnoticed) and a weekly touch that also helps keep Qdrant
+    # Cloud's free-tier cluster from auto-suspending due to inactivity.
+    - cron: "0 6 * * 1"
+
+jobs:
+  live-service-smoke:
+    runs-on: ubuntu-latest
+    env:
+      QDRANT_URL: ${{ secrets.QDRANT_URL }}
+      QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        working-directory: backend
+        run: uv sync
+
+      - name: Run live Qdrant + Gemini smoke tests
+        working-directory: backend
+        run: uv run pytest -m smoke tests/smoke/
