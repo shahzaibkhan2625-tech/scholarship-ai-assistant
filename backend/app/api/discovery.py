@@ -46,7 +46,7 @@ def discover(
     profile = get_or_create_profile(db, current_user.id)
     if not _has_discovery_criteria(profile):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "Profile setup is required before discovery can run. Set at least one of "
                 "nationality, target degree level, target fields, or target countries first."

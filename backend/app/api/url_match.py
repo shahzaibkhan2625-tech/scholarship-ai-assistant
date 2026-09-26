@@ -31,6 +31,6 @@ def match_url(
     result = run_url_match(db, current_user.id, profile, str(payload.url))
 
     if isinstance(result, FetchFailure):
-        return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content=result.model_dump())
+        return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, content=result.model_dump())
 
     return result

@@ -73,7 +73,7 @@ def post_criteria(
             note=payload.note,
         )
     except InvalidCriterionKindError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     return [ProfileCriterionSchema.model_validate(c) for c in criteria]
 

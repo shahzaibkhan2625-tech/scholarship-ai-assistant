@@ -73,7 +73,7 @@ def upload_document(
 
     if final_state.get("error"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="We could not parse this file. Please retry the upload or supply a different file.",
         )
 
