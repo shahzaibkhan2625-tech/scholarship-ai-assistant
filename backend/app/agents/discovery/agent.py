@@ -3,35 +3,60 @@
 Builds a **multi-strategy query plan** across profile dimensions — country,
 field, degree level, nationality (§30.3: "rather than one generic query") —
 and, for each plan step, calls ONLY the already governance-gated tools
-(`official_fetch_tool`, `api_connector_tool`, T074/T076) built on top of
-`source_repo.get_active_sources`/`get_source_by_id` (T071). This module never
-writes to `source_registry`/`candidate_sources` and never bypasses the
-active-only gate those repo functions already enforce — verified by static
-AST inspection in `tests/agents/test_discovery_guardrails.py` (no
-self-authorized sources, PRD B3).
+(`api_connector_tool`, `listing_fetch_tool`) built on top of
+`source_repo.get_active_sources`/`get_source_by_id` (T071). This
+module never writes to `source_registry`/`candidate_sources`/
+`source_fetch_log` and never bypasses the active-only gate those repo
+functions already enforce — verified by static AST inspection in
+`tests/agents/test_discovery_guardrails.py` (no self-authorized sources, PRD
+B3): the agent may call `source_repo.get_active_sources`/`get_source_by_id`
+and NOTHING else — every write/log method lives one layer down, in the
+connector tier (see `sources/connectors/official_fetch.py`'s module
+docstring for why `fetch_and_extract_listing`'s logging lives there and not
+here).
 
 Every structured candidate a tool call surfaces is handed, unmodified, to the
 existing `ingestion` workflow (T087) — extraction/normalization/dedup/
 verify/classify/store all happen there, never re-implemented here. A
 tool/source failure is never swallowed into "no scholarships found": the
-connector layer underneath `official_fetch_tool`/`api_connector_tool`
-already writes a `source_fetch_log` row on every attempt (success or
-failure), and this agent's output ALWAYS includes a T084 coverage summary
-derived from those same rows — a failure surfaces as a measured coverage
-gap, never silence (Blueprint §33; PRD B3 "failed fetch ≠ none found").
+connector layer underneath `official_fetch_tool`/`api_connector_tool`/
+`listing_fetch_tool` already writes a `source_fetch_log` row on every
+attempt (success or failure), and this agent's output ALWAYS includes a T084
+coverage summary derived from those same rows — a failure surfaces as a
+measured coverage gap, never silence (Blueprint §33; PRD B3 "failed fetch ≠
+none found").
 
-**Interpretation note (flagged per task instructions, §30/§7.3 don't spell
-this out literally):** `official_fetch`/web sources are still invoked here
-(so registry gating, retries, and coverage/fetch-log accounting are
-exercised for every source type, not just APIs) but their raw HTML is NOT
-auto-parsed into multiple structured candidates in this slice — no
-listing-page extraction tool exists yet (`extract_requirements`, T045, is
-scoped to a single already-identified scholarship page for the url_match
-flow, not a multi-result listing page). Only `api_connector`-sourced records
-(already-structured dicts) are handed to `run_ingestion` here. Building a
-listing-page extractor is left to a follow-up slice; until then, official/web
-steps contribute to the query plan and to coverage/fetch-log accounting but
-not to `results`.
+**Listing-page extraction (T135, Resolution note 5 — RESOLVED):**
+`official_fetch`/web sources' raw HTML is now parsed into structured
+candidates via `listing_fetch_tool` (`app.tools.listing_fetch`), which wraps
+`extract_listing_from_page` (the multi-result sibling of `extract_requirements`,
+T045's single already-identified page) behind the same connector-owned
+fetch/log/gate pattern `official_fetch_tool` already uses. Every listing-
+derived candidate reaches `run_ingestion` with `official_source_confirmed=
+False` — a listing/index page is one step further removed than a page
+already confirmed to be a specific scholarship's own official page, so its
+candidates are never treated as officially confirmed.
+
+Because the query plan fans out per profile *dimension* (not per source —
+every non-`country` dimension value pulls in every active discovery-role
+source regardless of country), the same web source can appear many times in
+one `run_discovery()` call. `listing_fetch_tool`'s connector applies a
+two-layer cache so this stays affordable against this project's documented
+free-tier Gemini quota (T135/A9): (1) a real extraction only runs once per
+source per `update_frequency`-derived staleness window across separate
+`run_discovery()` calls (`status="cached"` reuses persisted
+`scholarship_sources` rows instead), and (2) this agent additionally never
+calls the tool twice for the same source within one run (`web_result_cache`
+below — pure in-memory memoization of a tool call's own result, not a
+`source_repo` access, so it doesn't touch the guardrail above).
+
+**Scope note (per T135's explicit instructions — do not read this as "US4
+complete"):** this resolves spec.md US4 Acceptance Scenario 1 (ranked results
+across ≥2 governed source types) only. Scenario 3 (a website not yet in the
+registry gets recorded as a `pending` candidate source) is a different
+capability — new-source discovery via `candidate_sources`/`source_validate`
+(T086) — and remains a separate, still-open item; nothing here observes or
+proposes sources outside the already-active registry.
 """
 
 import uuid
@@ -45,7 +70,7 @@ from app.models.source import AccessMethod
 from app.schemas.discovery import DiscoveryResult, DiscoveryResultItem
 from app.services.coverage import get_coverage_summary
 from app.tools.api_connector import ApiConnectorOutput, api_connector_tool
-from app.tools.official_fetch import OfficialFetchOutput, official_fetch_tool
+from app.tools.listing_fetch import ListingFetchOutput, listing_fetch_tool
 from app.workflows.ingestion.graph import run_ingestion
 
 __all__ = ["QueryPlanStep", "DiscoveryRunResult", "build_query_plan", "run_discovery"]
@@ -119,14 +144,107 @@ def build_query_plan(db: Session, profile: Any) -> list[QueryPlanStep]:
     return plan
 
 
+def _ingest_candidates(
+    db: Session,
+    step: QueryPlanStep,
+    source: Any,
+    candidates: list[dict],
+    *,
+    fetch_errors: list[str],
+    step_label: str,
+    official_source_confirmed: bool = False,
+) -> list[DiscoveryResultItem]:
+    step_results: list[DiscoveryResultItem] = []
+    for candidate in candidates:
+        if not candidate.get("name"):
+            continue  # ingestion's STORE gate requires `name`; nothing to hand off without it
+        ingestion_state = run_ingestion(
+            db,
+            source_id=step.source_id,
+            source_url=f"https://{source.domain}",
+            raw=candidate,
+            official_source_confirmed=official_source_confirmed,
+        )
+        scholarship = ingestion_state.get("scholarship")
+        if scholarship is None:
+            fetch_errors.append(
+                f"{step_label}: ingestion failed at {ingestion_state.get('error_stage')}: "
+                f"{ingestion_state.get('error')}"
+            )
+            continue
+        step_results.append(
+            DiscoveryResultItem(
+                scholarship_id=scholarship.id,
+                source_id=step.source_id,
+                source_type=step.source_type,
+                verification_status=scholarship.verification_status,
+            )
+        )
+    return step_results
+
+
+def _run_web_listing_step(
+    db: Session,
+    step: QueryPlanStep,
+    source: Any,
+    *,
+    listing_fetch: Callable[..., ListingFetchOutput],
+    fetch_errors: list[str],
+    web_result_cache: dict[uuid.UUID, list[DiscoveryResultItem]],
+    step_label: str,
+) -> list[DiscoveryResultItem]:
+    """T135: `listing_fetch_tool` owns the fetch, the LLM extraction, the
+    grounding check, and every `source_repo` read/write for the extraction
+    step (see module docstring — the agent never touches `source_repo`
+    beyond the plan-building reads). This function's only job is: don't call
+    the tool twice for the same source in one run (`web_result_cache`), and
+    shape whichever of the tool's three outcomes ("cached" / "ok" / "fail")
+    into this run's `results`/`fetch_errors`."""
+
+    if step.source_id in web_result_cache:
+        return web_result_cache[step.source_id]
+
+    outcome = listing_fetch(db, step.source_id, f"https://{source.domain}")
+
+    if outcome.status == "cached":
+        step_results = [
+            DiscoveryResultItem(
+                scholarship_id=ref.scholarship_id,
+                source_id=step.source_id,
+                source_type=step.source_type,
+                verification_status=ref.verification_status,
+            )
+            for ref in outcome.cached
+        ]
+        web_result_cache[step.source_id] = step_results
+        return step_results
+
+    if outcome.status != "ok":
+        # A failed fetch/extraction is never treated as "no scholarships
+        # found" here — the connector already wrote a source_fetch_log row
+        # (success or failure), which the coverage summary (below) reflects
+        # as a measured gap.
+        fetch_errors.append(f"{step_label}: {outcome.error}")
+        web_result_cache[step.source_id] = []
+        return []
+
+    step_results = _ingest_candidates(
+        db, step, source, outcome.candidates, fetch_errors=fetch_errors, step_label=step_label,
+        official_source_confirmed=False,  # T135/A3: a listing page is never treated as an official confirmation
+    )
+    web_result_cache[step.source_id] = step_results
+    return step_results
+
+
 def _run_step(
     db: Session,
     step: QueryPlanStep,
     *,
-    fetch_official: Callable[..., OfficialFetchOutput],
     fetch_api: Callable[..., ApiConnectorOutput],
+    listing_fetch: Callable[..., ListingFetchOutput],
     results: list[DiscoveryResultItem],
     fetch_errors: list[str],
+    web_result_cache: dict[uuid.UUID, list[DiscoveryResultItem]],
 ) -> None:
     source = source_repo.get_source_by_id(db, step.source_id)
     if source is None:
@@ -139,67 +257,60 @@ def _run_step(
     try:
         if step.access_method == AccessMethod.API.value:
             outcome = fetch_api(db, step.source_id, step.value)
-            success, error = outcome.status == "ok", outcome.error
-            candidates: list[dict] = outcome.records if success else []
+            if outcome.status != "ok":
+                fetch_errors.append(f"{step_label}: {outcome.error}")
+                return
+            step_results = _ingest_candidates(
+                db, step, source, outcome.records, fetch_errors=fetch_errors, step_label=step_label
+            )
         else:
-            outcome = fetch_official(db, step.source_id, f"https://{source.domain}")
-            success, error = outcome.status == "ok", outcome.error
-            candidates = []  # see module docstring: listing-page extraction is a follow-up slice
+            step_results = _run_web_listing_step(
+                db, step, source,
+                listing_fetch=listing_fetch,
+                fetch_errors=fetch_errors,
+                web_result_cache=web_result_cache,
+                step_label=step_label,
+            )
     except Exception as exc:  # noqa: BLE001 - one tool's failure must never crash the whole discovery run
         fetch_errors.append(f"{step_label}: {exc}")
         return
 
-    if not success:
-        # A failed fetch is never treated as "no scholarships found" here —
-        # the connector already wrote a source_fetch_log row, which the
-        # coverage summary (below) reflects as a measured gap.
-        fetch_errors.append(f"{step_label}: {error}")
-        return
-
-    for candidate in candidates:
-        if not candidate.get("name"):
-            continue  # ingestion's STORE gate requires `name`; nothing to hand off without it
-        ingestion_state = run_ingestion(
-            db,
-            source_id=step.source_id,
-            source_url=f"https://{source.domain}",
-            raw=candidate,
-        )
-        scholarship = ingestion_state.get("scholarship")
-        if scholarship is None:
-            fetch_errors.append(
-                f"{step_label}: ingestion failed at {ingestion_state.get('error_stage')}: "
-                f"{ingestion_state.get('error')}"
-            )
-            continue
-        results.append(
-            DiscoveryResultItem(
-                scholarship_id=scholarship.id,
-                source_id=step.source_id,
-                source_type=step.source_type,
-                verification_status=scholarship.verification_status,
-            )
-        )
+    results.extend(step_results)
 
 
 def run_discovery(
     db: Session,
     profile: Any,
     *,
-    fetch_official: Callable[..., OfficialFetchOutput] = official_fetch_tool,
     fetch_api: Callable[..., ApiConnectorOutput] = api_connector_tool,
+    listing_fetch: Callable[..., ListingFetchOutput] = listing_fetch_tool,
 ) -> DiscoveryRunResult:
     """Plan -> retrieve (via gated tools only) -> hand candidates to T087
     ingestion -> always attach a T084 coverage summary. Never raises on a
     per-step failure; every failure is captured in `fetch_errors` AND already
-    logged to `source_fetch_log` by the tool layer underneath."""
+    logged to `source_fetch_log` by the tool layer underneath.
+
+    As of T135, `listing_fetch` (not a raw `fetch_official`) is the web-step
+    tool boundary — it wraps its own `fetch_official` connector call
+    internally (see `tools/listing_fetch.py`), so there is no separate
+    `fetch_official` parameter here anymore."""
 
     plan = build_query_plan(db, profile)
     results: list[DiscoveryResultItem] = []
     fetch_errors: list[str] = []
+    # Run-scoped only (T135/A9 layer 1) -- a fresh dict per run_discovery()
+    # call, never persisted or shared across calls; see _run_web_listing_step.
+    web_result_cache: dict[uuid.UUID, list[DiscoveryResultItem]] = {}
 
     for step in plan:
-        _run_step(db, step, fetch_official=fetch_official, fetch_api=fetch_api, results=results, fetch_errors=fetch_errors)
+        _run_step(
+            db, step,
+            fetch_api=fetch_api,
+            listing_fetch=listing_fetch,
+            results=results,
+            fetch_errors=fetch_errors,
+            web_result_cache=web_result_cache,
+        )
 
     coverage = get_coverage_summary(db)
     discovery_result = DiscoveryResult(results=results, coverage=coverage)

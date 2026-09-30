@@ -9,23 +9,42 @@ No MCP fetch-server provider has been chosen yet (research.md line 55: "the
 tool *interface* (`tools/web_fetch.py`) is fixed now regardless of
 provider") — this connector reuses that existing httpx-based `fetch_url`
 tool as its transport rather than standing up a second HTTP client.
+
+**`fetch_and_extract_listing` (T135) lives here, not in the Discovery Agent,
+on purpose:** `tests/agents/test_discovery_guardrails.py` statically asserts
+the agent module may only call `source_repo.get_active_sources`/
+`get_source_by_id` — never a write/log method — so that no `source_id`
+gating, failure-logging, or `failing`-status transition can be scattered
+across agent logic outside this connector tier (PRD B3 no-self-
+authorization). Exactly like `fetch_official` above already does for a raw
+fetch, `fetch_and_extract_listing` owns its OWN `source_repo.log_fetch`/
+`mark_source_failing` calls for the extraction step, and the Discovery Agent
+only ever sees the already-shaped `listing_fetch_tool` output.
 """
 
 import uuid
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from sqlalchemy.orm import Session
 
 from app.data.repositories import source_repo
 from app.data.repositories.source_repo import SourceNotApprovedError
-from app.models.source import FetchStatus
+from app.models.source import FetchStatus, VerificationStatus
 from app.schemas.source import SourceFetchLogCreate
 from app.sources.retry_policy import DEFAULT_MAX_ATTEMPTS, run_with_retry
+from app.tools.extract_listing import ExtractListingOutput, extract_listing_from_page
 from app.tools.web_fetch import FetchResult, fetch_url
 
-__all__ = ["OfficialFetchResult", "fetch_official", "SourceNotApprovedError"]
+__all__ = [
+    "OfficialFetchResult",
+    "fetch_official",
+    "CachedScholarshipRef",
+    "ListingExtractionResult",
+    "fetch_and_extract_listing",
+    "SourceNotApprovedError",
+]
 
 
 @dataclass(frozen=True)
@@ -113,3 +132,123 @@ def fetch_official(
         http_status=http_status,
         error=error_message,
     )
+
+
+# T135/A9: re-extracting a listing page more often than the source itself
+# claims to change is pure LLM-quota waste, so the staleness window is keyed
+# off `SourceRegistry.update_frequency` (already seeded per source, per
+# seed_sources.yaml) rather than one new global magic constant. Anything
+# unrecognized/missing falls back to a conservative 24h.
+_UPDATE_FREQUENCY_TTL: dict[str, timedelta] = {
+    "weekly": timedelta(days=7),
+    "monthly": timedelta(days=30),
+    "quarterly": timedelta(days=90),
+    "annual": timedelta(days=365),
+}
+_DEFAULT_EXTRACTION_TTL = timedelta(hours=24)
+
+
+def _extraction_ttl(update_frequency: str | None) -> timedelta:
+    return _UPDATE_FREQUENCY_TTL.get(update_frequency or "", _DEFAULT_EXTRACTION_TTL)
+
+
+def _last_successful_extraction(db: Session, source_id: uuid.UUID):
+    """The most recent `source_fetch_log` row that represents a real past
+    LISTING-EXTRACTION success (status OK *and* `items_found` populated) for
+    this source — not just a raw HTTP-200, which `fetch_official` above logs
+    on every attempt regardless of whether extraction ever ran.
+    `get_fetch_logs_for_source` is already ordered `started_at desc`."""
+    for log in source_repo.get_fetch_logs_for_source(db, source_id):
+        if log.status == FetchStatus.OK and log.items_found is not None:
+            return log
+    return None
+
+
+@dataclass(frozen=True)
+class CachedScholarshipRef:
+    scholarship_id: uuid.UUID
+    verification_status: VerificationStatus
+
+
+@dataclass(frozen=True)
+class ListingExtractionResult:
+    source_id: uuid.UUID
+    status: str  # "ok" | "fail" | "cached"
+    candidates: list[dict] = field(default_factory=list)  # ready for run_ingestion; "ok" only
+    cached: list[CachedScholarshipRef] = field(default_factory=list)  # already-persisted refs; "cached" only
+    error: str | None = None
+
+
+def fetch_and_extract_listing(
+    db: Session,
+    source_id: uuid.UUID,
+    url: str,
+    *,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    fetch: Callable[[str], FetchResult] = fetch_url,
+    extract_listing: Callable[..., ExtractListingOutput] = extract_listing_from_page,
+    sleep: Callable[[float], None] | None = None,
+) -> ListingExtractionResult:
+    """T135: fetch (`fetch_official` above) -> `extract_listing` -> shaped
+    result, gated by a two-layer cache so a source isn't re-fetched/
+    re-extracted more often than its own `update_frequency` claims it
+    changes (T135/A9). All `source_repo` reads/writes for the extraction
+    step live here, in the connector tier — never in the Discovery Agent
+    (see module docstring)."""
+
+    source = source_repo.get_source_by_id(db, source_id)
+    if source is None:
+        raise SourceNotApprovedError(f"source {source_id} is not an active, approved source")
+
+    last_extraction = _last_successful_extraction(db, source_id)
+    if last_extraction is not None:
+        age = datetime.now(timezone.utc) - last_extraction.started_at
+        if age < _extraction_ttl(source.update_frequency):
+            cached = [
+                CachedScholarshipRef(scholarship_id=ss.scholarship_id, verification_status=ss.verification_status)
+                for ss in source_repo.get_scholarship_sources_by_source(db, source_id)
+            ]
+            return ListingExtractionResult(source_id=source_id, status="cached", cached=cached)
+
+    fetch_result = fetch_official(db, source_id, url, max_attempts=max_attempts, fetch=fetch, sleep=sleep)
+    if not fetch_result.success:
+        return ListingExtractionResult(source_id=source_id, status="fail", error=fetch_result.error)
+
+    extraction = extract_listing(fetch_result.content or "", source_url=url)
+
+    if extraction.accepted_count == 0:
+        # T135/A5+A8: a successful fetch yielding zero GROUNDED candidates
+        # (empty listing, changed page structure, parse failure, or only
+        # hallucinated names) must not be silently indistinguishable from "no
+        # scholarships found" -- logged and the source marked failing,
+        # exactly like a real fetch failure, so it surfaces as a coverage gap.
+        detail = "listing extraction yielded 0 candidates"
+        if extraction.rejected_count:
+            detail = f"listing extraction yielded 0 grounded candidates (rejected {extraction.rejected_count} ungrounded)"
+        source_repo.log_fetch(
+            db, SourceFetchLogCreate(source_id=source_id, status=FetchStatus.FAIL, error=detail, retry_count=0)
+        )
+        source_repo.mark_source_failing(db, source_id)
+        return ListingExtractionResult(source_id=source_id, status="fail", error=detail)
+
+    # Some candidates were hallucinated and rejected by grounding but others
+    # were accepted: proceed with the good ones, but the rejection is still
+    # logged (not silently dropped) via the OK row's `error` note.
+    log_note = (
+        f"rejected {extraction.rejected_count} ungrounded candidate(s): {extraction.rejected_names[:5]}"
+        if extraction.rejected_count
+        else None
+    )
+    source_repo.log_fetch(
+        db,
+        SourceFetchLogCreate(
+            source_id=source_id,
+            status=FetchStatus.OK,
+            retry_count=0,
+            items_found=extraction.accepted_count,
+            error=log_note,
+        ),
+    )
+
+    raw_candidates = [candidate.model_dump(exclude_none=True) for candidate in extraction.candidates]
+    return ListingExtractionResult(source_id=source_id, status="ok", candidates=raw_candidates)

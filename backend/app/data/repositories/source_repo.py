@@ -15,7 +15,14 @@ from urllib.parse import urlparse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.source import CandidateSource, CandidateSourceStatus, SourceFetchLog, SourceRegistry, SourceStatus
+from app.models.source import (
+    CandidateSource,
+    CandidateSourceStatus,
+    ScholarshipSource,
+    SourceFetchLog,
+    SourceRegistry,
+    SourceStatus,
+)
 from app.schemas.source import CandidateSourceCreate, SourceFetchLogCreate, SourceRegistryCreate
 
 
@@ -191,11 +198,26 @@ def log_fetch(db: Session, data: SourceFetchLogCreate) -> SourceFetchLog:
 
 
 def get_fetch_logs_for_source(db: Session, source_id: uuid.UUID) -> list[SourceFetchLog]:
+    """Scoping (T132 standing rule): `source_id`-scoped, not `user_id`-scoped
+    — `source_fetch_log` rows belong to the global governed `source_registry`,
+    never to an individual user, so no `user_id` filter applies here."""
     stmt = (
         select(SourceFetchLog)
         .where(SourceFetchLog.source_id == source_id)
         .order_by(SourceFetchLog.started_at.desc())
     )
+    return list(db.execute(stmt).scalars().all())
+
+
+def get_scholarship_sources_by_source(db: Session, source_id: uuid.UUID) -> list[ScholarshipSource]:
+    """Scoping (T132 standing rule): `source_id`-scoped, not `user_id`-scoped
+    — `scholarship_sources` rows are global governed provenance data (which
+    registry source a scholarship was retrieved from), never user-owned, so
+    no `user_id` filter applies here. Read-only; used by the Discovery
+    Agent's cross-run extraction cache (T135/A9) to rebuild a prior run's
+    results for a source that is still within its staleness window, without
+    re-fetching or re-extracting it."""
+    stmt = select(ScholarshipSource).where(ScholarshipSource.source_id == source_id)
     return list(db.execute(stmt).scalars().all())
 
 

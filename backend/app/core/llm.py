@@ -30,9 +30,13 @@ def get_gemini_client() -> genai.Client:
     return _client
 
 
-def generate_text(prompt: str, *, system_instruction: str | None = None) -> str:
+def generate_text(prompt: str, *, system_instruction: str | None = None, temperature: float | None = None) -> str:
     client = get_gemini_client()
-    config = types.GenerateContentConfig(system_instruction=system_instruction) if system_instruction else None
+    config = (
+        types.GenerateContentConfig(system_instruction=system_instruction, temperature=temperature)
+        if system_instruction or temperature is not None
+        else None
+    )
     response = client.models.generate_content(
         model=GENERATION_MODEL,
         contents=prompt,

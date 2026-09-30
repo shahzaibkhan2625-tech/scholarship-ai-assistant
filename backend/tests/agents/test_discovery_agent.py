@@ -1,10 +1,18 @@
 """Discovery Agent tests (T089, Blueprint §7.3, §30.3; PRD B3). Runs against
 the real DB (skip-if-unreachable, mirrors tests/workflows/test_ingestion.py);
 every row created is torn down. All network/LLM calls are mocked — the
-agent's own `fetch_official`/`fetch_api` parameters are the mock boundary
+agent's own `fetch_api`/`listing_fetch` parameters are the mock boundary
 (mirrors `tools/search.py`'s injectable `raw_search` pattern), and ingestion's
 `classify_service.classify_candidate` is patched exactly as in
 tests/workflows/test_ingestion.py.
+
+As of T135, web-source fetching + LLM listing-extraction + grounding + all
+`source_fetch_log`/`failing`-status writes live entirely inside
+`listing_fetch_tool`'s connector (`tests/sources/test_connectors.py` covers
+that machinery directly) — `_ok_listing_fetch` below stands in for "the tool
+says this source's listing extraction succeeded with nothing to ingest",
+mirroring how `_ok_fetch_official` used to stand in for a blank official
+fetch before T135.
 """
 
 import uuid
@@ -20,7 +28,7 @@ from app.models.source import FetchStatus, SourceRegistry
 from app.schemas.source import SourceFetchLogCreate, SourceRegistryCreate
 from app.services.classify import ClassifiedScholarshipFields
 from app.tools.api_connector import ApiConnectorOutput
-from app.tools.official_fetch import OfficialFetchOutput
+from app.tools.listing_fetch import ListingFetchOutput
 
 
 @pytest.fixture
@@ -62,14 +70,14 @@ def _profile(**overrides) -> SimpleNamespace:
     return SimpleNamespace(**defaults)
 
 
-def _ok_fetch_official(_db, source_id, url) -> OfficialFetchOutput:
-    """Stub for the `fetch_official` mock boundary (see module docstring).
+def _ok_listing_fetch(_db, source_id, _url) -> ListingFetchOutput:
+    """Stub for the `listing_fetch` mock boundary (see module docstring).
     The active-source baseline in the DB includes web/official sources
     outside any single test's own fixtures (e.g. the "field" dimension
     matches every active discovery-role source, not just the one a test
-    creates), so without this every test would also make a real HTTP
-    request to those sources' domains."""
-    return OfficialFetchOutput(source_id=source_id, source_url=url, status="ok", content="")
+    creates), so without this every test would also make a real HTTP+LLM
+    call against those sources' domains."""
+    return ListingFetchOutput(source_id=source_id, status="ok", candidates=[])
 
 
 def test_query_plan_spans_at_least_two_distinct_dimensions(db):
@@ -78,7 +86,7 @@ def test_query_plan_spans_at_least_two_distinct_dimensions(db):
     profile = _profile()
 
     ok_output = ApiConnectorOutput(source_id=uuid.uuid4(), query="x", status="ok", records=[])
-    run = run_discovery(session, profile, fetch_official=_ok_fetch_official, fetch_api=lambda *a, **k: ok_output)
+    run = run_discovery(session, profile, listing_fetch=_ok_listing_fetch, fetch_api=lambda *a, **k: ok_output)
 
     dimensions = {step.dimension for step in run.query_plan}
     assert len(dimensions) >= 2
@@ -92,7 +100,7 @@ def test_output_always_includes_a_coverage_summary_even_in_the_happy_path(db):
     profile = _profile()
 
     ok_output = ApiConnectorOutput(source_id=uuid.uuid4(), query="x", status="ok", records=[])
-    run = run_discovery(session, profile, fetch_official=_ok_fetch_official, fetch_api=lambda *a, **k: ok_output)
+    run = run_discovery(session, profile, listing_fetch=_ok_listing_fetch, fetch_api=lambda *a, **k: ok_output)
 
     assert run.fetch_errors == []
     assert run.discovery_result.coverage is not None
@@ -113,7 +121,7 @@ def test_tool_failure_surfaces_as_a_coverage_gap_not_a_silent_empty_result(db):
         )
         return ApiConnectorOutput(source_id=source_id, query=query, status="fail", records=[], error="upstream unavailable")
 
-    run = run_discovery(session, profile, fetch_official=_ok_fetch_official, fetch_api=failing_fetch_api)
+    run = run_discovery(session, profile, listing_fetch=_ok_listing_fetch, fetch_api=failing_fetch_api)
 
     # Not a silent "no results" — the failure is traced explicitly...
     assert run.fetch_errors != []
@@ -132,7 +140,7 @@ def test_tool_call_raising_an_exception_also_surfaces_as_a_traced_failure_not_a_
     def raising_fetch_api(*_args, **_kwargs):
         raise RuntimeError("connector blew up")
 
-    run = run_discovery(session, profile, fetch_official=_ok_fetch_official, fetch_api=raising_fetch_api)
+    run = run_discovery(session, profile, listing_fetch=_ok_listing_fetch, fetch_api=raising_fetch_api)
 
     assert any("connector blew up" in err for err in run.fetch_errors)
     assert run.discovery_result.coverage is not None  # still attached despite the exception
@@ -177,7 +185,7 @@ def test_found_candidate_is_handed_to_the_existing_ingestion_workflow(db):
         return ApiConnectorOutput(source_id=source_id, query=query, status="ok", records=records)
 
     with patch("app.workflows.ingestion.graph.classify_service.classify_candidate", return_value=_FAKE_CLASSIFICATION):
-        run = run_discovery(session, profile, fetch_official=_ok_fetch_official, fetch_api=fetch_api_by_query)
+        run = run_discovery(session, profile, listing_fetch=_ok_listing_fetch, fetch_api=fetch_api_by_query)
 
     assert run.fetch_errors == []
     assert len(run.discovery_result.results) == 1
