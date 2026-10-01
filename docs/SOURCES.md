@@ -24,6 +24,9 @@ disabled.
 - **robots.txt / ToS status:** **UNVERIFIED** — `extraction_rules.robots_checked`
   is seeded `false`. A connector (WS2.2) must not fetch this domain until
   robots.txt/ToS have been reviewed and `robots_checked` flipped to `true`.
+- **`discovery_role: false` (T140):** DAAD's database is an AJAX-driven search UI with no static listing page, so it is excluded from discovery query plans. `list_page_url` is currently dead
+  metadata — `_run_web_listing_step` fetches the domain homepage only, not
+  `list_page_url` (defect tracked as T140). Revisit once T140 is fixed.
 
 ### 2. Erasmus Mundus Joint Masters Catalogue — EACEA (`www.eacea.ec.europa.eu`)
 
@@ -48,6 +51,9 @@ disabled.
   a Hungarian government background institution that directly administers
   the programme on behalf of the Ministry of Foreign Affairs and Trade.
 - **robots.txt / ToS status:** **UNVERIFIED**.
+- **`discovery_role: false` (T140):** Stipendium Hungaricum's listings are login-gated with no static public listing, so it is excluded from discovery query plans. `list_page_url` is currently dead
+  metadata — `_run_web_listing_step` fetches the domain homepage only, not
+  `list_page_url` (defect tracked as T140). Revisit once T140 is fixed.
 
 ### 4. HEC Pakistan — Learning Opportunities Abroad (`www.hec.gov.pk`)
 
@@ -71,6 +77,9 @@ disabled.
   university's own admissions office publishing its own funding terms —
   first-party, not a third party describing KAUST's scholarships.
 - **robots.txt / ToS status:** **UNVERIFIED**.
+- **`discovery_role: false` (T140):** KAUST's scholarships content is AJAX-gated with no static listing, so it is excluded from discovery query plans. The domain is intentionally unchanged (changing it would orphan the DB row on re-seed). `list_page_url` is currently dead
+  metadata — `_run_web_listing_step` fetches the domain homepage only, not
+  `list_page_url` (defect tracked as T140). Revisit once T140 is fixed.
 
 ## What was deliberately NOT seeded
 

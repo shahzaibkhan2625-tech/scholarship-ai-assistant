@@ -17,7 +17,7 @@
   official_status: official
   domain: www2.daad.de
   access_method: web
-  discovery_role: true
+  discovery_role: false
   verification_role: true
   reliability_level: high
   update_frequency: monthly
@@ -34,7 +34,12 @@
     max_pages_per_run: 25
   last_checked_at: null
   last_success_at: null
-  notes: null
+  notes: >-
+    discovery_role is false: the DAAD scholarship database is an AJAX-driven search
+    UI with no static listing page, so deterministic listing-page extraction yields nothing.
+    extraction_rules.list_page_url is currently dead metadata - the agent fetches the
+    domain homepage only (agent.py _run_web_listing_step) - pending the T140 fix.
+    Revisit discovery_role once T140 lands and a static listing URL is confirmed.
 
 - name: "Erasmus Mundus Joint Masters Catalogue (EACEA)"
   organization: "European Education and Culture Executive Agency"
@@ -71,7 +76,7 @@
   official_status: official
   domain: stipendiumhungaricum.hu
   access_method: web
-  discovery_role: true
+  discovery_role: false
   verification_role: true
   reliability_level: high
   update_frequency: annual
@@ -88,7 +93,12 @@
     max_pages_per_run: 25
   last_checked_at: null
   last_success_at: null
-  notes: null
+  notes: >-
+    discovery_role is false: scholarship listings are login-gated / not available
+    as a static public listing, so deterministic listing-page extraction yields nothing.
+    extraction_rules.list_page_url is currently dead metadata - the agent fetches the
+    domain homepage only (agent.py _run_web_listing_step) - pending the T140 fix.
+    Revisit discovery_role once T140 lands and a static listing URL is confirmed.
 
 - name: "HEC Pakistan - Learning Opportunities Abroad"
   organization: "Higher Education Commission Pakistan"
@@ -125,7 +135,7 @@
   official_status: official
   domain: www.kaust.edu.sa
   access_method: web
-  discovery_role: true
+  discovery_role: false
   verification_role: true
   reliability_level: high
   update_frequency: quarterly
@@ -142,4 +152,11 @@
     max_pages_per_run: 25
   last_checked_at: null
   last_success_at: null
-  notes: null
+  notes: >-
+    discovery_role is false: the scholarships content is not served as a static
+    listing page (AJAX-gated / no static listing), so deterministic listing-page
+    extraction yields nothing. extraction_rules.list_page_url is currently dead
+    metadata - the agent fetches the domain homepage only (agent.py
+    _run_web_listing_step) - pending the T140 fix. The domain is left unchanged
+    because changing it would orphan the existing DB row on re-seed.
+    Revisit discovery_role once T140 lands and a static listing URL is confirmed.
