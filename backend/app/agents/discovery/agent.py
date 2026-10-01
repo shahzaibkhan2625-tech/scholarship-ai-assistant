@@ -52,11 +52,18 @@ below — pure in-memory memoization of a tool call's own result, not a
 
 **Scope note (per T135's explicit instructions — do not read this as "US4
 complete"):** this resolves spec.md US4 Acceptance Scenario 1 (ranked results
-across ≥2 governed source types) only. Scenario 3 (a website not yet in the
-registry gets recorded as a `pending` candidate source) is a different
-capability — new-source discovery via `candidate_sources`/`source_validate`
-(T086) — and remains a separate, still-open item; nothing here observes or
-proposes sources outside the already-active registry.
+across ≥2 governed source types) only.
+
+**Scenario 3 (US4 Acceptance Scenario 3 — RESOLVED, ADR-0005):** a website
+not yet in the registry, encountered during a listing-page fetch, is now
+recorded as a `pending` `candidate_sources` row. That detection/write path
+lives entirely in the connector tier (`sources/connectors/official_fetch.py`'s
+`_detect_and_record_candidate_sources`, calling `app.tools.detect_candidate_links`
++ `source_repo.record_or_bump_candidate_source`), for the exact same reason
+the rest of this module's write/log methods live there — this agent module
+still never touches `source_repo` beyond `get_active_sources`/`get_source_by_id`,
+verified by the same guardrail suite plus its connector-tier sibling
+(`tests/sources/test_official_fetch_guardrails.py`).
 """
 
 import uuid

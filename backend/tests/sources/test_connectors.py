@@ -12,7 +12,14 @@ import pytest
 from app.data.repositories import source_repo
 from app.data.repositories.source_repo import SourceNotApprovedError
 from app.models.scholarship import Scholarship
-from app.models.source import FetchStatus, ScholarshipSource, SourceFetchLog, SourceRegistry, VerificationStatus
+from app.models.source import (
+    CandidateSource,
+    FetchStatus,
+    ScholarshipSource,
+    SourceFetchLog,
+    SourceRegistry,
+    VerificationStatus,
+)
 from app.schemas.source import SourceFetchLogCreate, SourceRegistryCreate
 from app.sources.connectors.api_connector import ApiRawResponse, fetch_api
 from app.sources.connectors.official_fetch import fetch_and_extract_listing, fetch_official
@@ -28,6 +35,34 @@ def db(db_session_factory):
     try:
         yield session, created_sources, created_logs
     finally:
+        for log_id in created_logs:
+            row = session.get(SourceFetchLog, log_id)
+            if row is not None:
+                session.delete(row)
+        for source_id in created_sources:
+            row = session.get(SourceRegistry, source_id)
+            if row is not None:
+                session.delete(row)
+        session.commit()
+        session.close()
+
+
+@pytest.fixture
+def db_with_candidates(db_session_factory):
+    """Like `db` above, plus `candidate_sources` teardown — for the
+    candidate-detection wiring tests only (US4 Acceptance Scenario 3,
+    ADR-0005), so the existing `db` fixture/tests above stay untouched."""
+    session = db_session_factory()
+    created_sources: list[uuid.UUID] = []
+    created_logs: list[uuid.UUID] = []
+    created_candidates: list[uuid.UUID] = []
+    try:
+        yield session, created_sources, created_logs, created_candidates
+    finally:
+        for candidate_id in created_candidates:
+            row = session.get(CandidateSource, candidate_id)
+            if row is not None:
+                session.delete(row)
         for log_id in created_logs:
             row = session.get(SourceFetchLog, log_id)
             if row is not None:
@@ -405,3 +440,151 @@ def test_listing_extraction_ignores_stale_cache_past_ttl(db):
 
     logs = source_repo.get_fetch_logs_for_source(session, source.id)
     created_logs += [log.id for log in logs if log.id != stale_log.id]
+
+
+# --- candidate-source detection wiring (US4 Acceptance Scenario 3, ADR-0005) --
+
+
+def _find_candidates_for_domain(session, domain: str) -> list[CandidateSource]:
+    return [
+        c
+        for c in source_repo.list_candidate_sources(session, status=None)
+        if source_repo.domain_from_url(c.url) == domain
+    ]
+
+
+def test_successful_fetch_with_unrecognized_scholarship_link_records_a_pending_candidate(db_with_candidates):
+    session, created_sources, created_logs, created_candidates = db_with_candidates
+    source = source_repo.upsert_source_by_domain(session, _source_data(status="active"))
+    created_sources.append(source.id)
+    new_domain = f"new-scholarship-fund-{uuid.uuid4().hex}.example.org"
+
+    def fake_fetch(url: str) -> FetchResult:
+        html = f'<html><body><a href="https://{new_domain}/apply">New Scholarship Fund</a></body></html>'
+        return FetchResult(url=url, success=True, status_code=200, html=html)
+
+    def fake_extract_listing(html: str, *, source_url: str) -> ExtractListingOutput:
+        return ExtractListingOutput(candidates=[], accepted_count=0, rejected_count=0)
+
+    fetch_and_extract_listing(
+        session, source.id, "https://example.com/list", fetch=fake_fetch, extract_listing=fake_extract_listing
+    )
+
+    logs = source_repo.get_fetch_logs_for_source(session, source.id)
+    created_logs += [log.id for log in logs]
+
+    matching = _find_candidates_for_domain(session, new_domain)
+    created_candidates += [c.id for c in matching]
+
+    assert len(matching) == 1
+    assert matching[0].status == "pending"
+    assert matching[0].signals["matched_keyword"] == "scholarship"
+
+
+def test_candidate_detection_runs_even_when_listing_extraction_yields_zero_accepted(db_with_candidates):
+    """Detection is independent of whether the listing-extraction step found
+    any scholarships on the page -- it runs over the raw HTML regardless."""
+    session, created_sources, created_logs, created_candidates = db_with_candidates
+    source = source_repo.upsert_source_by_domain(session, _source_data(status="active"))
+    created_sources.append(source.id)
+    new_domain = f"zero-accepted-fund-{uuid.uuid4().hex}.example.org"
+
+    def fake_fetch(url: str) -> FetchResult:
+        html = f'<html><body><a href="https://{new_domain}/apply">New Fellowship</a></body></html>'
+        return FetchResult(url=url, success=True, status_code=200, html=html)
+
+    def fake_extract_listing(html: str, *, source_url: str) -> ExtractListingOutput:
+        return ExtractListingOutput(candidates=[], accepted_count=0, rejected_count=0)
+
+    result = fetch_and_extract_listing(
+        session, source.id, "https://example.com/list", fetch=fake_fetch, extract_listing=fake_extract_listing
+    )
+    assert result.status == "fail"  # zero-accepted-candidates path (T135/A5+A8), unaffected by detection
+
+    logs = source_repo.get_fetch_logs_for_source(session, source.id)
+    created_logs += [log.id for log in logs]
+
+    matching = _find_candidates_for_domain(session, new_domain)
+    created_candidates += [c.id for c in matching]
+    assert len(matching) == 1
+
+
+def test_page_with_no_qualifying_links_records_no_candidate(db_with_candidates):
+    session, created_sources, created_logs, _ = db_with_candidates
+    source = source_repo.upsert_source_by_domain(session, _source_data(status="active"))
+    created_sources.append(source.id)
+
+    def fake_fetch(url: str) -> FetchResult:
+        return FetchResult(url=url, success=True, status_code=200, html="<html><body>no links here</body></html>")
+
+    def fake_extract_listing(html: str, *, source_url: str) -> ExtractListingOutput:
+        return ExtractListingOutput(
+            candidates=[ExtractedListingCandidate(name="Some Scholarship")], accepted_count=1, rejected_count=0
+        )
+
+    result = fetch_and_extract_listing(
+        session, source.id, "https://example.com/list", fetch=fake_fetch, extract_listing=fake_extract_listing
+    )
+    assert result.status == "ok"
+
+    logs = source_repo.get_fetch_logs_for_source(session, source.id)
+    created_logs += [log.id for log in logs]
+
+
+def test_detection_failure_never_affects_the_listing_extraction_result(db_with_candidates, monkeypatch):
+    """ADR-0005 Decision 4 / A7: a detection-layer exception must never
+    surface as a fetch failure or otherwise change what the listing step
+    returns -- it is swallowed entirely."""
+    session, created_sources, created_logs, _ = db_with_candidates
+    source = source_repo.upsert_source_by_domain(session, _source_data(status="active"))
+    created_sources.append(source.id)
+
+    def broken_find_candidate_links(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "app.sources.connectors.official_fetch.find_candidate_links", broken_find_candidate_links
+    )
+
+    def fake_fetch(url: str) -> FetchResult:
+        return FetchResult(url=url, success=True, status_code=200, html="<html><body>irrelevant</body></html>")
+
+    def fake_extract_listing(html: str, *, source_url: str) -> ExtractListingOutput:
+        return ExtractListingOutput(
+            candidates=[ExtractedListingCandidate(name="Some Scholarship")], accepted_count=1, rejected_count=0
+        )
+
+    result = fetch_and_extract_listing(
+        session, source.id, "https://example.com/list", fetch=fake_fetch, extract_listing=fake_extract_listing
+    )
+
+    assert result.status == "ok"
+    assert result.candidates == [{"name": "Some Scholarship", "funding_status": "unknown"}]
+
+    logs = source_repo.get_fetch_logs_for_source(session, source.id)
+    created_logs += [log.id for log in logs]
+
+
+def test_already_active_domain_link_records_no_new_candidate(db_with_candidates):
+    session, created_sources, created_logs, _ = db_with_candidates
+    source = source_repo.upsert_source_by_domain(session, _source_data(status="active"))
+    created_sources.append(source.id)
+    other_active = source_repo.upsert_source_by_domain(session, _source_data(status="active"))
+    created_sources.append(other_active.id)
+
+    def fake_fetch(url: str) -> FetchResult:
+        html = f'<html><body><a href="https://{other_active.domain}/scholarships">Scholarship List</a></body></html>'
+        return FetchResult(url=url, success=True, status_code=200, html=html)
+
+    def fake_extract_listing(html: str, *, source_url: str) -> ExtractListingOutput:
+        return ExtractListingOutput(candidates=[], accepted_count=0, rejected_count=0)
+
+    fetch_and_extract_listing(
+        session, source.id, "https://example.com/list", fetch=fake_fetch, extract_listing=fake_extract_listing
+    )
+
+    logs = source_repo.get_fetch_logs_for_source(session, source.id)
+    created_logs += [log.id for log in logs]
+
+    matching = _find_candidates_for_domain(session, other_active.domain)
+    assert matching == []

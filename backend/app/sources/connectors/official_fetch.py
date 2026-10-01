@@ -20,6 +20,17 @@ authorization). Exactly like `fetch_official` above already does for a raw
 fetch, `fetch_and_extract_listing` owns its OWN `source_repo.log_fetch`/
 `mark_source_failing` calls for the extraction step, and the Discovery Agent
 only ever sees the already-shaped `listing_fetch_tool` output.
+
+**New-source detection (US4 Acceptance Scenario 3, ADR-0005) lives here for
+the exact same reason:** the same guardrail test forbids `create_candidate_source`
+from being called inside the agent module, so `_detect_and_record_candidate_sources`
+below — the only caller of `source_repo.record_or_bump_candidate_source` in
+this codebase — runs here too, over this call's raw fetched HTML, right
+after a successful `fetch_official` and before `extract_listing` tag-strips
+it (link `href` attributes don't survive that stripping). It is wrapped so a
+detection failure can never affect the listing-extraction result it rides
+alongside, and a miss is never logged as a coverage gap — this is a
+best-effort signal, not a completeness guarantee (ADR-0005 Decision 4).
 """
 
 import uuid
@@ -34,6 +45,7 @@ from app.data.repositories.source_repo import SourceNotApprovedError
 from app.models.source import FetchStatus, VerificationStatus
 from app.schemas.source import SourceFetchLogCreate
 from app.sources.retry_policy import DEFAULT_MAX_ATTEMPTS, run_with_retry
+from app.tools.detect_candidate_links import find_candidate_links
 from app.tools.extract_listing import ExtractListingOutput, extract_listing_from_page
 from app.tools.web_fetch import FetchResult, fetch_url
 
@@ -179,6 +191,33 @@ class ListingExtractionResult:
     error: str | None = None
 
 
+def _detect_and_record_candidate_sources(db: Session, url: str, html: str) -> None:
+    """US4 Acceptance Scenario 3 / ADR-0005: best-effort new-source detection
+    over this fetch's raw HTML (module docstring above explains why this
+    lives here). `known_domains` is built from the same active-only-gated
+    read the rest of this tier already uses (`get_active_sources`) — a
+    read, never a fetch gate; `record_or_bump_candidate_source` still
+    independently checks ANY status before writing, so a pending/disabled
+    domain this read doesn't surface is still never re-proposed.
+
+    Swallows every exception: candidate detection must never affect the
+    listing-extraction result it rides alongside, and a failure here is not
+    a coverage gap — it's simply a signal that didn't fire this time."""
+
+    try:
+        known_domains = {source.domain for source in source_repo.get_active_sources(db)}
+        for signal in find_candidate_links(html, source_url=url, known_domains=known_domains):
+            source_repo.record_or_bump_candidate_source(
+                db,
+                domain=signal.domain,
+                url=signal.url,
+                discovered_from=url,
+                matched_keyword=signal.matched_keyword,
+            )
+    except Exception:  # noqa: BLE001 - detection is best-effort, never allowed to break extraction
+        pass
+
+
 def fetch_and_extract_listing(
     db: Session,
     source_id: uuid.UUID,
@@ -213,6 +252,8 @@ def fetch_and_extract_listing(
     fetch_result = fetch_official(db, source_id, url, max_attempts=max_attempts, fetch=fetch, sleep=sleep)
     if not fetch_result.success:
         return ListingExtractionResult(source_id=source_id, status="fail", error=fetch_result.error)
+
+    _detect_and_record_candidate_sources(db, url, fetch_result.content or "")
 
     extraction = extract_listing(fetch_result.content or "", source_url=url)
 

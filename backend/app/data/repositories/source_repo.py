@@ -22,6 +22,7 @@ from app.models.source import (
     SourceFetchLog,
     SourceRegistry,
     SourceStatus,
+    SourceType,
 )
 from app.schemas.source import CandidateSourceCreate, SourceFetchLogCreate, SourceRegistryCreate
 
@@ -226,3 +227,89 @@ def domain_from_url(url: str) -> str:
     proposed domain — never used to fabricate a registry entry outright."""
 
     return urlparse(url).netloc
+
+
+def record_or_bump_candidate_source(
+    db: Session,
+    *,
+    domain: str,
+    url: str,
+    discovered_from: str | None,
+    proposed_type: SourceType | None = None,
+    matched_keyword: str | None = None,
+) -> CandidateSource | None:
+    """US4 Acceptance Scenario 3 / ADR-0005: the single write entry point for
+    a domain surfaced by `app.tools.detect_candidate_links` during a listing
+    fetch. Always inserts with `status == pending` (enforced by
+    `create_candidate_source` itself, never overridable here) — never
+    promotes, never reads `candidate_sources` back for use as an
+    authoritative source.
+
+    Dedup (ADR-0005 Decision 4), in order:
+    1. `domain` already resolves to a `source_registry` row in ANY status
+       (active/pending/disabled/failing) -> no-op, returns `None`. A domain
+       the registry already knows about is never re-proposed as "new."
+    2. An existing `candidate_sources` row for this `domain` that is NOT
+       `pending` (already `approved` or `rejected`) -> no-op, returns `None`.
+       A human already decided this domain; this function never resurrects
+       that decision.
+    3. An existing `pending` row for this `domain` -> bumped in place
+       (`signals["seen_count"]` incremented, `last_seen_at` refreshed,
+       `discovered_from` URL added if new) — never a second row for the
+       same domain.
+    4. Otherwise -> a new `pending` row is created via `create_candidate_source`.
+
+    The domain-match scan (`list_candidate_sources(db, status=None)` +
+    `domain_from_url` comparison) is O(n) in the total `candidate_sources`
+    row count — an explicit, accepted MVP-scale assumption (ADR-0005
+    Consequences/Negative): candidates are rare, human-reviewed events, not
+    a high-volume table."""
+
+    if get_source_by_domain(db, domain) is not None:
+        return None
+
+    now = datetime.now().isoformat()
+    existing = [
+        candidate
+        for candidate in list_candidate_sources(db, status=None)
+        if domain_from_url(candidate.url) == domain
+    ]
+
+    pending_match: CandidateSource | None = None
+    for candidate in existing:
+        if candidate.status != CandidateSourceStatus.PENDING:
+            return None
+        if pending_match is None:
+            pending_match = candidate
+
+    if pending_match is not None:
+        signals = dict(pending_match.signals)
+        signals["seen_count"] = signals.get("seen_count", 1) + 1
+        signals["last_seen_at"] = now
+        if matched_keyword:
+            signals["matched_keyword"] = matched_keyword
+        if discovered_from:
+            discovered_from_urls = list(signals.get("discovered_from_urls", []))
+            if discovered_from not in discovered_from_urls:
+                discovered_from_urls.append(discovered_from)
+            signals["discovered_from_urls"] = discovered_from_urls
+        pending_match.signals = signals
+        db.commit()
+        db.refresh(pending_match)
+        return pending_match
+
+    new_signals: dict = {"seen_count": 1, "first_seen_at": now, "last_seen_at": now}
+    if matched_keyword:
+        new_signals["matched_keyword"] = matched_keyword
+    if discovered_from:
+        new_signals["discovered_from_urls"] = [discovered_from]
+
+    return create_candidate_source(
+        db,
+        CandidateSourceCreate(
+            url=url,
+            discovered_from=discovered_from,
+            proposed_type=proposed_type,
+            signals=new_signals,
+        ),
+    )
