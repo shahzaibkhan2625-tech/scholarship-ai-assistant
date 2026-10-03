@@ -1,0 +1,348 @@
+openapi: 3.0.3
+info:
+  title: Scholarship AI Assistant API — Source Monitoring, Coverage & Hardening
+  version: "0.2.0"
+  description: >
+    Additive API surface for specs/002-source-monitoring-hardening, layered on
+    top of specs/001-scholarship-mvp/contracts/openapi.yaml (unchanged, not
+    repeated here). Every path below is new; no existing 001 path's request
+    or response shape is modified. `/sources` (list/candidates/approve/reject)
+    from 001 is extended only by richer query params on GET /sources/health,
+    not by changing 001's own endpoints.
+servers:
+  - url: /
+tags:
+  - name: monitoring
+    description: "FR-MON — scheduled monitoring runs"
+  - name: health
+    description: "FR-HEALTH — per-source fetch health visibility"
+  - name: coverage
+    description: "FR-COVAN — coverage analytics"
+  - name: alerts
+    description: "FR-ALERT — owner notifications"
+  - name: candidate-validation
+    description: "FR-CANDVAL — automated candidate-source pre-checks"
+  - name: infra
+    description: "NFR-HARDEN — operational endpoints"
+
+paths:
+  # ---------------------------------------------------------------------
+  # Monitoring (FR-MON)
+  # ---------------------------------------------------------------------
+  /monitoring/runs:
+    get:
+      tags: [monitoring]
+      summary: List monitoring runs (most recent first)
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        '200':
+          description: Monitoring run history
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/MonitoringRun' }
+
+    post:
+      tags: [monitoring]
+      summary: Trigger an on-demand monitoring run (operator use; distinct from the scheduled trigger)
+      responses:
+        '202':
+          description: Run accepted and started
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MonitoringRun' }
+        '409': { description: "A monitoring run is already in progress (FR-MON-6)" }
+
+  /monitoring/runs/{run_id}:
+    get:
+      tags: [monitoring]
+      summary: Get one monitoring run's detail, including per-source outcomes
+      parameters:
+        - in: path
+          name: run_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Monitoring run detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MonitoringRunDetail' }
+        '404': { description: run_id not found }
+
+  # ---------------------------------------------------------------------
+  # Source health (FR-HEALTH)
+  # ---------------------------------------------------------------------
+  /sources/health:
+    get:
+      tags: [health]
+      summary: Per-source health — never conflates a failed fetch with "no scholarships found" (FR-HEALTH-2)
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [active, failing, disabled] }
+      responses:
+        '200':
+          description: Source health list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SourceHealth' }
+
+  /sources/{source_id}/fetch-log:
+    get:
+      tags: [health]
+      summary: Fetch-log history for one source, including which URL was actually fetched (FR-FETCH-3)
+      parameters:
+        - in: path
+          name: source_id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, maximum: 200 }
+      responses:
+        '200':
+          description: Fetch-log rows, most recent first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SourceFetchLogEntry' }
+        '404': { description: source_id not found }
+
+  # ---------------------------------------------------------------------
+  # Coverage analytics (FR-COVAN)
+  # ---------------------------------------------------------------------
+  /coverage:
+    get:
+      tags: [coverage]
+      summary: Measured coverage snapshot — never asserts complete/100% coverage (FR-COVAN-2)
+      responses:
+        '200':
+          description: Coverage snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoverageSnapshot' }
+
+  # ---------------------------------------------------------------------
+  # Alerts (FR-ALERT)
+  # ---------------------------------------------------------------------
+  /alerts:
+    get:
+      tags: [alerts]
+      summary: List the current user's alerts (in-app view)
+      parameters:
+        - in: query
+          name: unread_only
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Alerts for the current user
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Alert' }
+
+  /alerts/preferences:
+    get:
+      tags: [alerts]
+      summary: Get the current user's alert channel preferences (FR-ALERT-5)
+      responses:
+        '200':
+          description: Current preferences
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertPreferences' }
+    put:
+      tags: [alerts]
+      summary: Update the current user's alert channel preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AlertPreferencesUpdate' }
+      responses:
+        '200':
+          description: Updated preferences
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertPreferences' }
+
+  # ---------------------------------------------------------------------
+  # Candidate-source validation (FR-CANDVAL) — extends 001's /sources/candidates
+  # ---------------------------------------------------------------------
+  /sources/candidates/{candidate_id}/validations:
+    get:
+      tags: [candidate-validation]
+      summary: Automated pre-check history for one candidate source (informational; never gates approval)
+      parameters:
+        - in: path
+          name: candidate_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Validation-check history, most recent first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CandidateSourceValidation' }
+        '404': { description: candidate_id not found }
+
+  # ---------------------------------------------------------------------
+  # Operational (NFR-HARDEN)
+  # ---------------------------------------------------------------------
+  /metrics:
+    get:
+      tags: [infra]
+      summary: Prometheus text-exposition metrics (NFR-HARDEN-4)
+      responses:
+        '200':
+          description: Prometheus metrics
+          content:
+            text/plain: {}
+
+components:
+  schemas:
+    MonitoringRun:
+      type: object
+      required: [id, started_at, trigger, status, sources_processed, sources_failed, changes_detected]
+      properties:
+        id: { type: string, format: uuid }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time, nullable: true }
+        trigger: { type: string, enum: [scheduled, manual] }
+        status: { type: string, enum: [running, completed, failed] }
+        sources_processed: { type: integer }
+        sources_failed: { type: integer }
+        changes_detected: { type: integer }
+
+    MonitoringRunDetail:
+      allOf:
+        - $ref: '#/components/schemas/MonitoringRun'
+        - type: object
+          properties:
+            source_outcomes:
+              type: array
+              items: { $ref: '#/components/schemas/SourceFetchLogEntry' }
+
+    SourceHealth:
+      type: object
+      required: [source_id, name, status, last_checked_at, last_success_at, consecutive_failures]
+      properties:
+        source_id: { type: string, format: uuid }
+        name: { type: string }
+        status: { type: string, enum: [active, failing, disabled] }
+        last_checked_at: { type: string, format: date-time, nullable: true }
+        last_success_at: { type: string, format: date-time, nullable: true }
+        consecutive_failures: { type: integer }
+        listing_page_url: { type: string, nullable: true }
+
+    SourceFetchLogEntry:
+      type: object
+      required: [id, source_id, started_at, status, fetched_url, used_homepage_fallback, retry_count]
+      properties:
+        id: { type: string, format: uuid }
+        source_id: { type: string, format: uuid }
+        started_at: { type: string, format: date-time }
+        status: { type: string, enum: [ok, fail, timeout] }
+        http_status: { type: integer, nullable: true }
+        error: { type: string, nullable: true }
+        retry_count: { type: integer }
+        items_found: { type: integer, nullable: true }
+        fetched_url: { type: string, nullable: true }
+        used_homepage_fallback: { type: boolean }
+        monitoring_run_id: { type: string, format: uuid, nullable: true }
+
+    CoverageSnapshot:
+      type: object
+      required:
+        - as_of
+        - sources_configured
+        - sources_active
+        - sources_checked
+        - sources_failed
+        - candidate_sources_pending
+        - countries_covered
+        - gaps
+        - claims_complete_coverage
+      properties:
+        as_of: { type: string, format: date-time }
+        sources_configured: { type: integer }
+        sources_active: { type: integer }
+        sources_checked: { type: integer }
+        sources_failed: { type: integer }
+        candidate_sources_pending: { type: integer, description: "FR-COVAN-3 — counted separately from active sources" }
+        verified_opportunities_count: { type: integer }
+        last_checked_at:
+          type: object
+          additionalProperties: { type: string, format: date-time }
+        countries_covered:
+          type: array
+          items: { type: string }
+        gaps:
+          type: array
+          items: { type: string }
+        claims_complete_coverage:
+          type: boolean
+          enum: [false]
+          description: "FR-COVAN-2 — always false; coverage is measured, never asserted complete"
+
+    Alert:
+      type: object
+      required: [id, scholarship_id, change_summary, channels_requested, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        scholarship_id: { type: string, format: uuid }
+        match_id: { type: string, format: uuid, nullable: true }
+        change_summary: { type: object }
+        channels_requested:
+          type: array
+          items: { type: string, enum: [in_app, email] }
+        delivered_in_app_at: { type: string, format: date-time, nullable: true }
+        delivered_email_at: { type: string, format: date-time, nullable: true }
+        email_error: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    AlertPreferences:
+      type: object
+      required: [in_app_enabled, email_enabled]
+      properties:
+        in_app_enabled: { type: boolean }
+        email_enabled: { type: boolean }
+
+    AlertPreferencesUpdate:
+      type: object
+      properties:
+        in_app_enabled: { type: boolean }
+        email_enabled: { type: boolean }
+
+    CandidateSourceValidation:
+      type: object
+      required: [id, candidate_source_id, checked_at, reachable, extractable, official_signals]
+      properties:
+        id: { type: string, format: uuid }
+        candidate_source_id: { type: string, format: uuid }
+        checked_at: { type: string, format: date-time }
+        reachable: { type: boolean }
+        reachable_detail: { type: string, nullable: true }
+        extractable: { type: boolean }
+        extractable_detail: { type: string, nullable: true }
+        official_signals: { type: object }
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - bearerAuth: []
