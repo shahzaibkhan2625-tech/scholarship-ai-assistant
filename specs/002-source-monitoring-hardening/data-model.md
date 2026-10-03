@@ -80,6 +80,7 @@ User-owned (`user_id` FK, directly scoped — constitution §19 discipline).
 | `delivered_email_at` | timestamptz, nullable | Set by `EmailChannel.send`; `NULL` + a non-null `email_error` means delivery was attempted and failed (FR-ALERT-4, Edge Cases: "alert failure ... does not silently disappear"). |
 | `email_error` | text, nullable | |
 | `created_at` | timestamptz, not null, `server_default=now()` | |
+| `read_at` | timestamptz, nullable, no default | O-1. Set (once) when the owner has read the alert; `NULL` means unread. Only mark-read (`POST /alerts/{id}/read`) sets it; `GET /alerts?unread_only=true` filters on `read_at IS NULL`. |
 
 **Validation rules**: an `alerts` row is only ever created when FR-ALERT-3's condition holds (newly-favorable or materially-changed match outcome) or FR-ALERT-6's negative is checked first (no row at all for a non-impacting change) — enforced in `services/alerts.py`, not by a DB constraint (same "code-level invariant, test-matrix verified" treatment 001's data-model.md already uses for the hard-constraint verdict rule).
 

@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, false, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -108,6 +108,10 @@ class SourceRegistry(Base):
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 002 (data-model.md §1): NULL listing_page_url -> homepage fallback (FR-MON-7);
+    # NULL freshness_window_days -> services.lifecycle.DEFAULT_FRESHNESS_WINDOW_DAYS.
+    listing_page_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    freshness_window_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class CandidateSource(Base):
@@ -154,6 +158,14 @@ class SourceFetchLog(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     items_found: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 002 (data-model.md §2): NULL on pre-002 rows / on-demand discovery.
+    fetched_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    used_homepage_fallback: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    monitoring_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("monitoring_runs.id"), nullable=True, index=True
+    )
 
 
 class ScholarshipSource(Base):

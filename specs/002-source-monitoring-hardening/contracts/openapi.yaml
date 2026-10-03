@@ -175,6 +175,23 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AlertPreferences' }
 
+  /alerts/{id}/read:
+    post:
+      tags: [alerts]
+      summary: Mark one of the current user's alerts as read (sets read_at; idempotent)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The updated alert
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Alert' }
+        '404': { description: alert does not exist or belongs to another user }
+
   # ---------------------------------------------------------------------
   # Candidate-source validation (FR-CANDVAL) — extends 001's /sources/candidates
   # ---------------------------------------------------------------------
@@ -311,6 +328,7 @@ components:
         delivered_email_at: { type: string, format: date-time, nullable: true }
         email_error: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
+        read_at: { type: string, format: date-time, nullable: true }
 
     AlertPreferences:
       type: object

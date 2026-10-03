@@ -27,6 +27,9 @@ from app.models.source import (
 from app.schemas.source import CandidateSourceCreate, SourceFetchLogCreate, SourceRegistryCreate
 
 
+_PRESERVE_IF_OMITTED = frozenset({"listing_page_url", "freshness_window_days"})
+
+
 class SourceNotApprovedError(Exception):
     """Raised when a fetch is attempted against a source_id that is not an
     active, approved `source_registry` row."""
@@ -78,11 +81,18 @@ def get_source_by_domain(db: Session, domain: str) -> SourceRegistry | None:
 
 def upsert_source_by_domain(db: Session, data: SourceRegistryCreate) -> SourceRegistry:
     """Idempotent seed-loader primitive: update the row for `data.domain` if
-    one exists, otherwise insert. Never deletes."""
+    one exists, otherwise insert. Never deletes.
+
+    Every 001 field is full-replace on update (unchanged). The 002 fields in
+    `_PRESERVE_IF_OMITTED` follow `model_fields_set` instead: omitted keeps the
+    stored value, an explicit `None` clears it — so a pre-002 seed that doesn't
+    know about them can't silently wipe an operator-set `listing_page_url`."""
 
     existing = get_source_by_domain(db, data.domain)
     if existing is not None:
         for field, value in data.model_dump().items():
+            if field in _PRESERVE_IF_OMITTED and field not in data.model_fields_set:
+                continue
             setattr(existing, field, value)
         db.commit()
         db.refresh(existing)
