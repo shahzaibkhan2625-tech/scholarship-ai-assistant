@@ -5,6 +5,7 @@ description = "Add your description here"
 requires-python = "==3.12.*"
 dependencies = [
     "alembic>=1.19.2",
+    "apscheduler>=3.10,<4",
     "bcrypt<4.1",
     "beautifulsoup4>=4.15.0",
     "fastapi>=0.141.1",
@@ -14,6 +15,7 @@ dependencies = [
     "langchain-google-genai>=4.4.0",
     "langgraph>=1.2.11",
     "passlib[bcrypt]>=1.7.4",
+    "prometheus-client>=0.20",
     "psycopg[binary]>=3.3.5",
     "pydantic-settings>=2.15.0",
     "pydantic[email]>=2.13.5",
@@ -30,6 +32,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "pip-audit>=2.7",
     "pytest>=9.1.1",
 ]
 
