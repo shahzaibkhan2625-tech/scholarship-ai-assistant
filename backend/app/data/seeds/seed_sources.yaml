@@ -22,6 +22,7 @@
   reliability_level: high
   update_frequency: monthly
   status: active
+  listing_page_url: "https://www2.daad.de/deutschland/stipendium/datenbank/en/"
   extraction_rules:
     allowed_path_prefixes:
       - /en/
@@ -35,11 +36,8 @@
   last_checked_at: null
   last_success_at: null
   notes: >-
-    discovery_role is false: the DAAD scholarship database is an AJAX-driven search
-    UI with no static listing page, so deterministic listing-page extraction yields nothing.
-    extraction_rules.list_page_url is currently dead metadata - the agent fetches the
-    domain homepage only (agent.py _run_web_listing_step) - pending the T140 fix.
-    Revisit discovery_role once T140 lands and a static listing URL is confirmed.
+    T140 fixed; listing URL configured; discovery_role stays false until a live
+    check confirms extractable content AND the robots review is done.
 
 - name: "Erasmus Mundus Joint Masters Catalogue (EACEA)"
   organization: "European Education and Culture Executive Agency"
@@ -54,6 +52,7 @@
   reliability_level: high
   update_frequency: annual
   status: active
+  listing_page_url: "https://www.eacea.ec.europa.eu/scholarships/emjmd-catalogue_en"
   extraction_rules:
     allowed_path_prefixes:
       - /scholarships/emjmd-catalogue_en
@@ -81,6 +80,7 @@
   reliability_level: high
   update_frequency: annual
   status: active
+  listing_page_url: "https://stipendiumhungaricum.hu/apply/"
   extraction_rules:
     allowed_path_prefixes:
       - /apply/
@@ -94,11 +94,8 @@
   last_checked_at: null
   last_success_at: null
   notes: >-
-    discovery_role is false: scholarship listings are login-gated / not available
-    as a static public listing, so deterministic listing-page extraction yields nothing.
-    extraction_rules.list_page_url is currently dead metadata - the agent fetches the
-    domain homepage only (agent.py _run_web_listing_step) - pending the T140 fix.
-    Revisit discovery_role once T140 lands and a static listing URL is confirmed.
+    T140 fixed; listing URL configured; discovery_role stays false until a live
+    check confirms extractable content AND the robots review is done.
 
 - name: "HEC Pakistan - Learning Opportunities Abroad"
   organization: "Higher Education Commission Pakistan"
@@ -113,6 +110,7 @@
   reliability_level: high
   update_frequency: weekly
   status: active
+  listing_page_url: "https://www.hec.gov.pk/english/scholarshipsgrants/Pages/default.aspx"
   extraction_rules:
     allowed_path_prefixes:
       - /english/scholarshipsgrants/
@@ -140,6 +138,7 @@
   reliability_level: high
   update_frequency: quarterly
   status: active
+  listing_page_url: "https://www.kaust.edu.sa/en/study/scholarships"
   extraction_rules:
     allowed_path_prefixes:
       - /en/study/scholarships
@@ -153,10 +152,5 @@
   last_checked_at: null
   last_success_at: null
   notes: >-
-    discovery_role is false: the scholarships content is not served as a static
-    listing page (AJAX-gated / no static listing), so deterministic listing-page
-    extraction yields nothing. extraction_rules.list_page_url is currently dead
-    metadata - the agent fetches the domain homepage only (agent.py
-    _run_web_listing_step) - pending the T140 fix. The domain is left unchanged
-    because changing it would orphan the existing DB row on re-seed.
-    Revisit discovery_role once T140 lands and a static listing URL is confirmed.
+    T140 fixed; listing URL configured; discovery_role stays false until a live
+    check confirms extractable content AND the robots review is done.

@@ -196,3 +196,57 @@ def test_found_candidate_is_handed_to_the_existing_ingestion_workflow(db):
     assert reloaded is not None
     assert reloaded.name == "Discovery Agent Fixture Scholarship"
     assert item.source_id == source.id
+
+
+# --- T161 (US6 Scenario 2): T140 regression --------------------------------------
+
+
+def test_listing_step_does_not_build_a_homepage_url_when_a_listing_url_is_configured(db):
+    """T140: `_run_web_listing_step` used to pass `f"https://{source.domain}"`
+    to the listing-fetch tool, ignoring the configured listing page. It must
+    now delegate URL choice to the connector by passing `None`."""
+    session, created_sources, _ = db
+    domain = f"discovery-test-{uuid.uuid4().hex}.example.com"
+    source = _active_api_source(
+        session,
+        created_sources,
+        name="Discovery Test Web Source",
+        source_type="gov",
+        access_method="web",
+        domain=domain,
+        listing_page_url=f"https://{domain}/scholarships/",
+    )
+    calls: list[tuple] = []
+
+    def recording_listing_fetch(_db, source_id, url=None) -> ListingFetchOutput:
+        calls.append((source_id, url))
+        return ListingFetchOutput(source_id=source_id, status="ok", candidates=[])
+
+    def ok_api(db_arg, source_id, query):
+        return ApiConnectorOutput(source_id=source_id, query=query, status="ok", records=[])
+
+    run_discovery(session, _profile(), listing_fetch=recording_listing_fetch, fetch_api=ok_api)
+
+    mine = [call for call in calls if call[0] == source.id]
+    assert mine, "the web source's listing step never ran"
+    for _source_id, url in mine:
+        assert url is None
+
+
+def test_agent_module_does_not_import_the_connector_or_resolver_or_build_a_homepage_url():
+    import ast
+    import inspect
+
+    from app.agents.discovery import agent as discovery_agent_module
+
+    text = inspect.getsource(discovery_agent_module)
+    imported: list[str] = []
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+            imported += [alias.name for alias in node.names]
+        elif isinstance(node, ast.Import):
+            imported += [alias.name for alias in node.names]
+    assert not any("connectors" in name or name == "resolve_fetch_target" for name in imported)
+    listing_step = text.split("def _run_web_listing_step")[1].split("def _run_step")[0]
+    assert 'f"https://{source.domain}"' not in listing_step

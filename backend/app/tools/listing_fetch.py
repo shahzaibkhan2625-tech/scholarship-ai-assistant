@@ -34,7 +34,8 @@ class ListingFetchOutput(BaseModel):
     error: str | None = None
 
 
-def listing_fetch_tool(db: Session, source_id: uuid.UUID, url: str) -> ListingFetchOutput:
+def listing_fetch_tool(db: Session, source_id: uuid.UUID, url: str | None = None) -> ListingFetchOutput:
+    """`url=None` lets the connector resolve the fetch target (T165)."""
     result = fetch_and_extract_listing(db, source_id, url)
     return ListingFetchOutput(
         source_id=result.source_id,

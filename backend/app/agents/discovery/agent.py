@@ -211,7 +211,8 @@ def _run_web_listing_step(
     if step.source_id in web_result_cache:
         return web_result_cache[step.source_id]
 
-    outcome = listing_fetch(db, step.source_id, f"https://{source.domain}")
+    # URL choice is the connector's (listing_page_url -> legacy key -> homepage).
+    outcome = listing_fetch(db, step.source_id, None)
 
     if outcome.status == "cached":
         step_results = [
