@@ -62,7 +62,24 @@ def _source_data(**overrides) -> SourceRegistryCreate:
     return SourceRegistryCreate(**defaults)
 
 
-def test_seeding_twice_produces_exactly_five_rows(db_session_factory):
+@pytest.fixture
+def seed_in_fixture_transaction(monkeypatch, db_session_factory):
+    """Redirect seed_sources()'s module-level SessionLocal to the fixture's
+    factory so its commits only release savepoints inside the outer
+    transaction that db_session_factory rolls back at teardown."""
+    from app.services import source_registry_seed
+
+    monkeypatch.setattr(source_registry_seed, "SessionLocal", db_session_factory)
+
+
+def test_seeding_twice_produces_exactly_five_rows(db_session_factory, seed_in_fixture_transaction):
+    from app.services import source_registry_seed
+
+    assert source_registry_seed.SessionLocal is db_session_factory, (
+        "seed_sources() would otherwise write to the real database; "
+        "SessionLocal must be redirected to the fixture's session factory"
+    )
+
     seed_sources()
     seed_sources()
 
