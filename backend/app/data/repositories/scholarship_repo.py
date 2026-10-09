@@ -1,9 +1,12 @@
 import uuid
+from collections.abc import Iterable
+from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.scholarship import Scholarship, ScholarshipField
+from app.models.source import ScholarshipSource
 
 
 def get_by_id(db: Session, scholarship_id: uuid.UUID) -> Scholarship | None:
@@ -54,3 +57,32 @@ def find_by_name(db: Session, name: str) -> list[Scholarship]:
 def get_field_rows(db: Session, scholarship_id: uuid.UUID) -> list[ScholarshipField]:
     stmt = select(ScholarshipField).where(ScholarshipField.scholarship_id == scholarship_id)
     return list(db.execute(stmt).scalars().all())
+
+
+def list_for_source(db: Session, source_id: uuid.UUID) -> list[Scholarship]:
+    """Every scholarship linked to `source_id` via `scholarship_sources`
+    (002 monitoring scope: never the whole table). `distinct` because the
+    ingestion merge path can add more than one provenance row per pair."""
+    stmt = (
+        select(Scholarship)
+        .join(ScholarshipSource, ScholarshipSource.scholarship_id == Scholarship.id)
+        .where(ScholarshipSource.source_id == source_id)
+        .distinct()
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def mark_seen_verified(db: Session, scholarship_ids: Iterable[uuid.UUID], now: datetime) -> int:
+    """002 D4: refresh `last_verified_at` to `now` for scholarships grounded-
+    and-seen in a successful monitoring fetch. Touches nothing else."""
+    ids = list(scholarship_ids)
+    if not ids:
+        return 0
+    result = db.execute(
+        update(Scholarship)
+        .where(Scholarship.id.in_(ids))
+        .values(last_verified_at=now)
+        .execution_options(synchronize_session="fetch")
+    )
+    db.commit()
+    return result.rowcount or 0

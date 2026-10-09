@@ -9,7 +9,7 @@ when a fetch is attempted against a non-active `source_id`.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from sqlalchemy import select
@@ -44,13 +44,24 @@ class CandidateSourceAlreadyReviewedError(Exception):
 
 
 def get_active_sources(
-    db: Session, country: str | None = None, source_type: str | None = None
+    db: Session,
+    country: str | None = None,
+    source_type: str | None = None,
+    *,
+    discovery_role: bool | None = None,
+    access_method: str | None = None,
 ) -> list[SourceRegistry]:
+    """`discovery_role`/`access_method` (002 T178) are keyword-only and default
+    `None` = no filter, so every existing caller is unchanged."""
     stmt = select(SourceRegistry).where(SourceRegistry.status == SourceStatus.ACTIVE)
     if country is not None:
         stmt = stmt.where(SourceRegistry.country == country)
     if source_type is not None:
         stmt = stmt.where(SourceRegistry.source_type == source_type)
+    if discovery_role is not None:
+        stmt = stmt.where(SourceRegistry.discovery_role == discovery_role)
+    if access_method is not None:
+        stmt = stmt.where(SourceRegistry.access_method == access_method)
     return list(db.execute(stmt).scalars().all())
 
 
@@ -192,6 +203,24 @@ def mark_source_failing(db: Session, source_id: uuid.UUID) -> SourceRegistry | N
     if source is None:
         return None
     source.status = SourceStatus.FAILING
+    db.commit()
+    db.refresh(source)
+    return source
+
+
+def touch_source_check(
+    db: Session, source_id: uuid.UUID, *, success: bool, now: datetime | None = None
+) -> SourceRegistry | None:
+    """002 monitoring bookkeeping: `last_checked_at` is set on every check,
+    `last_success_at` only when `success`. Never changes `status`. Looks up by
+    id directly (not active-only) like `mark_source_failing`."""
+    source = db.get(SourceRegistry, source_id)
+    if source is None:
+        return None
+    stamp = now or datetime.now(timezone.utc)
+    source.last_checked_at = stamp
+    if success:
+        source.last_success_at = stamp
     db.commit()
     db.refresh(source)
     return source

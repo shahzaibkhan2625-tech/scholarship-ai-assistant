@@ -53,6 +53,7 @@ from app.schemas.source import SourceFetchLogCreate
 from app.services import classify as classify_service
 from app.services import conflict_resolution as conflict_service
 from app.services import dedup as dedup_service
+from app.services import listing_diff as listing_diff_service
 from app.services import normalize as normalize_service
 from app.services import verification as verification_service
 from app.sources.retry_policy import DEFAULT_MAX_ATTEMPTS, run_with_retry
@@ -95,6 +96,7 @@ class IngestionState(TypedDict, total=False):
     existing_records: dict[str, dict]
     official_source_confirmed: bool
     field_conflicts: dict[str, list]
+    existing_scholarship_id: uuid.UUID | None
     normalized_fields: list
     classification: Any
     dedup_result: Any
@@ -207,6 +209,19 @@ def _dedup_node(state: IngestionState) -> dict:
     if state.get("error"):
         return {}
 
+    existing_scholarship_id = state.get("existing_scholarship_id")
+    if existing_scholarship_id is not None:
+        # 002 monitoring update path (ADR-0006): the caller already identified
+        # the stored record, so dedup short-circuits to it -- no DB lookup, no
+        # embedding call. `existing_records` stays empty on purpose.
+        return {
+            "dedup_result": dedup_service.DedupResult(
+                decision=dedup_service.DedupDecision.MERGE_WITH_EXISTING,
+                matched_id=str(existing_scholarship_id),
+                reason="caller-identified existing scholarship (monitoring update)",
+            )
+        }
+
     def _do() -> dict:
         raw = state["raw"]
         candidate = dedup_service.DedupCandidate(
@@ -236,7 +251,9 @@ def _derive_field_conflicts_node(state: IngestionState) -> dict:
     they disagree becomes a `field_conflicts` entry for `conflict_resolution`
     to adjudicate — without the caller ever having to name the conflict."""
 
-    if state.get("error"):
+    if state.get("error") or state.get("existing_scholarship_id") is not None:
+        # Monitoring update path (ADR-0006): official-over-unofficial conflict
+        # resolution must not fight the "listing value may overwrite" policy.
         return {}
 
     dedup_result = state.get("dedup_result")
@@ -321,6 +338,8 @@ def _verify_node(state: IngestionState) -> dict:
 def _conflict_resolution_node(state: IngestionState) -> dict:
     if state.get("error"):
         return {}
+    if state.get("existing_scholarship_id") is not None:
+        return {"conflict_resolutions": {}}  # monitoring update path (ADR-0006)
 
     field_conflicts = state.get("field_conflicts")
     if not field_conflicts:
@@ -385,6 +404,42 @@ def _resolve_dedup_match(db, dedup_result) -> Scholarship | None:
     return scholarship_repo.get_by_id(db, matched_uuid)
 
 
+def _apply_monitoring_update(state: IngestionState) -> dict:
+    """002 monitoring update path (ADR-0006, D1): merge-style update of ONE
+    already-stored scholarship. Only the monitored fields
+    (`listing_diff.MONITORED_FIELDS`) are written, and only when the candidate
+    states a different value; before each overwrite the PRIOR value is kept as
+    a `_prior:<field>` `scholarship_fields` row (underscore-prefixed meta-key,
+    same convention as `_record_completeness`, so it is never read as the
+    real field). An unconfirmed listing value may overwrite a verified one,
+    as discovery already treats listing data. No new `scholarships` or
+    `scholarship_sources` row is written."""
+    db = state["db"]
+    scholarship = scholarship_repo.get_by_id(db, state["existing_scholarship_id"])
+    if scholarship is None:
+        raise ValueError(f"existing scholarship {state['existing_scholarship_id']} not found")
+
+    now = datetime.now(timezone.utc)
+    prior_confidence = "verified" if scholarship.verification_status == VerificationStatus.VERIFIED else "inferred"
+    for key, new_value in listing_diff_service.diff_listing_fields(scholarship, state["raw"]).items():
+        prior = getattr(scholarship, key)
+        scholarship.fields.append(
+            ScholarshipField(
+                key=f"_prior:{key}",
+                value={
+                    "value": prior.isoformat() if isinstance(prior, date) else getattr(prior, "value", prior),
+                    "replaced_at": now.isoformat(),
+                },
+                value_status="known",
+                confidence=prior_confidence,
+                source_id=state["source_id"],
+            )
+        )
+        setattr(scholarship, key, new_value)
+    db.commit()
+    return {"scholarship": scholarship, "incomplete_fields": []}
+
+
 def _store_node(state: IngestionState) -> dict:
     if state.get("error"):
         return {}
@@ -396,6 +451,9 @@ def _store_node(state: IngestionState) -> dict:
         validation_error = _validate_required_fields(raw)
         if validation_error is not None:
             raise ValueError(validation_error)
+
+        if state.get("existing_scholarship_id") is not None:
+            return _apply_monitoring_update(state)
 
         matched_scholarship = _resolve_dedup_match(db, state.get("dedup_result"))
         conflict_resolutions = state.get("conflict_resolutions") or {}
@@ -631,6 +689,7 @@ def run_ingestion(
     existing_records: dict[str, dict] | None = None,
     official_source_confirmed: bool = False,
     field_conflicts: dict[str, list] | None = None,
+    existing_scholarship_id: uuid.UUID | None = None,
 ) -> dict:
     initial_state: IngestionState = {
         "db": db,
@@ -644,5 +703,6 @@ def run_ingestion(
         "existing_records": existing_records or {},
         "official_source_confirmed": official_source_confirmed,
         "field_conflicts": field_conflicts or {},
+        "existing_scholarship_id": existing_scholarship_id,
     }
     return _COMPILED_GRAPH.invoke(initial_state)

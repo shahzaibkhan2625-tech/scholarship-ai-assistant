@@ -53,7 +53,16 @@ from app.tools.web_fetch import FetchResult, fetch_url
 
 logger = logging.getLogger(__name__)
 
+# 002 D3: small fixed vocabulary for `failure_kind`, set where each failure is
+# detected -- never derived by matching on error-message text.
+FAILURE_FETCH_ERROR = "fetch_error"
+FAILURE_EMPTY_EXTRACTION = "empty_extraction"
+FAILURE_REDIRECT_ANOMALY = "redirect_anomaly"
+
 __all__ = [
+    "FAILURE_FETCH_ERROR",
+    "FAILURE_EMPTY_EXTRACTION",
+    "FAILURE_REDIRECT_ANOMALY",
     "FetchTarget",
     "resolve_fetch_target",
     "OfficialFetchResult",
@@ -117,6 +126,8 @@ class OfficialFetchResult:
     fetched_at: datetime | None = None
     error: str | None = None
     final_url: str | None = None
+    # 002 D3: fixed vocabulary ("fetch_error"); None on success.
+    failure_kind: str | None = None
 
 
 class _FetchFailed(Exception):
@@ -135,6 +146,7 @@ def fetch_official(
     sleep: Callable[[float], None] | None = None,
     used_homepage_fallback: bool = False,
     monitoring_run_id: uuid.UUID | None = None,
+    skip_failing_transition: bool = False,
 ) -> OfficialFetchResult:
     source = source_repo.get_source_by_id(db, source_id)
     if source is None:
@@ -193,7 +205,11 @@ def fetch_official(
             monitoring_run_id=monitoring_run_id,
         ),
     )
-    source_repo.mark_source_failing(db, source_id)
+    if not skip_failing_transition:
+        # 002 D5: monitoring passes skip_failing_transition=True so ONE failed
+        # attempt never takes a source out of the active set; the default
+        # (discovery, 001) still marks the source failing exactly as before.
+        source_repo.mark_source_failing(db, source_id)
 
     return OfficialFetchResult(
         source_id=source_id,
@@ -201,6 +217,7 @@ def fetch_official(
         success=False,
         http_status=http_status,
         error=error_message,
+        failure_kind=FAILURE_FETCH_ERROR,
     )
 
 
@@ -249,6 +266,10 @@ class ListingExtractionResult:
     error: str | None = None
     fetched_url: str | None = None
     used_homepage_fallback: bool = False
+    # 002 D3: "fetch_error" | "empty_extraction" | "redirect_anomaly"; None unless status == "fail".
+    failure_kind: str | None = None
+    # 002 D2: this call's grounded accepted_count; "ok" only.
+    accepted_count: int | None = None
 
 
 def _detect_and_record_candidate_sources(db: Session, url: str, html: str) -> None:
@@ -288,6 +309,8 @@ def fetch_and_extract_listing(
     extract_listing: Callable[..., ExtractListingOutput] = extract_listing_from_page,
     sleep: Callable[[float], None] | None = None,
     monitoring_run_id: uuid.UUID | None = None,
+    bypass_cache: bool = False,
+    skip_failing_transition: bool = False,
 ) -> ListingExtractionResult:
     """T135: fetch (`fetch_official` above) -> `extract_listing` -> shaped
     result, gated by a two-layer cache so a source isn't re-fetched/
@@ -314,7 +337,9 @@ def fetch_and_extract_listing(
         fetched_url=url, used_homepage_fallback=used_homepage_fallback, monitoring_run_id=monitoring_run_id
     )
 
-    last_extraction = _last_successful_extraction(db, source_id)
+    # 002 T177: monitoring must never receive "cached" (a cached result cannot
+    # detect change); default False leaves every 001/discovery call unchanged.
+    last_extraction = None if bypass_cache else _last_successful_extraction(db, source_id)
     # On the resolved path a cached row only counts if it was fetched from this
     # very target (NULL pre-002 rows never match), so changing/clearing the
     # listing URL is never answered from a different page's extraction.
@@ -344,6 +369,7 @@ def fetch_and_extract_listing(
         sleep=sleep,
         used_homepage_fallback=used_homepage_fallback,
         monitoring_run_id=monitoring_run_id,
+        skip_failing_transition=skip_failing_transition,
     )
     if not fetch_result.success:
         return ListingExtractionResult(
@@ -352,6 +378,7 @@ def fetch_and_extract_listing(
             error=fetch_result.error,
             fetched_url=url,
             used_homepage_fallback=used_homepage_fallback,
+            failure_kind=fetch_result.failure_kind,
         )
 
     if resolved and fetch_result.final_url:
@@ -373,6 +400,7 @@ def fetch_and_extract_listing(
                 error=redirect_error,
                 fetched_url=url,
                 used_homepage_fallback=used_homepage_fallback,
+                failure_kind=FAILURE_REDIRECT_ANOMALY,
             )
 
     _detect_and_record_candidate_sources(db, url, fetch_result.content or "")
@@ -394,13 +422,15 @@ def fetch_and_extract_listing(
                 source_id=source_id, status=FetchStatus.FAIL, error=detail, retry_count=0, **log_context
             ),
         )
-        source_repo.mark_source_failing(db, source_id)
+        if not skip_failing_transition:
+            source_repo.mark_source_failing(db, source_id)
         return ListingExtractionResult(
             source_id=source_id,
             status="fail",
             error=detail,
             fetched_url=url,
             used_homepage_fallback=used_homepage_fallback,
+            failure_kind=FAILURE_EMPTY_EXTRACTION,
         )
 
     # Some candidates were hallucinated and rejected by grounding but others
@@ -430,4 +460,5 @@ def fetch_and_extract_listing(
         candidates=raw_candidates,
         fetched_url=url,
         used_homepage_fallback=used_homepage_fallback,
+        accepted_count=extraction.accepted_count,
     )
