@@ -13,7 +13,8 @@ Per source, in order, inside that source's advisory lock (see
 re-check still active -> fetch (`bypass_cache=True`,
 `skip_failing_transition=True`) -> `touch_source_check` -> change detection
 (or the failed-fetch lifecycle outcome) -> D4 freshness refresh for every
-grounded-and-seen scholarship -> stale sweep -> counters.
+grounded-and-seen scholarship -> stale sweep -> counters. After the lock is
+released, the US2 alert step re-matches and alerts owners (`_alert_step`).
 
 **FR-MON-3 coverage gap (named, not hidden):** only `deadline`,
 `funding_status` and `degree_level` changes are detectable
@@ -29,18 +30,22 @@ are not silently reconciled any other way.
 
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Callable, Mapping
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.data.repositories import monitoring_repo, scholarship_repo, source_repo
 from app.models.monitoring import MonitoringRun, MonitoringStatus, MonitoringTrigger
 from app.models.scholarship import LifecycleStatus, Scholarship
 from app.models.source import FetchStatus, SourceRegistry
 from app.scheduling.locks import source_lock
+from app.services import alerts as alerts_service
 from app.services import lifecycle as lifecycle_service
+from app.services import verification as verification_service
+from app.services.alerts import ChangeEvent, NotificationChannel, RematchBudget
 from app.services.lifecycle import FetchOutcome, ListedState
 from app.services.listing_diff import diff_listing_fields
 from app.sources.connectors.official_fetch import (
@@ -74,6 +79,9 @@ class _Counters:
 class _SourceStats:
     changes: int = 0
     fetch_failed: bool = False
+    # US2: one event per stored new/field-changed scholarship, consumed by the
+    # alert step after the source's work has committed.
+    events: list[ChangeEvent] = field(default_factory=list)
 
 
 def _normalized_name(name: str) -> str:
@@ -121,10 +129,31 @@ def _write_lifecycle(db: Session, scholarship: Scholarship, target: LifecycleSta
     return True
 
 
-def _matched_transition(scholarship: Scholarship, listed: ListedState, *, changed: bool) -> LifecycleStatus | None:
+def _expired_by_deadline(scholarship: Scholarship) -> bool:
+    """EXPIRED is derived from the deadline (`compute_lifecycle_status`), so it
+    is re-derived against the stored (post-update) deadline rather than being
+    treated as terminal."""
+    now = datetime.now(timezone.utc)
+    status = verification_service.compute_lifecycle_status(
+        verification_service.VerificationInput(
+            retrieved_at=scholarship.retrieved_at,
+            last_verified_at=scholarship.last_verified_at,
+            deadline=scholarship.deadline,
+            official_source_confirmed=False,
+            now=now,
+        )
+    )
+    return status == LifecycleStatus.EXPIRED
+
+
+def _matched_transition(
+    scholarship: Scholarship, listed: ListedState, *, changed: bool, changed_fields: frozenset[str] = frozenset()
+) -> LifecycleStatus | None:
     """UPDATED/CLOSED/REOPENED for a record found in the listing. The
     lifecycle service never emits UPDATED (that is this diff step's job), so a
-    field change yields UPDATED unless the service says REOPENED."""
+    field change yields UPDATED unless the service says REOPENED. CLOSED is
+    terminal (an explicit signal); EXPIRED is derived, so a deadline change
+    that moves it into the future lifts it to UPDATED."""
     target = lifecycle_service.evaluate_fetch_outcome(
         scholarship, FetchOutcome(fetch_succeeded=True, extraction_grounded=True, listed_state=listed)
     )
@@ -132,7 +161,11 @@ def _matched_transition(scholarship: Scholarship, listed: ListedState, *, change
         return target
     if target == LifecycleStatus.REOPENED:
         return target
-    if scholarship.lifecycle_status in (LifecycleStatus.CLOSED, LifecycleStatus.EXPIRED):
+    if scholarship.lifecycle_status == LifecycleStatus.CLOSED:
+        return None
+    if scholarship.lifecycle_status == LifecycleStatus.EXPIRED:
+        if "deadline" in changed_fields and not _expired_by_deadline(scholarship):
+            return LifecycleStatus.UPDATED
         return None
     return LifecycleStatus.UPDATED
 
@@ -174,9 +207,11 @@ def _detect_changes(
             by_name[key] = created  # a duplicate name later in this listing is then "matched"
             seen_ids.add(created.id)
             stats.changes += 1
+            stats.events.append(ChangeEvent(scholarship_id=created.id, kind="new"))
             continue
 
-        changed = bool(diff_listing_fields(match, candidate))
+        changed_fields = diff_listing_fields(match, candidate)
+        changed = bool(changed_fields)
         if changed:
             state = run_ingestion(
                 db,
@@ -189,10 +224,11 @@ def _detect_changes(
             if state.get("error"):
                 continue  # logged by ingestion; no lifecycle write on a failed update
             db.refresh(match)
+            stats.events.append(ChangeEvent(scholarship_id=match.id, kind="updated", fields=tuple(sorted(changed_fields))))
         seen_ids.add(match.id)
 
         listed = ListedState.CLOSED if _is_explicit_closed(candidate) else ListedState.OPEN
-        target = _matched_transition(match, listed, changed=changed)
+        target = _matched_transition(match, listed, changed=changed, changed_fields=frozenset(changed_fields))
         wrote = _write_lifecycle(db, match, target)
         if changed or (wrote and target in (LifecycleStatus.CLOSED, LifecycleStatus.REOPENED)):
             stats.changes += 1
@@ -292,6 +328,32 @@ def _monitor_one_source(
         return True
 
 
+def _alert_step(
+    db: Session,
+    run: MonitoringRun,
+    stats: _SourceStats,
+    budget: RematchBudget,
+    channels: Mapping[str, NotificationChannel] | None,
+) -> None:
+    """US2 re-match/alert for one source's stored changes (ADR-0007).
+
+    Deliberately called AFTER `_monitor_one_source` has returned, i.e. outside
+    `source_lock`: the lock is a transaction on its own connection against a
+    pooled Neon endpoint, and holding it open across per-owner LLM calls and
+    SMTP round-trips would pin a pooled backend for the slowest external call.
+    It is safe to run unlocked because the events come only from this run,
+    which held the lock while it stored them. A failure here is logged only and
+    can never undo the already-committed change.
+    """
+    if not stats.events:
+        return
+    try:
+        alerts_service.process_changes(db, run.id, stats.events, budget=budget, channels=channels)
+    except Exception:  # noqa: BLE001 - alerting must never fail the run or the stored change
+        logger.exception("alert step failed for run %s; stored changes are unaffected", run.id)
+        db.rollback()
+
+
 def run_source_monitor(
     db: Session,
     *,
@@ -300,12 +362,15 @@ def run_source_monitor(
     fetch: Callable[[str], FetchResult] = fetch_url,
     extract_listing: Callable[..., ExtractListingOutput] = extract_listing_from_page,
     sleep: Callable[[float], None] | None = None,
+    alert_channels: Mapping[str, NotificationChannel] | None = None,
+    rematch_budget: RematchBudget | None = None,
 ) -> MonitoringRun:
     run = monitoring_repo.get_run(db, run_id) if run_id is not None else monitoring_repo.create_run(db, trigger)
     if run is None:
         raise ValueError(f"monitoring run {run_id} not found")
 
     counters = _Counters()
+    budget = rematch_budget if rematch_budget is not None else RematchBudget(settings.max_alert_rematches_per_run)
     finished = False
     try:
         sources = source_repo.get_active_sources(db, discovery_role=True, access_method="web")
@@ -321,6 +386,7 @@ def run_source_monitor(
                 processed, stats.fetch_failed = True, True
             if not processed:
                 continue
+            _alert_step(db, run, stats, budget, alert_channels)
             counters.processed += 1
             counters.failed += 1 if stats.fetch_failed else 0
             counters.changes += stats.changes

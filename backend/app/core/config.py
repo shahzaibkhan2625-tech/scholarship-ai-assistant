@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     smtp_username: str | None = Field(default=None, alias="SMTP_USERNAME")
     smtp_password: str | None = Field(default=None, alias="SMTP_PASSWORD")
     alerts_from_email: str | None = Field(default=None, alias="ALERTS_FROM_EMAIL")
+    # Cap on owner x event re-matches per monitoring run (ADR-0007).
+    max_alert_rematches_per_run: int = Field(default=500, ge=1, alias="MAX_ALERT_REMATCHES_PER_RUN")
 
     # Source monitoring + hardening. monitoring_interval_minutes has no bound:
     # a value <= 0 means the scheduler is disabled.

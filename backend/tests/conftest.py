@@ -121,6 +121,11 @@ def _delete_user_cascade(session, user_id: uuid.UUID) -> None:
         session.query(Experience).filter(Experience.profile_id == profile.id).delete()
         session.delete(profile)
 
+    # 002: alerts FK -> matches and users, so they go first.
+    from app.models.alert import Alert, AlertPreferences
+
+    session.query(Alert).filter(Alert.user_id == user_id).delete()
+    session.query(AlertPreferences).filter(AlertPreferences.user_id == user_id).delete()
     session.query(Match).filter(Match.user_id == user_id).delete()
 
     # Phase 4 (T118/T120/T126): applications and everything FK-chained to
