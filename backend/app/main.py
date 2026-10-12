@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.alerts import router as alerts_router
+from app.api.coverage import router as coverage_router
 from app.api.application import router as application_router
 from app.api.auth import router as auth_router
 from app.api.discovery import router as discovery_router
@@ -61,6 +62,7 @@ app.include_router(documents_router, tags=["documents"])
 app.include_router(generation_router, tags=["generation"])
 app.include_router(monitoring_router, tags=["monitoring"])
 app.include_router(alerts_router, tags=["alerts"])
+app.include_router(coverage_router, tags=["coverage"])
 
 
 @app.get("/health")

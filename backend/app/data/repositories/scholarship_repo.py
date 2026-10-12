@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.scholarship import Scholarship, ScholarshipField
+from app.models.scholarship import LifecycleStatus, Scholarship, ScholarshipField, VerificationStatus
 from app.models.source import ScholarshipSource
 
 
@@ -86,3 +86,16 @@ def mark_seen_verified(db: Session, scholarship_ids: Iterable[uuid.UUID], now: d
     )
     db.commit()
     return result.rowcount or 0
+
+
+def count_verified_opportunities(db: Session) -> int:
+    """`verification_status == verified`, excluding closed/expired records (002 US4)."""
+    stmt = (
+        select(func.count())
+        .select_from(Scholarship)
+        .where(
+            Scholarship.verification_status == VerificationStatus.VERIFIED,
+            Scholarship.lifecycle_status.not_in([LifecycleStatus.CLOSED, LifecycleStatus.EXPIRED]),
+        )
+    )
+    return db.execute(stmt).scalar_one()

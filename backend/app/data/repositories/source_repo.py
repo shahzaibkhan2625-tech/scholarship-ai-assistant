@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.models.source import (
@@ -77,6 +77,45 @@ def get_all_fetch_logs(db: Session) -> list[SourceFetchLog]:
     """Every fetch-log row across all sources — for coverage aggregation
     (T084) only, so it doesn't need to re-query per source."""
     return list(db.execute(select(SourceFetchLog)).scalars().all())
+
+
+def get_latest_fetch_log_per_source(db: Session) -> list[SourceFetchLog]:
+    """The single most recent fetch-log row of each source, any kind — for coverage
+    (002 US4) so it never loads the whole history. `DISTINCT ON` walks the
+    `source_id` index; bounded at one row per source."""
+    stmt = (
+        select(SourceFetchLog)
+        .distinct(SourceFetchLog.source_id)
+        .order_by(SourceFetchLog.source_id, SourceFetchLog.started_at.desc(), SourceFetchLog.id.desc())
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def get_latest_run_fetch_logs(db: Session) -> list[SourceFetchLog]:
+    """Every row belonging to each source's most recent MONITORING RUN (ADR-0008:
+    one check is several rows, outcome is per run). Rows with a NULL
+    `monitoring_run_id` are ignored. Bounded at a few rows per source."""
+    latest_run = (
+        select(SourceFetchLog.source_id, SourceFetchLog.monitoring_run_id)
+        .where(SourceFetchLog.monitoring_run_id.is_not(None))
+        .distinct(SourceFetchLog.source_id)
+        .order_by(SourceFetchLog.source_id, SourceFetchLog.started_at.desc(), SourceFetchLog.id.desc())
+        .subquery()
+    )
+    stmt = select(SourceFetchLog).join(
+        latest_run,
+        and_(
+            SourceFetchLog.source_id == latest_run.c.source_id,
+            SourceFetchLog.monitoring_run_id == latest_run.c.monitoring_run_id,
+        ),
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def count_pending_candidate_sources(db: Session) -> int:
+    return db.execute(
+        select(func.count()).select_from(CandidateSource).where(CandidateSource.status == CandidateSourceStatus.PENDING)
+    ).scalar_one()
 
 
 def get_source_by_id(db: Session, source_id: uuid.UUID) -> SourceRegistry | None:

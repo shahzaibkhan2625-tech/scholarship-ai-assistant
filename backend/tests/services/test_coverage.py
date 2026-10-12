@@ -18,8 +18,8 @@ def _source(status="active", country="Germany", source_type="gov") -> SourceSnap
     return SourceSnapshot(id=uuid.uuid4(), country=country, source_type=source_type, status=status)
 
 
-def _log(source_id, status, *, when=_NOW) -> FetchLogSnapshot:
-    return FetchLogSnapshot(source_id=source_id, status=status, started_at=when)
+def _log(source_id, status, *, when=_NOW, run=None) -> FetchLogSnapshot:
+    return FetchLogSnapshot(source_id=source_id, status=status, started_at=when, monitoring_run_id=run)
 
 
 def test_never_claims_complete_coverage_by_construction():
@@ -103,3 +103,102 @@ def test_never_emits_zero_gaps_when_a_combo_has_no_active_source_at_all_even_if_
 
     assert summary.gaps != []
     assert any("Morocco" in gap for gap in summary.gaps)
+
+
+# --- 002 US4 (T205): FR-COVAN-1..4 --------------------------------------------------
+
+
+def test_new_counts_default_to_zero_so_001_callers_are_unchanged():
+    summary = compute_coverage_summary([], [], now=_NOW)
+    assert summary.candidate_sources_pending == 0
+    assert summary.verified_opportunities_count == 0
+
+
+def test_pending_candidates_and_verified_count_are_passed_through_and_separate_from_active():
+    active = _source(status="active")
+    summary = compute_coverage_summary(
+        [active], [], now=_NOW, candidate_sources_pending=3, verified_opportunities_count=7
+    )
+    assert summary.candidate_sources_pending == 3
+    assert summary.verified_opportunities_count == 7
+    # Candidates are never folded into the registry counts (FR-COVAN-3).
+    assert summary.sources_configured == 1
+    assert summary.sources_active == 1
+
+
+def test_failing_status_counts_as_active_but_unhealthy_with_its_own_gap_reason():
+    failing = _source(status="failing", country="Norway", source_type="gov")
+    healthy_elsewhere = _source(status="active", country="Hungary", source_type="gov")
+
+    summary = compute_coverage_summary(
+        [failing, healthy_elsewhere], [_log(failing.id, "ok"), _log(healthy_elsewhere.id, "ok")], now=_NOW
+    )
+
+    assert summary.sources_active == 2
+    norway = [gap for gap in summary.gaps if "Norway" in gap]
+    assert len(norway) == 1
+    assert "no active source configured" not in norway[0]
+    assert "failing" in norway[0]
+    assert "Norway" not in summary.countries_covered
+
+
+def test_a_combo_with_no_active_or_failing_source_keeps_the_no_active_source_reason():
+    disabled = _source(status="disabled", country="France", source_type="gov")
+    summary = compute_coverage_summary([disabled], [], now=_NOW)
+    assert any("France" in gap and "no active source configured" in gap for gap in summary.gaps)
+
+
+def test_failed_is_derived_from_the_latest_monitoring_run_not_the_latest_row():
+    """A monitored check is an OK HTTP row + a FAIL extraction row in one run (ADR-0008)."""
+    run_old, run_new = uuid.uuid4(), uuid.uuid4()
+    source = _source(status="active", country="Sweden")
+    logs = [
+        _log(source.id, "ok", when=_NOW - timedelta(days=2), run=run_old),
+        _log(source.id, "ok", when=_NOW - timedelta(minutes=2), run=run_new),
+        _log(source.id, "fail", when=_NOW - timedelta(minutes=1), run=run_new),
+    ]
+    summary = compute_coverage_summary([source], logs, now=_NOW)
+    assert summary.sources_failed == 1
+    assert "Sweden" not in summary.countries_covered
+
+
+def test_a_later_ingestion_stage_failure_without_a_run_does_not_fail_a_healthy_run():
+    run = uuid.uuid4()
+    source = _source(status="active", country="Sweden")
+    logs = [
+        _log(source.id, "ok", when=_NOW - timedelta(minutes=5), run=run),
+        _log(source.id, "fail", when=_NOW, run=None),  # per-scholarship ingestion row
+    ]
+    summary = compute_coverage_summary([source], logs, now=_NOW)
+    assert summary.sources_failed == 0
+    assert "Sweden" in summary.countries_covered
+    # ...but last_checked_at still reflects the most recent row of any kind.
+    assert summary.last_checked_at[str(source.id)] == _NOW
+
+
+def test_a_successful_latest_run_recovers_a_source_whose_earlier_run_failed():
+    r1, r2 = uuid.uuid4(), uuid.uuid4()
+    source = _source(status="active")
+    logs = [
+        _log(source.id, "fail", when=_NOW - timedelta(days=1), run=r1),
+        _log(source.id, "ok", when=_NOW, run=r2),
+    ]
+    assert compute_coverage_summary([source], logs, now=_NOW).sources_failed == 0
+
+
+def test_without_any_monitoring_run_the_latest_raw_row_decides():
+    source = _source(status="active")
+    logs = [_log(source.id, "ok", when=_NOW - timedelta(days=1)), _log(source.id, "fail", when=_NOW)]
+    assert compute_coverage_summary([source], logs, now=_NOW).sources_failed == 1
+
+
+def test_last_checked_at_is_the_most_recent_row_per_source_not_a_stale_one():
+    a, b = _source(), _source()
+    logs = [
+        _log(a.id, "ok", when=_NOW - timedelta(days=9)),
+        _log(a.id, "ok", when=_NOW - timedelta(hours=1)),
+        _log(b.id, "ok", when=_NOW - timedelta(days=3)),
+    ]
+    summary = compute_coverage_summary([a, b], logs, now=_NOW)
+    assert summary.last_checked_at[str(a.id)] == _NOW - timedelta(hours=1)
+    assert summary.last_checked_at[str(b.id)] == _NOW - timedelta(days=3)
