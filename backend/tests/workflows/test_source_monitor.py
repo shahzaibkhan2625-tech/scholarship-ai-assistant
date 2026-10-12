@@ -89,6 +89,15 @@ def env(db_session_factory, monkeypatch):
         return [s for s in real(db, *args, **kwargs) if s.id in scoped_ids]
 
     monkeypatch.setattr(source_repo, "get_active_sources", scoped)
+    # 002 US3: monitoring selects via the monitor-only lookup (ACTIVE | FAILING, ADR-0008).
+    real_monitorable = getattr(source_repo, "get_monitorable_sources", None)
+    if real_monitorable is not None:
+
+        def scoped_monitorable(db, *args, **kwargs):
+            filter_calls.append(kwargs)
+            return [s for s in real_monitorable(db, *args, **kwargs) if s.id in scoped_ids]
+
+        monkeypatch.setattr(source_repo, "get_monitorable_sources", scoped_monitorable)
     monkeypatch.setattr(
         "app.workflows.ingestion.graph.classify_service.classify_candidate", lambda text: _FAKE_CLASSIFICATION
     )
@@ -469,7 +478,7 @@ def test_exception_outside_the_source_loop_marks_the_run_failed(env, monkeypatch
     def boom(db, *args, **kwargs):
         raise RuntimeError("registry unavailable")
 
-    monkeypatch.setattr(source_repo, "get_active_sources", boom)
+    monkeypatch.setattr(source_repo, "get_monitorable_sources", boom)  # US3: the monitor's selection query
     with pytest.raises(RuntimeError):
         run_source_monitor(env.session, trigger=MonitoringTrigger.SCHEDULED, fetch=env.fetcher, extract_listing=env.listing)
     runs = [r for r in monitoring_repo.list_runs(env.session, limit=5) if r.trigger == MonitoringTrigger.SCHEDULED]
@@ -494,3 +503,158 @@ def test_crash_recovery_fails_only_leftover_running_runs(env):
     assert stuck.status == MonitoringStatus.FAILED and stuck.ended_at is not None
     assert done.status == MonitoringStatus.COMPLETED
     assert env.session.execute(select(Scholarship.id).limit(0)).all() == []  # session still healthy
+
+
+# --- US3 source health (T198, FR-HEALTH-1/2/4/5/6, O-2, ADR-0008) -------------------------
+
+
+def _fetch_logs(env, source):
+    return [log for log in source_repo.get_fetch_logs_for_source(env.session, source.id) if log.monitoring_run_id]
+
+
+def _status(env, source):
+    return env.session.get(type(source), source.id).status
+
+
+def test_timeout_is_retried_per_policy_then_recorded_as_fail_with_reason_not_zero_results(env):
+    from app.sources.retry_policy import DEFAULT_MAX_ATTEMPTS
+
+    source = env.make_source()
+    env.fetcher.failing_hosts.add(source.domain)
+    run = env.run()
+
+    assert len([u for u in env.fetcher.calls if urlparse(u).hostname == source.domain]) == DEFAULT_MAX_ATTEMPTS
+    fails = [l for l in monitoring_repo.get_fetch_logs_for_run(env.session, run.id) if l.status == FetchStatus.FAIL]
+    assert len(fails) == 1
+    assert fails[0].error and "503" in fails[0].error
+    assert fails[0].retry_count == DEFAULT_MAX_ATTEMPTS - 1 and fails[0].items_found is None
+    assert fails[0].fetched_url and source.domain in fails[0].fetched_url
+    assert (run.sources_processed, run.sources_failed) == (1, 1)
+    assert source_repo.get_source_by_id(env.session, source.id).last_success_at is None
+
+
+def test_successful_zero_change_fetch_is_ok_with_items_and_is_distinct_from_a_failure(env):
+    ok, down = env.make_source("ok"), env.make_source("down")
+    env.listing.by_host[ok.domain] = [_cand(_name(env, "Alpha"))]
+    env.run()  # establishes the stored record
+    env.fetcher.failing_hosts.add(down.domain)
+    run = env.run()  # ok: nothing changed; down: fetch fails
+
+    assert run.changes_detected == 0 and run.sources_failed == 1
+    ok_extraction = [l for l in _fetch_logs(env, ok) if l.monitoring_run_id == run.id and l.items_found is not None]
+    assert len(ok_extraction) == 1 and ok_extraction[0].status == FetchStatus.OK and ok_extraction[0].items_found == 1
+    down_logs = [l for l in _fetch_logs(env, down) if l.monitoring_run_id == run.id]
+    assert [l.status for l in down_logs] == [FetchStatus.FAIL]
+
+
+def test_empty_extraction_preserves_prior_records_logs_fail_and_keeps_source_scheduled(env):
+    source = env.make_source()
+    env.listing.by_host[source.domain] = [_cand(_name(env, "Alpha"))]
+    env.run()
+    before = env.stored(source)[_name(env, "Alpha")]
+    snapshot = (before.deadline, before.funding_status, before.degree_level)
+    success_at = env.session.get(type(source), source.id).last_success_at
+
+    env.listing.by_host[source.domain] = []
+    run = env.run()
+
+    after = env.stored(source)[_name(env, "Alpha")]
+    env.session.refresh(after)
+    assert (after.deadline, after.funding_status, after.degree_level) == snapshot
+    assert after.lifecycle_status not in (LifecycleStatus.CLOSED, LifecycleStatus.EXPIRED)
+    fail = [l for l in monitoring_repo.get_fetch_logs_for_run(env.session, run.id) if l.status == FetchStatus.FAIL]
+    assert len(fail) == 1 and "0" in fail[0].error and fail[0].items_found is None
+    refreshed = env.session.get(type(source), source.id)
+    assert refreshed.last_success_at == success_at  # a failed check never counts as a success
+    assert refreshed.status == SourceStatus.ACTIVE  # one failure is below N (FR-HEALTH-4, D5)
+    assert source_repo.consecutive_failure_count(env.session, source.id) == 1
+    run_after = env.run()  # still scheduled: "flagged for re-check" == simply checked again
+    assert run_after.sources_processed == 1
+
+
+def test_extractor_crash_is_a_recorded_failed_outcome_for_the_run(env):
+    source = env.make_source()
+    env.listing.raise_for.add(source.domain)
+    run = env.run()
+
+    assert run.sources_failed == 1
+    fails = [l for l in monitoring_repo.get_fetch_logs_for_run(env.session, run.id) if l.status == FetchStatus.FAIL]
+    assert len(fails) == 1 and "extractor exploded" in fails[0].error
+    refreshed = env.session.get(type(source), source.id)
+    assert refreshed.last_checked_at is not None and refreshed.last_success_at is None
+    assert source_repo.consecutive_failure_count(env.session, source.id) == 1
+
+
+def test_source_is_marked_failing_only_when_n_consecutive_run_failures_are_reached(env, monkeypatch):
+    monkeypatch.setattr(monitor_graph.settings, "health_window_n", 3)
+    source = env.make_source()
+    env.fetcher.failing_hosts.add(source.domain)
+
+    env.run()
+    env.run()
+    assert _status(env, source) == SourceStatus.ACTIVE  # 2 < N
+    assert source_repo.consecutive_failure_count(env.session, source.id) == 2
+
+    env.run()
+    assert source_repo.consecutive_failure_count(env.session, source.id) == 3
+    assert _status(env, source) == SourceStatus.FAILING
+
+
+def test_a_success_between_failures_prevents_the_failing_flip(env, monkeypatch):
+    monkeypatch.setattr(monitor_graph.settings, "health_window_n", 3)
+    source = env.make_source()
+    env.listing.by_host[source.domain] = [_cand(_name(env, "Alpha"))]
+    for failing in (True, True, False, True, True):
+        (env.fetcher.failing_hosts.add if failing else env.fetcher.failing_hosts.discard)(source.domain)
+        env.run()
+    assert source_repo.consecutive_failure_count(env.session, source.id) == 2
+    assert _status(env, source) == SourceStatus.ACTIVE
+
+
+def test_failing_source_is_still_scheduled_and_one_success_restores_active(env, monkeypatch):
+    """O-2: failing is not a permanent exclusion; recovery works through the
+    allow_failing gate and the recovered source can ingest again."""
+    monkeypatch.setattr(monitor_graph.settings, "health_window_n", 2)
+    source = env.make_source()
+    env.fetcher.failing_hosts.add(source.domain)
+    env.run()
+    env.run()
+    assert _status(env, source) == SourceStatus.FAILING
+
+    env.fetcher.calls.clear()
+    env.fetcher.failing_hosts.clear()
+    env.listing.by_host[source.domain] = [_cand(_name(env, "Alpha"))]
+    run = env.run()
+
+    assert any(urlparse(u).hostname == source.domain for u in env.fetcher.calls)  # selected while failing
+    assert (run.sources_processed, run.sources_failed) == (1, 0)
+    assert _status(env, source) == SourceStatus.ACTIVE
+    assert source_repo.consecutive_failure_count(env.session, source.id) == 0
+    assert env.session.get(type(source), source.id).last_success_at is not None
+    assert _name(env, "Alpha") in env.stored(source)  # ingestion ran for the just-recovered source
+
+
+def test_a_further_failed_fetch_leaves_a_failing_source_failing(env, monkeypatch):
+    monkeypatch.setattr(monitor_graph.settings, "health_window_n", 2)
+    source = env.make_source()
+    env.fetcher.failing_hosts.add(source.domain)
+    env.run()
+    env.run()
+    env.run()
+    assert _status(env, source) == SourceStatus.FAILING
+    assert source_repo.consecutive_failure_count(env.session, source.id) == 3
+
+
+def test_pending_and_disabled_sources_are_never_fetched_even_for_recovery(env):
+    pending = env.make_source("pend", status="pending")
+    disabled = env.make_source("dis", status="disabled")
+    failing = env.make_source("fail", status="failing")
+    env.listing.by_host[failing.domain] = [_cand(_name(env, "Alpha"))]
+    run = env.run()
+
+    fetched = {urlparse(u).hostname for u in env.fetcher.calls}
+    assert fetched == {failing.domain}
+    assert pending.domain not in fetched and disabled.domain not in fetched
+    assert run.sources_processed == 1
+    assert _status(env, failing) == SourceStatus.ACTIVE and _status(env, pending) == SourceStatus.PENDING
+    assert _status(env, disabled) == SourceStatus.DISABLED

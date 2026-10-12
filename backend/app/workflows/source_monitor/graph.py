@@ -16,6 +16,15 @@ re-check still active -> fetch (`bypass_cache=True`,
 grounded-and-seen scholarship -> stale sweep -> counters. After the lock is
 released, the US2 alert step re-matches and alerts owners (`_alert_step`).
 
+**Source health (US3, ADR-0008):** health is derived, not stored. After each
+check, `_apply_health_transition` flips an `active` source to `failing` once
+`source_repo.consecutive_failure_count` (failed monitoring-RUN outcomes only)
+reaches `HEALTH_WINDOW_N`, and restores a `failing` source to `active` on one
+successful check — BEFORE change detection, so ingestion's source gate passes.
+Failing sources stay scheduled (`allow_failing=True`); `pending`/`disabled` never
+are. A crash after the fetch is recorded as a `FAIL` row for the run, so it is
+counted rather than reading as healthy.
+
 **FR-MON-3 coverage gap (named, not hidden):** only `deadline`,
 `funding_status` and `degree_level` changes are detectable
 (`services/listing_diff.py`). "Requirement" changes cannot be detected
@@ -40,7 +49,8 @@ from app.core.config import settings
 from app.data.repositories import monitoring_repo, scholarship_repo, source_repo
 from app.models.monitoring import MonitoringRun, MonitoringStatus, MonitoringTrigger
 from app.models.scholarship import LifecycleStatus, Scholarship
-from app.models.source import FetchStatus, SourceRegistry
+from app.models.source import FetchStatus, SourceRegistry, SourceStatus
+from app.schemas.source import SourceFetchLogCreate
 from app.scheduling.locks import source_lock
 from app.services import alerts as alerts_service
 from app.services import lifecycle as lifecycle_service
@@ -280,6 +290,46 @@ def _stale_sweep(
         _write_lifecycle(db, scholarship, lifecycle_service.evaluate_freshness(scholarship, source, now))
 
 
+def _apply_health_transition(db: Session, source_id: uuid.UUID, *, success: bool) -> None:
+    """US3 / ADR-0008: status follows the derived streak. `disabled` and
+    `pending` are never touched; one failure alone never flips (D5)."""
+    source = db.get(SourceRegistry, source_id)
+    if source is None:
+        return
+    db.refresh(source)
+    if success:
+        if source.status == SourceStatus.FAILING:
+            source_repo.reactivate_source(db, source_id)
+            logger.info("source %s recovered: failing -> active", source_id)
+    elif source.status == SourceStatus.ACTIVE:
+        failures = source_repo.consecutive_failure_count(db, source_id)
+        if failures >= settings.health_window_n:
+            source_repo.mark_source_failing(db, source_id)
+            logger.warning("source %s marked failing after %d consecutive failed runs", source_id, failures)
+
+
+def _record_crashed_check(db: Session, run: MonitoringRun, source_id: uuid.UUID, exc: Exception) -> None:
+    """A check that raised after the fetch left only the `OK` HTTP row, which reads
+    as healthy. Record it as the failed outcome it is (FR-HEALTH-1/2). Best effort:
+    bookkeeping trouble is logged and must never stop the run."""
+    try:
+        source_repo.log_fetch(
+            db,
+            SourceFetchLogCreate(
+                source_id=source_id,
+                status=FetchStatus.FAIL,
+                error=f"[monitor] {type(exc).__name__}: {exc}",
+                retry_count=0,
+                monitoring_run_id=run.id,
+            ),
+        )
+        source_repo.touch_source_check(db, source_id, success=False)
+        _apply_health_transition(db, source_id, success=False)
+    except Exception:  # noqa: BLE001
+        logger.exception("could not record failed check for source %s", source_id)
+        db.rollback()
+
+
 def _monitor_one_source(
     db: Session,
     run: MonitoringRun,
@@ -296,7 +346,7 @@ def _monitor_one_source(
         if not acquired:
             logger.info("source %s skipped: lock held by another monitor", source_id)
             return False
-        source = source_repo.get_source_by_id(db, source_id)
+        source = source_repo.get_monitorable_source_by_id(db, source_id)
         if source is None:
             logger.info("source %s skipped: no longer active", source_id)
             return False
@@ -309,6 +359,7 @@ def _monitor_one_source(
             monitoring_run_id=run.id,
             bypass_cache=True,
             skip_failing_transition=True,
+            allow_failing=True,
             fetch=fetch,
             extract_listing=extract_listing,
             sleep=sleep,
@@ -316,6 +367,7 @@ def _monitor_one_source(
         success = result.status == "ok"
         stats.fetch_failed = not success
         source_repo.touch_source_check(db, source_id, success=success)
+        _apply_health_transition(db, source_id, success=success)  # recovery must precede ingestion's source gate
 
         now = datetime.now(timezone.utc)
         listed_names: set[str] = set()
@@ -373,17 +425,18 @@ def run_source_monitor(
     budget = rematch_budget if rematch_budget is not None else RematchBudget(settings.max_alert_rematches_per_run)
     finished = False
     try:
-        sources = source_repo.get_active_sources(db, discovery_role=True, access_method="web")
+        sources = source_repo.get_monitorable_sources(db, discovery_role=True, access_method="web")
         for source_id in [source.id for source in sources]:
             stats = _SourceStats()
             try:
                 processed = _monitor_one_source(
                     db, run, source_id, stats, fetch=fetch, extract_listing=extract_listing, sleep=sleep
                 )
-            except Exception:  # noqa: BLE001 - one bad source must not stop the run
+            except Exception as exc:  # noqa: BLE001 - one bad source must not stop the run
                 logger.exception("source %s failed during monitoring", source_id)
                 db.rollback()
                 processed, stats.fetch_failed = True, True
+                _record_crashed_check(db, run, source_id, exc)
             if not processed:
                 continue
             _alert_step(db, run, stats, budget, alert_channels)

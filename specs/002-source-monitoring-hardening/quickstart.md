@@ -28,7 +28,7 @@ uv run alembic upgrade head   # includes the two new 002 migrations (source_regi
 
 1. Configure one source's fetch fixture to raise (simulated timeout) and another to succeed with zero changes.
 2. Trigger a run; `GET /sources/health` must show the first as `status=failing` (or `active` with a non-zero `consecutive_failures` before the N-failure threshold) with a non-null `last_checked_at` and `last_success_at` unchanged from before — never presented as "0 scholarships found."
-3. The second source's `GET /sources/{id}/fetch-log` entry shows `status=ok`, `items_found=0` — visibly distinct from the failing source's `status=fail` entry.
+3. The second source's `GET /sources/{id}/fetch-log` shows `status=ok` with `items_found` > 0 (listing extracted, zero new/changed scholarships) — visibly distinct from the failing source's `status=fail` entry. Note: a fetch that yields **zero grounded candidates** (empty listing / changed page structure) is deliberately recorded as `status=fail` (`listing extraction yielded 0 candidates`), never as `ok, items_found=0`, so it can never be read as "no scholarships found" (FR-HEALTH-2/5).
 
 ## US4 — Coverage analytics
 

@@ -136,6 +136,15 @@ class _FetchFailed(Exception):
         self.fetch_result = fetch_result
 
 
+def _gate_source(db: Session, source_id: uuid.UUID, allow_failing: bool):
+    """The Principle IV fetch gate. Default: active-only (001, unchanged).
+    `allow_failing=True` (monitoring recovery only, ADR-0008) also admits a
+    `failing` source; `pending` and `disabled` stay blocked either way."""
+    if allow_failing:
+        return source_repo.get_monitorable_source_by_id(db, source_id)
+    return source_repo.get_source_by_id(db, source_id)
+
+
 def fetch_official(
     db: Session,
     source_id: uuid.UUID,
@@ -147,8 +156,9 @@ def fetch_official(
     used_homepage_fallback: bool = False,
     monitoring_run_id: uuid.UUID | None = None,
     skip_failing_transition: bool = False,
+    allow_failing: bool = False,
 ) -> OfficialFetchResult:
-    source = source_repo.get_source_by_id(db, source_id)
+    source = _gate_source(db, source_id, allow_failing)
     if source is None:
         raise SourceNotApprovedError(f"source {source_id} is not an active, approved source")
 
@@ -311,6 +321,7 @@ def fetch_and_extract_listing(
     monitoring_run_id: uuid.UUID | None = None,
     bypass_cache: bool = False,
     skip_failing_transition: bool = False,
+    allow_failing: bool = False,
 ) -> ListingExtractionResult:
     """T135: fetch (`fetch_official` above) -> `extract_listing` -> shaped
     result, gated by a two-layer cache so a source isn't re-fetched/
@@ -323,7 +334,7 @@ def fetch_and_extract_listing(
     explicit `url` behaves exactly as in 001 (`(url, False)`, never resolved,
     never redirect-checked)."""
 
-    source = source_repo.get_source_by_id(db, source_id)
+    source = _gate_source(db, source_id, allow_failing)
     if source is None:
         raise SourceNotApprovedError(f"source {source_id} is not an active, approved source")
 
@@ -370,6 +381,7 @@ def fetch_and_extract_listing(
         used_homepage_fallback=used_homepage_fallback,
         monitoring_run_id=monitoring_run_id,
         skip_failing_transition=skip_failing_transition,
+        allow_failing=allow_failing,
     )
     if not fetch_result.success:
         return ListingExtractionResult(
