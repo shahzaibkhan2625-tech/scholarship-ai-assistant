@@ -15,6 +15,7 @@ from app.api.matching import router as matching_router
 from app.api.monitoring import router as monitoring_router
 from app.api.profile import router as profile_router
 from app.api.qa import router as qa_router
+from app.api.scholarships import router as scholarships_router
 from app.api.sources import router as sources_router
 from app.api.url_match import router as url_match_router
 
@@ -63,6 +64,7 @@ app.include_router(generation_router, tags=["generation"])
 app.include_router(monitoring_router, tags=["monitoring"])
 app.include_router(alerts_router, tags=["alerts"])
 app.include_router(coverage_router, tags=["coverage"])
+app.include_router(scholarships_router, tags=["scholarships"])
 
 
 @app.get("/health")

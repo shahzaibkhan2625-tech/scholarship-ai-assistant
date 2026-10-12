@@ -25,6 +25,13 @@ Failing sources stay scheduled (`allow_failing=True`); `pending`/`disabled` neve
 are. A crash after the fetch is recorded as a `FAIL` row for the run, so it is
 counted rather than reading as healthy.
 
+**Lifecycle (US5, ADR-0009):** a matched, grounded, open listing item from an approved
+source confirms the record (`scholarship_repo.mark_confirmed_by_monitoring`; CONFLICTING
+rows are never touched) BEFORE its transition is evaluated, so `newly_discovered` /
+`stale` / `source_unavailable` / `unverified` records land on `verified`. A field change
+in the same check wins: `updated` beats the verified exit. `run_source_monitor(now=...)`
+is a clock seam (default `datetime.now(timezone.utc)`) for deterministic tests.
+
 **FR-MON-3 coverage gap (named, not hidden):** only `deadline`,
 `funding_status` and `degree_level` changes are detectable
 (`services/listing_diff.py`). "Requirement" changes cannot be detected
@@ -41,6 +48,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Callable, Mapping
 
 from sqlalchemy.orm import Session
@@ -139,11 +147,14 @@ def _write_lifecycle(db: Session, scholarship: Scholarship, target: LifecycleSta
     return True
 
 
-def _expired_by_deadline(scholarship: Scholarship) -> bool:
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _expired_by_deadline(scholarship: Scholarship, now: datetime) -> bool:
     """EXPIRED is derived from the deadline (`compute_lifecycle_status`), so it
     is re-derived against the stored (post-update) deadline rather than being
     treated as terminal."""
-    now = datetime.now(timezone.utc)
     status = verification_service.compute_lifecycle_status(
         verification_service.VerificationInput(
             retrieved_at=scholarship.retrieved_at,
@@ -157,13 +168,20 @@ def _expired_by_deadline(scholarship: Scholarship) -> bool:
 
 
 def _matched_transition(
-    scholarship: Scholarship, listed: ListedState, *, changed: bool, changed_fields: frozenset[str] = frozenset()
+    scholarship: Scholarship,
+    listed: ListedState,
+    *,
+    changed: bool,
+    changed_fields: frozenset[str] = frozenset(),
+    now: datetime | None = None,
 ) -> LifecycleStatus | None:
     """UPDATED/CLOSED/REOPENED for a record found in the listing. The
     lifecycle service never emits UPDATED (that is this diff step's job), so a
     field change yields UPDATED unless the service says REOPENED. CLOSED is
     terminal (an explicit signal); EXPIRED is derived, so a deadline change
-    that moves it into the future lifts it to UPDATED."""
+    that moves it into the future lifts it to UPDATED. US5 Q4 (ADR-0009): when a
+    field change and a confirming re-sighting coincide, UPDATED wins over the
+    VERIFIED/UNVERIFIED exit."""
     target = lifecycle_service.evaluate_fetch_outcome(
         scholarship, FetchOutcome(fetch_succeeded=True, extraction_grounded=True, listed_state=listed)
     )
@@ -174,7 +192,7 @@ def _matched_transition(
     if scholarship.lifecycle_status == LifecycleStatus.CLOSED:
         return None
     if scholarship.lifecycle_status == LifecycleStatus.EXPIRED:
-        if "deadline" in changed_fields and not _expired_by_deadline(scholarship):
+        if "deadline" in changed_fields and not _expired_by_deadline(scholarship, now or _utcnow()):
             return LifecycleStatus.UPDATED
         return None
     return LifecycleStatus.UPDATED
@@ -186,6 +204,7 @@ def _detect_changes(
     result: ListingExtractionResult,
     stored: list[Scholarship],
     stats: _SourceStats,
+    now: datetime | None = None,
 ) -> tuple[set[uuid.UUID], set[str]]:
     """T179. Returns (grounded-and-seen scholarship ids, normalized names seen
     in the listing)."""
@@ -238,7 +257,11 @@ def _detect_changes(
         seen_ids.add(match.id)
 
         listed = ListedState.CLOSED if _is_explicit_closed(candidate) else ListedState.OPEN
-        target = _matched_transition(match, listed, changed=changed, changed_fields=frozenset(changed_fields))
+        if listed == ListedState.OPEN and scholarship_repo.mark_confirmed_by_monitoring(db, [match.id]):
+            db.refresh(match)  # US5 G1: confirmed BEFORE the transition reads verification_status
+        target = _matched_transition(
+            match, listed, changed=changed, changed_fields=frozenset(changed_fields), now=now
+        )
         wrote = _write_lifecycle(db, match, target)
         if changed or (wrote and target in (LifecycleStatus.CLOSED, LifecycleStatus.REOPENED)):
             stats.changes += 1
@@ -280,7 +303,15 @@ def _stale_sweep(
                     extraction_grounded=True,
                     listed_state=ListedState.ABSENT if may_close else None,
                 )
-                if _write_lifecycle(db, scholarship, lifecycle_service.evaluate_fetch_outcome(scholarship, outcome)):
+                target = lifecycle_service.evaluate_fetch_outcome(scholarship, outcome)
+                if target == LifecycleStatus.UNVERIFIED:
+                    # US5 G3: don't flap through UNVERIFIED when freshness would put it straight back.
+                    preview = SimpleNamespace(
+                        lifecycle_status=target, verification_status=scholarship.verification_status,
+                        last_verified_at=scholarship.last_verified_at,
+                    )
+                    target = lifecycle_service.evaluate_freshness(preview, source, now) or target
+                if _write_lifecycle(db, scholarship, target) and target == LifecycleStatus.CLOSED:
                     stats.changes += 1
         else:
             _write_lifecycle(
@@ -339,6 +370,7 @@ def _monitor_one_source(
     fetch: Callable[[str], FetchResult],
     extract_listing: Callable[..., ExtractListingOutput],
     sleep: Callable[[float], None] | None,
+    clock: Callable[[], datetime] = _utcnow,
 ) -> bool:
     """Returns False when the source was skipped (lock held / no longer
     active), True when it was processed."""
@@ -369,11 +401,11 @@ def _monitor_one_source(
         source_repo.touch_source_check(db, source_id, success=success)
         _apply_health_transition(db, source_id, success=success)  # recovery must precede ingestion's source gate
 
-        now = datetime.now(timezone.utc)
+        now = clock()
         listed_names: set[str] = set()
         if success:
             stored = scholarship_repo.list_for_source(db, source_id)
-            seen_ids, listed_names = _detect_changes(db, source, result, stored, stats)
+            seen_ids, listed_names = _detect_changes(db, source, result, stored, stats, now)
             scholarship_repo.mark_seen_verified(db, seen_ids, now)  # D4, before the sweep
 
         _stale_sweep(db, source, result, listed_names=listed_names, baseline=baseline, now=now, stats=stats)
@@ -416,6 +448,7 @@ def run_source_monitor(
     sleep: Callable[[float], None] | None = None,
     alert_channels: Mapping[str, NotificationChannel] | None = None,
     rematch_budget: RematchBudget | None = None,
+    now: Callable[[], datetime] | None = None,
 ) -> MonitoringRun:
     run = monitoring_repo.get_run(db, run_id) if run_id is not None else monitoring_repo.create_run(db, trigger)
     if run is None:
@@ -430,7 +463,8 @@ def run_source_monitor(
             stats = _SourceStats()
             try:
                 processed = _monitor_one_source(
-                    db, run, source_id, stats, fetch=fetch, extract_listing=extract_listing, sleep=sleep
+                    db, run, source_id, stats, fetch=fetch, extract_listing=extract_listing, sleep=sleep,
+                    clock=now or _utcnow,
                 )
             except Exception as exc:  # noqa: BLE001 - one bad source must not stop the run
                 logger.exception("source %s failed during monitoring", source_id)

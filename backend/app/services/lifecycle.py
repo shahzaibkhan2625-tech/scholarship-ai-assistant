@@ -36,6 +36,8 @@ LS = LifecycleStatus
 _STALE_ELIGIBLE = frozenset({LS.VERIFIED, LS.UNVERIFIED, LS.UPDATED, LS.REOPENED})
 _FAILED_FETCH_PRESERVES = frozenset({LS.SOURCE_UNAVAILABLE, LS.CLOSED, LS.EXPIRED})
 _RECOVERING = frozenset({LS.STALE, LS.SOURCE_UNAVAILABLE})
+# US5 G2 (ADR-0009): NEWLY_DISCOVERED also leaves on a grounded, open re-sighting.
+_EXITS_ON_OPEN_SIGHTING = _RECOVERING | {LS.NEWLY_DISCOVERED}
 
 
 class ListedState(StrEnum):
@@ -58,7 +60,9 @@ class _SourceLike(Protocol):
 class FetchOutcome:
     """What one monitoring fetch learned about one scholarship record.
 
-    `listed_state` None means "not evaluable for this record".
+    `listed_state` None means "not listed open and not closeable" (e.g. absent from
+    the listing while D2's close gate is not met): nothing is concluded about the
+    record itself.
     """
 
     fetch_succeeded: bool
@@ -107,10 +111,16 @@ def _decide(scholarship: _ScholarshipLike, outcome: FetchOutcome) -> LifecycleSt
         if current == LS.CLOSED:  # 5)
             return LS.REOPENED
         confirmed = scholarship.verification_status == VerificationStatus.VERIFIED
-        if current in _RECOVERING:  # 6) O-3
+        if current in _EXITS_ON_OPEN_SIGHTING:  # 6) O-3, 6b) US5 G2
             return LS.VERIFIED if confirmed else LS.UNVERIFIED
         if current == LS.UNVERIFIED and confirmed:  # 7)
             return LS.VERIFIED
+    elif listed is None and current in _RECOVERING:
+        # 9) US5 G3: a successful, grounded fetch that cannot close the record (absent
+        # from the listing, D2's gate not met) still proves the source is reachable, so a
+        # state premised on a failed fetch / elapsed window must not stay stuck. Nothing
+        # about the record was confirmed, hence UNVERIFIED (freshness re-evaluates it).
+        return LS.UNVERIFIED
     return None  # 8)
 
 

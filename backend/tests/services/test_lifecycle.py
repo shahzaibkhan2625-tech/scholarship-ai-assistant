@@ -194,6 +194,32 @@ def test_rule6_exit_to_unverified_when_not_confirmed(status, verification):
     assert evaluate_fetch_outcome(_sch(status, verification), OPEN) == LS.UNVERIFIED
 
 
+# --- rule 6b (US5 G2): NEWLY_DISCOVERED exits on a grounded, open re-sighting --
+
+
+def test_rule6b_newly_discovered_exits_to_verified_when_confirmed():
+    assert evaluate_fetch_outcome(_sch(LS.NEWLY_DISCOVERED, VS.VERIFIED), OPEN) == LS.VERIFIED
+
+
+@pytest.mark.parametrize("verification", [VS.UNVERIFIED, VS.CONFLICTING])
+def test_rule6b_newly_discovered_exits_to_unverified_when_not_confirmed(verification):
+    assert evaluate_fetch_outcome(_sch(LS.NEWLY_DISCOVERED, verification), OPEN) == LS.UNVERIFIED
+
+
+def test_rule6b_newly_discovered_is_untouched_without_an_open_grounded_sighting():
+    for outcome in (_out(listed=None), _out(grounded=False, listed=ListedState.OPEN), RETRYING):
+        assert evaluate_fetch_outcome(_sch(LS.NEWLY_DISCOVERED), outcome) is None
+
+
+# --- rule 9 (US5 G3): successful grounded fetch, record absent but not closeable --
+
+
+@pytest.mark.parametrize("status", [LS.STALE, LS.SOURCE_UNAVAILABLE])
+@pytest.mark.parametrize("verification", list(VS))
+def test_rule9_absent_but_unclosable_returns_stuck_states_to_unverified(status, verification):
+    assert evaluate_fetch_outcome(_sch(status, verification), _out(listed=None)) == LS.UNVERIFIED
+
+
 # --- rule 7 -------------------------------------------------------------------
 
 
@@ -208,12 +234,12 @@ def test_rule7_unverified_stays_when_not_confirmed():
 # --- rule 8 (everything else) -------------------------------------------------
 
 
-@pytest.mark.parametrize("status", ALL_STATUSES)
+@pytest.mark.parametrize("status", [s for s in ALL_STATUSES if s not in (LS.STALE, LS.SOURCE_UNAVAILABLE)])
 def test_rule8_listed_state_none_is_not_evaluable(status):
     assert evaluate_fetch_outcome(_sch(status), _out(listed=None)) is None
 
 
-@pytest.mark.parametrize("status", [LS.NEWLY_DISCOVERED, LS.VERIFIED, LS.UPDATED, LS.REOPENED, LS.EXPIRED])
+@pytest.mark.parametrize("status", [LS.VERIFIED, LS.UPDATED, LS.REOPENED, LS.EXPIRED])
 def test_rule8_open_listing_leaves_these_unchanged(status):
     assert evaluate_fetch_outcome(_sch(status), OPEN) is None
 
@@ -232,7 +258,7 @@ def test_never_updated_never_newly_discovered_never_expired_never_echoes_current
         assert result != status
 
 
-@pytest.mark.parametrize("status", [LS.STALE, LS.SOURCE_UNAVAILABLE])
+@pytest.mark.parametrize("status", [LS.NEWLY_DISCOVERED, LS.STALE, LS.SOURCE_UNAVAILABLE])
 @pytest.mark.parametrize("verification", list(VS))
 def test_exit_from_stale_or_unavailable_lands_only_on_verified_or_unverified(status, verification):
     assert evaluate_fetch_outcome(_sch(status, verification), OPEN) in (LS.VERIFIED, LS.UNVERIFIED)

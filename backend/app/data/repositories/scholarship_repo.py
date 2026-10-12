@@ -88,6 +88,24 @@ def mark_seen_verified(db: Session, scholarship_ids: Iterable[uuid.UUID], now: d
     return result.rowcount or 0
 
 
+def mark_confirmed_by_monitoring(db: Session, scholarship_ids: Iterable[uuid.UUID]) -> int:
+    """002 US5 G1 / ADR-0009: a matched, grounded, open listing item from an approved
+    registry source confirms the record against its official source. Sets
+    `verification_status = VERIFIED` for the given ids, never touching CONFLICTING rows
+    (a disagreement needs resolution, not a re-sighting). Returns rows actually changed."""
+    ids = list(scholarship_ids)
+    if not ids:
+        return 0
+    result = db.execute(
+        update(Scholarship)
+        .where(Scholarship.id.in_(ids), Scholarship.verification_status == VerificationStatus.UNVERIFIED)
+        .values(verification_status=VerificationStatus.VERIFIED)
+        .execution_options(synchronize_session="fetch")
+    )
+    db.commit()
+    return result.rowcount or 0
+
+
 def count_verified_opportunities(db: Session) -> int:
     """`verification_status == verified`, excluding closed/expired records (002 US4)."""
     stmt = (

@@ -145,3 +145,30 @@ def test_concurrent_create_run_if_none_running_yields_exactly_one_run(db_session
                 if row is not None:
                     cleanup.delete(row)
             cleanup.commit()
+
+
+def test_mark_confirmed_by_monitoring_sets_verified_only_for_given_non_conflicting_rows(db_session_factory):
+    """002 US5 G1 / ADR-0009: narrow monitoring confirmation, same shape as mark_seen_verified."""
+    from app.models.scholarship import VerificationStatus as VS
+
+    session = db_session_factory()
+    rows = {}
+    for label, status in (("unv", VS.UNVERIFIED), ("ver", VS.VERIFIED), ("con", VS.CONFLICTING), ("not", VS.UNVERIFIED)):
+        s = Scholarship(
+            name=f"Confirm {label} {uuid.uuid4().hex[:6]}", official_scholarship_url="https://x.example.com",
+            verification_status=status,
+        )
+        session.add(s)
+        rows[label] = s
+    session.commit()
+
+    changed = scholarship_repo.mark_confirmed_by_monitoring(session, [rows[k].id for k in ("unv", "ver", "con")])
+    assert changed == 1  # only unv actually changed; ver already verified; con is CONFLICTING and untouched
+    assert scholarship_repo.mark_confirmed_by_monitoring(session, []) == 0
+    for s in rows.values():
+        session.refresh(s)
+    assert rows["unv"].verification_status == VS.VERIFIED
+    assert rows["ver"].verification_status == VS.VERIFIED
+    assert rows["con"].verification_status == VS.CONFLICTING
+    assert rows["not"].verification_status == VS.UNVERIFIED
+    session.close()

@@ -20,6 +20,8 @@ tags:
     description: "FR-COVAN — coverage analytics"
   - name: alerts
     description: "FR-ALERT — owner notifications"
+  - name: scholarships
+    description: "FR-LIFECYCLE — read a record's single lifecycle state"
   - name: candidate-validation
     description: "FR-CANDVAL — automated candidate-source pre-checks"
   - name: infra
@@ -129,6 +131,26 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CoverageSnapshot' }
+
+  # ---------------------------------------------------------------------
+  # Record lifecycle (FR-LIFECYCLE) — additive; 001 has no GET on this path
+  # ---------------------------------------------------------------------
+  /scholarships/{scholarship_id}:
+    get:
+      tags: [scholarships]
+      summary: One scholarship's single lifecycle state (read-only, minimal)
+      parameters:
+        - in: path
+          name: scholarship_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The record's lifecycle view
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScholarshipLifecycleView' }
+        '404': { description: scholarship_id not found }
 
   # ---------------------------------------------------------------------
   # Alerts (FR-ALERT)
@@ -278,6 +300,20 @@ components:
         fetched_url: { type: string, nullable: true }
         used_homepage_fallback: { type: boolean }
         monitoring_run_id: { type: string, format: uuid, nullable: true }
+
+    ScholarshipLifecycleView:
+      type: object
+      required: [id, name, lifecycle_status, verification_status]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        lifecycle_status:
+          type: string
+          enum: [newly_discovered, verified, unverified, updated, expired, closed, reopened, stale, source_unavailable]
+          description: "FR-LIFECYCLE-1 — exactly one of the nine states"
+        verification_status: { type: string, enum: [verified, unverified, conflicting] }
+        last_verified_at: { type: string, format: date-time, nullable: true }
+        deadline: { type: string, format: date, nullable: true }
 
     CoverageSnapshot:
       type: object

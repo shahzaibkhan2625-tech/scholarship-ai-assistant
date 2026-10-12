@@ -120,9 +120,10 @@ def env(db_session_factory, monkeypatch):
         scoped_ids.add(source.id)
         return source
 
-    def run():
+    def run(now=None):
         return run_source_monitor(
-            session, trigger=MonitoringTrigger.MANUAL, fetch=e.fetcher, extract_listing=e.listing, sleep=lambda _d: None
+            session, trigger=MonitoringTrigger.MANUAL, fetch=e.fetcher, extract_listing=e.listing,
+            sleep=lambda _d: None, now=now,
         )
 
     def stored(source):
@@ -370,7 +371,9 @@ def test_failed_fetch_keeps_source_active_marks_unavailable_and_recovers_next_ru
     env.fetcher.failing_hosts.clear()  # retried on the next run regardless of the last outcome
     env.run()
     env.session.refresh(scholarship)
-    assert scholarship.lifecycle_status == LifecycleStatus.UNVERIFIED
+    # US5 (ADR-0009): the successful re-sighting of an approved source's open listing confirms the record.
+    assert scholarship.lifecycle_status == LifecycleStatus.VERIFIED
+    assert scholarship.verification_status == VerificationStatus.VERIFIED
 
 
 def test_empty_extraction_fails_the_source_run_but_touches_no_records_and_keeps_source_active(env):
@@ -658,3 +661,121 @@ def test_pending_and_disabled_sources_are_never_fetched_even_for_recovery(env):
     assert run.sources_processed == 1
     assert _status(env, failing) == SourceStatus.ACTIVE and _status(env, pending) == SourceStatus.PENDING
     assert _status(env, disabled) == SourceStatus.DISABLED
+
+
+# --- US5: lifecycle confirmation and gap closure (ADR-0009) ----------------------
+
+
+def _seed_one(env, label="Alpha", **source_overrides):
+    source = env.make_source(**source_overrides)
+    env.listing.by_host[source.domain] = [_cand(_name(env, label))]
+    env.run()
+    return source, env.stored(source)[_name(env, label)]
+
+
+def test_run_accepts_a_clock_and_uses_it_for_freshness(env):
+    source, scholarship = _seed_one(env)
+    fake_now = datetime.now(timezone.utc) + timedelta(days=30)
+    env.run(now=lambda: fake_now)
+    env.session.refresh(scholarship)
+    assert scholarship.last_verified_at == fake_now
+
+
+def test_default_clock_is_unchanged_when_no_seam_is_passed():
+    import inspect
+
+    assert inspect.signature(run_source_monitor).parameters["now"].default is None
+
+
+def test_newly_discovered_record_exits_on_a_matched_open_resighting_and_is_confirmed(env):
+    source, scholarship = _seed_one(env)
+    assert scholarship.lifecycle_status == LifecycleStatus.NEWLY_DISCOVERED
+    env.run()
+    env.session.refresh(scholarship)
+    assert scholarship.verification_status == VerificationStatus.VERIFIED
+    assert scholarship.lifecycle_status == LifecycleStatus.VERIFIED
+
+
+def test_conflicting_record_is_never_confirmed_by_monitoring(env):
+    source, scholarship = _seed_one(env)
+    scholarship.verification_status = VerificationStatus.CONFLICTING
+    scholarship.lifecycle_status = LifecycleStatus.STALE
+    env.session.commit()
+    env.run()
+    env.session.refresh(scholarship)
+    assert scholarship.verification_status == VerificationStatus.CONFLICTING
+    assert scholarship.lifecycle_status == LifecycleStatus.UNVERIFIED  # leaves stale, never lands on verified
+
+
+def test_updated_wins_over_the_verified_exit_when_a_field_change_and_resighting_coincide(env):
+    """Q4 (ADR-0009): pinned precedence - a changed deadline on a stale record yields UPDATED, not VERIFIED."""
+    source, scholarship = _seed_one(env)
+    scholarship.lifecycle_status = LifecycleStatus.STALE
+    scholarship.verification_status = VerificationStatus.VERIFIED
+    env.session.commit()
+    env.listing.by_host[source.domain] = [_cand(_name(env, "Alpha"), deadline="2030-06-30")]
+    env.run()
+    env.session.refresh(scholarship)
+    assert scholarship.deadline.isoformat() == "2030-06-30"
+    assert scholarship.lifecycle_status == LifecycleStatus.UPDATED
+
+
+@pytest.mark.parametrize("stuck", [LifecycleStatus.SOURCE_UNAVAILABLE, LifecycleStatus.STALE])
+def test_absent_stuck_record_returns_to_unverified_inside_the_window(env, stuck):
+    source = env.make_source()
+    env.listing.by_host[source.domain] = [_cand(_name(env, "Alpha")), _cand(_name(env, "Beta"))]
+    env.run()
+    alpha = env.stored(source)[_name(env, "Alpha")]
+    alpha.lifecycle_status = stuck
+    alpha.last_verified_at = datetime.now(timezone.utc) - timedelta(days=1)  # well inside the window
+    env.session.commit()
+    env.listing.by_host[source.domain] = [_cand(_name(env, "Beta"))]  # Alpha absent; no listing_complete -> unclosable
+    run = env.run()
+    env.session.refresh(alpha)
+    assert alpha.lifecycle_status == LifecycleStatus.UNVERIFIED
+    assert run.changes_detected == 0  # a stuck-state recovery is not a listing change
+
+
+def test_absent_stale_record_past_its_window_stays_stale_and_no_change_is_counted(env):
+    source = env.make_source()
+    env.listing.by_host[source.domain] = [_cand(_name(env, "Alpha")), _cand(_name(env, "Beta"))]
+    env.run()
+    alpha = env.stored(source)[_name(env, "Alpha")]
+    alpha.lifecycle_status = LifecycleStatus.STALE
+    alpha.last_verified_at = datetime.now(timezone.utc) - timedelta(days=400)
+    env.session.commit()
+    env.listing.by_host[source.domain] = [_cand(_name(env, "Beta"))]
+    run = env.run()
+    env.session.refresh(alpha)
+    assert alpha.lifecycle_status == LifecycleStatus.STALE
+    assert run.changes_detected == 0
+
+
+def test_absent_source_unavailable_past_its_window_goes_straight_to_stale(env):
+    source = env.make_source()
+    env.listing.by_host[source.domain] = [_cand(_name(env, "Alpha")), _cand(_name(env, "Beta"))]
+    env.run()
+    alpha = env.stored(source)[_name(env, "Alpha")]
+    alpha.lifecycle_status = LifecycleStatus.SOURCE_UNAVAILABLE
+    alpha.last_verified_at = datetime.now(timezone.utc) - timedelta(days=400)
+    env.session.commit()
+    env.listing.by_host[source.domain] = [_cand(_name(env, "Beta"))]
+    env.run()
+    env.session.refresh(alpha)
+    assert alpha.lifecycle_status == LifecycleStatus.STALE
+
+
+def test_every_monitor_lifecycle_write_goes_through_the_one_helper():
+    """T214: `_write_lifecycle` is the only function in graph.py that assigns lifecycle_status."""
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path(monitor_graph.__file__).read_text(encoding="utf-8"))
+    writers = set()
+    for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
+        for sub in ast.walk(fn):
+            if isinstance(sub, (ast.Assign, ast.AugAssign)):
+                targets = sub.targets if isinstance(sub, ast.Assign) else [sub.target]
+                if any(isinstance(t, ast.Attribute) and t.attr == "lifecycle_status" for t in targets):
+                    writers.add(fn.name)
+    assert writers == {"_write_lifecycle"}
