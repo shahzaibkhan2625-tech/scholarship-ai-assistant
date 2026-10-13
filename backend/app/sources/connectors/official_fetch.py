@@ -254,7 +254,7 @@ def _last_successful_extraction(db: Session, source_id: uuid.UUID):
     LISTING-EXTRACTION success (status OK *and* `items_found` populated) for
     this source — not just a raw HTTP-200, which `fetch_official` above logs
     on every attempt regardless of whether extraction ever ran.
-    `get_fetch_logs_for_source` is already ordered `started_at desc`."""
+    `get_fetch_logs_for_source` is already ordered `started_at desc, id desc` (deterministic on a tie)."""
     for log in source_repo.get_fetch_logs_for_source(db, source_id):
         if log.status == FetchStatus.OK and log.items_found is not None:
             return log

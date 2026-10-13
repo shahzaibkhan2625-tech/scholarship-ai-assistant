@@ -57,6 +57,7 @@ class FetchLogSnapshot:
     status: str  # FetchStatus value
     started_at: datetime
     monitoring_run_id: uuid.UUID | None = None
+    id: uuid.UUID | None = None  # tiebreak when two rows share a `started_at`
 
 
 _FAILING_STATUSES = {FetchStatus.FAIL.value, FetchStatus.TIMEOUT.value}
@@ -98,7 +99,10 @@ def compute_coverage_summary(
     currently_failing_ids: set[uuid.UUID] = set()
 
     for source in sources:
-        logs = sorted(logs_by_source.get(source.id, []), key=lambda entry: entry.started_at)
+        logs = sorted(
+            logs_by_source.get(source.id, []),
+            key=lambda entry: (entry.started_at, entry.id.int if entry.id is not None else 0),
+        )
         if not logs:
             continue
         sources_checked += 1
@@ -174,6 +178,7 @@ def get_coverage_summary(db: Session) -> CoverageSummary:
             status=_enum_value(log.status),
             started_at=log.started_at,
             monitoring_run_id=log.monitoring_run_id,
+            id=log.id,
         )
         for log in rows.values()
     ]

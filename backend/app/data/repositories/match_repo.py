@@ -18,7 +18,7 @@ def create(db: Session, match: Match) -> Match:
 
 
 def list_for_user(db: Session, user_id: uuid.UUID) -> list[Match]:
-    stmt = select(Match).where(Match.user_id == user_id).order_by(Match.created_at.desc())
+    stmt = select(Match).where(Match.user_id == user_id).order_by(Match.created_at.desc(), Match.id.desc())
     return list(db.execute(stmt).scalars().all())
 
 

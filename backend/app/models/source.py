@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, false, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, false, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -166,6 +166,16 @@ class SourceFetchLog(Base):
     monitoring_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("monitoring_runs.id"), nullable=True, index=True
     )
+
+
+# US8 B2: serves the newest-first per-source reads (coverage DISTINCT ON, recent logs,
+# retention floors). Migration f2b8d4a6c1e3.
+Index(
+    "ix_source_fetch_log_source_started",
+    SourceFetchLog.source_id,
+    SourceFetchLog.started_at.desc(),
+    SourceFetchLog.id.desc(),
+)
 
 
 class ScholarshipSource(Base):

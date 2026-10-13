@@ -320,16 +320,20 @@ def reactivate_source(db: Session, source_id: uuid.UUID) -> SourceRegistry | Non
 _FAILURE_SCAN_RUNS = 100
 
 
-def _failure_streaks(db: Session, source_ids: list[uuid.UUID] | None = None) -> dict[uuid.UUID, int]:
-    """ADR-0008: consecutive failed monitoring-RUN outcomes per source (absent = 0).
+def ranked_monitoring_runs(source_ids: list[uuid.UUID] | None = None):
+    """ADR-0008 / ADR-0011: THE definition of a source's "recent monitoring runs",
+    shared by health (`_failure_streaks`) and retention so they cannot drift.
 
-    One outcome per (source, run): failed if ANY of that source's rows in the run is
-    not `OK` (a failed check is an `OK` HTTP row plus a `FAIL` row). Rows with a NULL
-    `monitoring_run_id` (discovery / ingestion stage rows) are ignored. Runs are
-    ordered newest-first by their latest row; a single set-based query."""
+    Subquery with one row per (source, run): `source_id`, `monitoring_run_id`,
+    `failed`, and `rn` (1 = newest). One outcome per (source, run): failed if ANY of
+    that source's rows in the run is not `OK` (a failed check is an `OK` HTTP row plus
+    a `FAIL` row). Rows with a NULL `monitoring_run_id` (discovery / ingestion stage
+    rows) are ignored. Runs rank newest-first by their latest row; the run id breaks
+    a timestamp tie so the ranking is deterministic."""
     per_run = (
         select(
             SourceFetchLog.source_id.label("source_id"),
+            SourceFetchLog.monitoring_run_id.label("monitoring_run_id"),
             func.max(SourceFetchLog.started_at).label("last_at"),
             func.bool_or(SourceFetchLog.status != FetchStatus.OK).label("failed"),
         )
@@ -339,11 +343,23 @@ def _failure_streaks(db: Session, source_ids: list[uuid.UUID] | None = None) -> 
     if source_ids is not None:
         per_run = per_run.where(SourceFetchLog.source_id.in_(source_ids))
     per_run = per_run.subquery()
-    ranked = select(
+    return select(
         per_run.c.source_id,
+        per_run.c.monitoring_run_id,
         per_run.c.failed,
-        func.row_number().over(partition_by=per_run.c.source_id, order_by=per_run.c.last_at.desc()).label("rn"),
+        func.row_number()
+        .over(
+            partition_by=per_run.c.source_id,
+            order_by=(per_run.c.last_at.desc(), per_run.c.monitoring_run_id.desc()),
+        )
+        .label("rn"),
     ).subquery()
+
+
+def _failure_streaks(db: Session, source_ids: list[uuid.UUID] | None = None) -> dict[uuid.UUID, int]:
+    """ADR-0008: consecutive failed monitoring-RUN outcomes per source (absent = 0),
+    over `ranked_monitoring_runs`; a single set-based query."""
+    ranked = ranked_monitoring_runs(source_ids)
     rows = db.execute(
         select(ranked.c.source_id, ranked.c.failed)
         .where(ranked.c.rn <= _FAILURE_SCAN_RUNS)
@@ -411,7 +427,7 @@ def get_fetch_logs_for_source(db: Session, source_id: uuid.UUID) -> list[SourceF
     stmt = (
         select(SourceFetchLog)
         .where(SourceFetchLog.source_id == source_id)
-        .order_by(SourceFetchLog.started_at.desc())
+        .order_by(SourceFetchLog.started_at.desc(), SourceFetchLog.id.desc())  # id: deterministic on a timestamp tie
     )
     return list(db.execute(stmt).scalars().all())
 

@@ -33,7 +33,7 @@ def list_for_user(db: Session, user_id: uuid.UUID, *, unread_only: bool = False)
     stmt = select(Alert).where(Alert.user_id == user_id)
     if unread_only:
         stmt = stmt.where(Alert.read_at.is_(None))
-    return list(db.execute(stmt.order_by(Alert.created_at.desc())).scalars().all())
+    return list(db.execute(stmt.order_by(Alert.created_at.desc(), Alert.id.desc())).scalars().all())
 
 
 def get_for_user(db: Session, user_id: uuid.UUID, alert_id: uuid.UUID) -> Alert | None:

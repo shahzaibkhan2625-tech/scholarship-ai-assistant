@@ -56,6 +56,14 @@ def _rev_b() -> Path:
     return candidates[0]
 
 
+def _rev_c() -> Path:
+    """US8 B2: the composite-index revision on top of revision (b)."""
+    b_rev = _assigned_str(_parse(_rev_b()), "revision")
+    candidates = [p for p in _children_of(b_rev) if "add_source_fetch_log_composite_index" in p.name]
+    assert len(candidates) == 1, "expected exactly one '*_add_source_fetch_log_composite_index.py' on top of revision (b)"
+    return candidates[0]
+
+
 def _func(tree: ast.Module, name: str) -> ast.FunctionDef:
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == name:
@@ -107,10 +115,17 @@ def test_exactly_one_head():
     parents = {down for _, down in revs.values() if down}
     heads = [rev for rev in revs if rev not in parents]
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == _assigned_str(_parse(_rev_b()), "revision")
+    assert heads[0] == _assigned_str(_parse(_rev_c()), "revision")  # (c) = US8 B2 index, on top of (b)
 
 
-@pytest.mark.parametrize("which", [_rev_a, _rev_b])
+def test_revision_c_chains_from_revision_b_and_is_one_index_only():
+    tree = _parse(_rev_c())
+    assert _assigned_str(tree, "down_revision") == _assigned_str(_parse(_rev_b()), "revision")
+    ops = [(name, _key(name, call)) for name, call in _op_calls(_func(tree, "upgrade"))]
+    assert ops == [("create_index", ("index", "ix_source_fetch_log_source_started"))]
+
+
+@pytest.mark.parametrize("which", [_rev_a, _rev_b, _rev_c])
 def test_upgrade_is_additive_only(which):
     upgrade = _func(_parse(which()), "upgrade")
     ops = [name for name, _ in _op_calls(upgrade)]
@@ -132,7 +147,7 @@ def _key(name: str, call: ast.Call):
     raise AssertionError(f"unexpected op {name}")
 
 
-@pytest.mark.parametrize("which", [_rev_a, _rev_b])
+@pytest.mark.parametrize("which", [_rev_a, _rev_b, _rev_c])
 def test_every_upgrade_has_a_matching_downgrade(which):
     tree = _parse(which())
     up = _op_calls(_func(tree, "upgrade"))

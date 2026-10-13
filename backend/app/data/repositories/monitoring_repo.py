@@ -45,7 +45,7 @@ def get_run(db: Session, run_id: uuid.UUID) -> MonitoringRun | None:
 
 
 def list_runs(db: Session, limit: int = 20) -> list[MonitoringRun]:
-    stmt = select(MonitoringRun).order_by(MonitoringRun.started_at.desc()).limit(limit)
+    stmt = select(MonitoringRun).order_by(MonitoringRun.started_at.desc(), MonitoringRun.id.desc()).limit(limit)
     return list(db.execute(stmt).scalars().all())
 
 
@@ -53,7 +53,7 @@ def get_fetch_logs_for_run(db: Session, run_id: uuid.UUID) -> list[SourceFetchLo
     stmt = (
         select(SourceFetchLog)
         .where(SourceFetchLog.monitoring_run_id == run_id)
-        .order_by(SourceFetchLog.started_at.asc())
+        .order_by(SourceFetchLog.started_at.asc(), SourceFetchLog.id.asc())
     )
     return list(db.execute(stmt).scalars().all())
 

@@ -4,6 +4,9 @@ APScheduler 3.x `BackgroundScheduler`: one interval job, `max_instances=1` and
 `coalesce=True` so a slow run never overlaps itself and missed ticks collapse
 into one. Each tick runs `run_source_monitor(trigger=SCHEDULED)` on its own
 `SessionLocal()` session. `MONITORING_INTERVAL_MINUTES <= 0` disables it.
+
+T230: a second job prunes `source_fetch_log` daily (03:00 UTC, same guards). It is
+coupled to the monitoring switch: no scheduler, no retention (no extra setting).
 """
 
 import logging
@@ -16,9 +19,10 @@ from app.models.monitoring import MonitoringTrigger
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["JOB_ID", "build_scheduler", "start_scheduler", "stop_scheduler"]
+__all__ = ["JOB_ID", "RETENTION_JOB_ID", "build_scheduler", "start_scheduler", "stop_scheduler"]
 
 JOB_ID = "source_monitor"
+RETENTION_JOB_ID = "fetch_log_retention"
 
 _scheduler: BackgroundScheduler | None = None
 _lock = threading.Lock()
@@ -35,8 +39,19 @@ def _run_scheduled_monitor() -> None:
             logger.exception("scheduled source monitoring run failed")
 
 
+def _run_scheduled_retention() -> None:
+    from app.data.repositories.db import SessionLocal
+    from app.services import retention
+
+    with SessionLocal() as session:
+        try:
+            retention.prune_fetch_log(session)  # settings defaults, every source
+        except Exception:  # noqa: BLE001 - a failed tick (e.g. Neon cold start) retries next day
+            logger.exception("scheduled fetch-log retention failed")
+
+
 def build_scheduler(interval_minutes: int) -> BackgroundScheduler | None:
-    """Returns an unstarted scheduler with the monitoring job registered, or
+    """Returns an unstarted scheduler with the monitoring + retention jobs registered, or
     `None` when `interval_minutes <= 0` (disabled)."""
     if interval_minutes <= 0:
         return None
@@ -48,6 +63,16 @@ def build_scheduler(interval_minutes: int) -> BackgroundScheduler | None:
         id=JOB_ID,
         max_instances=1,
         coalesce=True,
+    )
+    scheduler.add_job(
+        _run_scheduled_retention,
+        trigger="cron",
+        hour=3,
+        minute=0,
+        id=RETENTION_JOB_ID,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3 * 3600,
     )
     return scheduler
 
