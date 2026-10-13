@@ -79,14 +79,20 @@ Adding a future channel (push/SMS/webhook, explicitly out of scope per spec Assu
 
 ## Decision 6 — Candidate-source validation (FR-CANDVAL) checks
 
-**Decision**: `services/candidate_validation.py` (new, deterministic, no LLM) runs three checks against a `candidate_sources` row and persists the result as a new `candidate_source_validations` row (not overwritten in place, so FR-CANDVAL/Edge-Cases' "recency is shown, not stale-as-current" is satisfied by querying the latest row rather than losing history):
+**Decision**: `services/candidate_validation.py` (new; **not fully LLM-free** — see the correction note below) runs three checks against a `candidate_sources` row and persists the result as a new `candidate_source_validations` row (not overwritten in place, so FR-CANDVAL/Edge-Cases' "recency is shown, not stale-as-current" is satisfied by querying the latest row rather than losing history):
 - **Reachability** — reuses `app/tools/web_fetch.py::fetch_url` (already used by `official_fetch.py`) against the candidate's `url`; pass/fail + HTTP status.
 - **Extractability** — reuses `app/tools/extract_listing.py::extract_listing_from_page` (already used by `official_fetch.py::fetch_and_extract_listing`) against the fetched content; pass/fail on `accepted_count > 0`.
-- **Official-source signals** — reuses the domain-pattern/keyword heuristics already written for `app/tools/detect_candidate_links.py` (gov/edu TLD patterns, institutional keyword matches) applied to the candidate's own domain/content, extended with a couple of additional heuristic checks (stated-affiliation text match) as pure functions in the same module — advisory only, per spec Assumptions ("heuristic assistive signals ... not a substitute for human judgment").
+- **Official-source signals** — pure functions written fresh in `services/candidate_validation.py` (domain-pattern match for `.gov` / `.edu` / `.ac.*`-style second levels, https, the candidate's recorded `matched_keyword`, and a deterministic stated-affiliation text match on `council`, `foundation`, `government of`, `institute`, `ministry`, `university`, reported as matched terms only). Advisory only, per spec Assumptions ("heuristic assistive signals ... not a substitute for human judgment").
 
 This never writes to `source_registry` and never flips `candidate_sources.status` — `source_repo.approve_candidate_source`/`reject_candidate_source` (existing, unchanged) remain the only human-gated promotion path (FR-CANDVAL-2/3/4, Principle IV, unchanged from 001).
 
-**Rationale**: every primitive these three checks need (`fetch_url`, `extract_listing_from_page`, the candidate-link heuristics) already exists in `app/tools/`; the automation is a thin, deterministic composition of existing tools plus a new persistence row for the result, not new technology.
+**Correction (US7 Phase A, ADR-0010):** two statements in the original decision were wrong.
+1. *"Deterministic, no LLM."* Extractability calls `extract_listing_from_page`, which makes **one LLM call per validated candidate** (only its grounding check is deterministic). That cost is why the monitor-run trigger is capped (`MAX_CANDIDATE_VALIDATIONS_PER_RUN`, default 15) and re-checks are spaced (`CANDIDATE_VALIDATION_RECHECK_DAYS`, default 7).
+2. *"Reuses the domain-pattern heuristics in `detect_candidate_links.py`."* That module has only a scholarship-keyword list and a social/infra denylist, no TLD patterns. The only TLD logic in the repo is in the older `source_validate` workflow (`.gov/.edu/.ac.uk/.org`, with `.org` treated as trusted, which is too loose). The signals are therefore written fresh in the new service, with `.org` reported but never counted as official.
+
+Reachability also gains an SSRF guard (ADR-0010), which this section did not originally mention.
+
+**Rationale**: the fetch and extraction primitives (`fetch_url`, `extract_listing_from_page`) already exist in `app/tools/`; the automation is a thin composition of them plus new pure signal heuristics and a new persistence row, not new technology.
 
 ---
 

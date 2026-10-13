@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     health_window_n: int = Field(default=5, ge=1, alias="HEALTH_WINDOW_N")
     rate_limit_per_minute: int = Field(default=120, ge=1, alias="RATE_LIMIT_PER_MINUTE")
 
+    # Candidate-source pre-checks (US7, ADR-0010). Consumed by the monitor-run
+    # trigger (T244, deferred); defined here so the service and tests share them.
+    candidate_validation_recheck_days: int = Field(default=7, ge=1, alias="CANDIDATE_VALIDATION_RECHECK_DAYS")
+    max_candidate_validations_per_run: int = Field(default=15, ge=1, alias="MAX_CANDIDATE_VALIDATIONS_PER_RUN")
+
     @field_validator("qdrant_url", "qdrant_api_key", "gemini_api_key")
     @classmethod
     def _strip_whitespace(cls, value: str | None) -> str | None:

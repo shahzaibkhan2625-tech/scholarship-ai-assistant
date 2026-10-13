@@ -230,6 +230,8 @@
 **Independent test**: quickstart US8 steps 1–8.
 **Note**: tasks touching `main.py`, `graph.py`, `scheduler.py` extend files edited by earlier stories and therefore run after them.
 
+> **Carry-forward (from US7, ADR-0010):** SSRF guard in `services/candidate_validation.py` has a known limitation — `fetch_url` follows redirects internally, so a redirect to a non-public address is requested before the post-redirect check runs. The guarantee is that such content is discarded, not that the request is never sent. A full fix needs a redirect-aware fetch in the shared `web_fetch` tool — out of scope here, consider for US8 hardening if a stricter guarantee is ever needed.
+
 ### Tests first
 
 - [ ] T216 [P] [US8] Write failing tests: requests beyond `RATE_LIMIT_PER_MINUTE` from one client IP get `429` with a clear JSON body and `Retry-After`; a second client IP is unaffected; the bucket refills — `backend/tests/core/test_rate_limit.py` (NEW) — Satisfies: NFR-HARDEN-2, US8 Scenario 2, SC-007
@@ -265,19 +267,21 @@
 **Goal**: advisory reachability / extractability / official-signal results shown to the reviewer; human approval remains the only promotion path.
 **Independent test**: surface a candidate; `GET /sources/candidates/{id}/validations` has a populated row; candidate has no `source_registry` row regardless of results; a failed-check candidate can still be approved via the unchanged 001 endpoint (quickstart US7).
 
+> **Carry-forward (US7 → US8 kickoff):** US7's T244 (workflow trigger) and the workflow half of T240 were deferred pending T236 — wire them in alongside US8's `graph.py` work. Settings `CANDIDATE_VALIDATION_RECHECK_DAYS=7` and `MAX_CANDIDATE_VALIDATIONS_PER_RUN=15` already exist. Step requirements: read pending candidates lacking a validation or older than the recheck window, **end the read transaction before network/LLM calls**, validate each via `candidate_validation.validate_candidate`, commit per candidate, no advisory lock, log-and-continue on any exception, never touch candidate status. See ADR-0010.
+
 ### Tests first
 
-- [ ] T238 [US7] Write failing service tests: reachability via the ungated low-level `app.tools.web_fetch.fetch_url` (candidates are not registry sources, so the `source_id`-gated `official_fetch` must NOT be used); extractability via the existing `extract_listing` tool; official-signal heuristics (domain patterns such as `.gov`, `.edu`, `.ac.*`, keyword/affiliation matches) stored as advisory JSON, never a pass/fail gate; re-running appends a new row and the latest by `checked_at` is "current"; an AST test that the module never calls `approve_candidate_source`, `reject_candidate_source`, `upsert_source_by_domain`, or writes `SourceRegistry`/`CandidateSource.status` — `backend/tests/services/test_candidate_validation.py` (NEW) — Satisfies: FR-CANDVAL-1..3, Edge Case "candidate characteristics change"
-- [ ] T239 [P] [US7] Write failing API tests: history newest-first, 404 on unknown candidate; a candidate failing a check can still be approved through the existing approve endpoint (FR-CANDVAL-4); an all-pass candidate can be rejected; a candidate with all-pass results has no `source_registry` row until approved (SC-006) — `backend/tests/api/test_candidate_validations_api.py` (NEW) — Satisfies: FR-CANDVAL-2/3/4, US7 Scenarios 2–5
+- [x] T238 [US7] Write failing service tests: reachability via the ungated low-level `app.tools.web_fetch.fetch_url` (candidates are not registry sources, so the `source_id`-gated `official_fetch` must NOT be used); extractability via the existing `extract_listing` tool; official-signal heuristics (domain patterns such as `.gov`, `.edu`, `.ac.*`, keyword/affiliation matches) stored as advisory JSON, never a pass/fail gate; re-running appends a new row and the latest by `checked_at` is "current"; an AST test that the module never calls `approve_candidate_source`, `reject_candidate_source`, `upsert_source_by_domain`, or writes `SourceRegistry`/`CandidateSource.status` — `backend/tests/services/test_candidate_validation.py` (NEW) — Satisfies: FR-CANDVAL-1..3, Edge Case "candidate characteristics change"
+- [x] T239 [P] [US7] Write failing API tests: history newest-first, 404 on unknown candidate; a candidate failing a check can still be approved through the existing approve endpoint (FR-CANDVAL-4); an all-pass candidate can be rejected; a candidate with all-pass results has no `source_registry` row until approved (SC-006) — `backend/tests/api/test_candidate_validations_api.py` (NEW) — Satisfies: FR-CANDVAL-2/3/4, US7 Scenarios 2–5
 - [ ] T240 [US7] Extend the workflow tests: pending candidates with no validation or a stale one are validated during a run; a validation exception is logged and never fails the run or touches candidate status — `backend/tests/workflows/test_source_monitor.py` (EXTENDED) — Depends: T198 — Satisfies: FR-CANDVAL-1
 
 ### Implementation
 
-- [ ] T241 [P] [US7] Create the `CandidateSourceValidation` response schema — `backend/app/schemas/candidate_validation.py` (NEW) — Depends: T152
-- [ ] T242 [P] [US7] Create the append-only validation repository (`add`, `list_for_candidate` newest-first, `latest_for_candidate`) — `backend/app/data/repositories/candidate_validation_repo.py` (NEW) — Depends: T152
-- [ ] T243 [US7] Implement the validation service composing `fetch_url` + `extract_listing` + a pure official-signal heuristic, writing only to `candidate_source_validations` — `backend/app/services/candidate_validation.py` (NEW) — Depends: T238, T242
+- [x] T241 [P] [US7] Create the `CandidateSourceValidation` response schema — `backend/app/schemas/candidate_validation.py` (NEW) — Depends: T152
+- [x] T242 [P] [US7] Create the append-only validation repository (`add`, `list_for_candidate` newest-first, `latest_for_candidate`) — `backend/app/data/repositories/candidate_validation_repo.py` (NEW) — Depends: T152
+- [x] T243 [US7] Implement the validation service composing `fetch_url` + `extract_listing` + a pure official-signal heuristic, writing only to `candidate_source_validations` — `backend/app/services/candidate_validation.py` (NEW) — Depends: T238, T242
 - [ ] T244 [US7] Add a workflow step that validates pending candidates lacking a recent validation (this is the trigger; `source_repo.record_or_bump_candidate_source` stays unchanged) — `backend/app/workflows/source_monitor/graph.py` (EXTENDED) — Depends: T240, T243, T236
-- [ ] T245 [US7] Add `GET /sources/candidates/{candidate_id}/validations` only; no existing route changes and no write route is added — `backend/app/api/sources.py` (EXTENDED) — Depends: T239, T241, T242
+- [x] T245 [US7] Add `GET /sources/candidates/{candidate_id}/validations` only; no existing route changes and no write route is added — `backend/app/api/sources.py` (EXTENDED) — Depends: T239, T241, T242
 
 ---
 
