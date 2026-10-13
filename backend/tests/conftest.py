@@ -4,6 +4,7 @@ every DB-touching test skips itself (mirrors tests/test_db_connection.py)
 when DATABASE_URL is absent or unreachable, and every fixture that creates
 data cleans it up afterward."""
 
+import logging
 import re
 import uuid
 
@@ -179,3 +180,43 @@ def authed_user(client, db_session_factory):
 
     with db_session_factory() as session:
         _delete_user_cascade(session, user_id)
+
+
+@pytest.fixture(autouse=True)
+def _no_candidate_validation_in_monitor_runs(monkeypatch):
+    """US7 T244: every monitoring run now validates pending candidate sources. The
+    suite runs against the shared (real) Neon database, which may hold real pending
+    candidates, so by default a run must see none: otherwise unrelated tests would
+    write validation rows for, and run DNS/fetch/LLM against, real candidates.
+    Tests that exercise the step (tests/workflows/test_source_monitor.py `cand_env`)
+    re-patch this to a selection scoped to the candidates they created."""
+    try:
+        from app.data.repositories import candidate_validation_repo
+    except RuntimeError:  # settings unavailable (no DATABASE_URL): nothing to guard
+        return
+    monkeypatch.setattr(candidate_validation_repo, "list_pending_needing_validation", lambda db, **kwargs: [])
+
+
+@pytest.fixture(autouse=True)
+def _restore_logging_config():
+    """US8: `configure_logging()` mutates process-global state (root handler + level,
+    uvicorn loggers). Tests that run the real app lifespan (`with TestClient(app)`)
+    trigger it, and without this it would leak into every later test. Only handlers
+    WE installed are removed: pytest's own capture handlers are attached/detached per
+    phase, and restoring a snapshot of `root.handlers` would resurrect stale ones."""
+    root = logging.getLogger()
+    root_level = root.level
+    names = ("uvicorn", "uvicorn.error", "uvicorn.access")
+    saved = {
+        name: (list(logging.getLogger(name).handlers), logging.getLogger(name).propagate, logging.getLogger(name).level)
+        for name in names
+    }
+    yield
+    for handler in [h for h in root.handlers if getattr(h, "_scholarship_json_handler", False)]:
+        root.removeHandler(handler)
+    root.setLevel(root_level)
+    for name, (handlers, propagate, level) in saved.items():
+        logger = logging.getLogger(name)
+        logger.handlers[:] = handlers
+        logger.propagate = propagate
+        logger.setLevel(level)

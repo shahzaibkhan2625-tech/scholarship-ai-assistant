@@ -32,6 +32,24 @@ rows are never touched) BEFORE its transition is evaluated, so `newly_discovered
 in the same check wins: `updated` beats the verified exit. `run_source_monitor(now=...)`
 is a clock seam (default `datetime.now(timezone.utc)`) for deterministic tests.
 
+**Observability (US8, ADR-0011):** a run binds `run_id` (and each source `source_id`) into
+the log context, emits `monitoring run started` / `source check finished` /
+`monitoring run finished` events, and increments `monitoring_runs_total{status}`,
+`source_fetch_total{status}` and the run-duration histogram (`app.core.metrics`).
+
+**Candidate pre-checks (US7 T244, ADR-0010):** after the source loop and before the run is
+finished, `_validate_candidates_step` validates up to `MAX_CANDIDATE_VALIDATIONS_PER_RUN`
+pending candidates that have no validation or one older than
+`CANDIDATE_VALIDATION_RECHECK_DAYS`. It ends its read transaction before any network / LLM
+call, commits per candidate (inside the service), takes no lock, logs and continues on any
+exception, and never reads or writes candidate status: it is advisory only.
+
+**Sanitization (US8 T236, NFR-HARDEN-8):** the extractor already strips tags from the page
+before the LLM sees it, but only the candidate NAME is grounded against that text; the other
+string fields are model output. `_sanitize_candidate` therefore strips markup and
+script-scheme URLs from every string field of a candidate at this ingest boundary, before
+it is diffed or stored. Clean values pass through byte-for-byte (no spurious diffs).
+
 **FR-MON-3 coverage gap (named, not hidden):** only `deadline`,
 `funding_status` and `degree_level` changes are detectable
 (`services/listing_diff.py`). "Requirement" changes cannot be detected
@@ -44,23 +62,29 @@ else `retrieved_at` — `scholarships` has no `updated_at` column); the others
 are not silently reconciled any other way.
 """
 
+import functools
 import logging
+import re
+import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Callable, Mapping
 
 from sqlalchemy.orm import Session
 
+from app.core import metrics
 from app.core.config import settings
-from app.data.repositories import monitoring_repo, scholarship_repo, source_repo
+from app.core.logging import bind_log_context, log_context, reset_log_context
+from app.data.repositories import candidate_validation_repo, monitoring_repo, scholarship_repo, source_repo
 from app.models.monitoring import MonitoringRun, MonitoringStatus, MonitoringTrigger
 from app.models.scholarship import LifecycleStatus, Scholarship
 from app.models.source import FetchStatus, SourceRegistry, SourceStatus
 from app.schemas.source import SourceFetchLogCreate
 from app.scheduling.locks import source_lock
 from app.services import alerts as alerts_service
+from app.services import candidate_validation as candidate_validation_service
 from app.services import lifecycle as lifecycle_service
 from app.services import verification as verification_service
 from app.services.alerts import ChangeEvent, NotificationChannel, RematchBudget
@@ -72,7 +96,7 @@ from app.sources.connectors.official_fetch import (
     fetch_and_extract_listing,
     resolve_fetch_target,
 )
-from app.tools.extract_listing import ExtractListingOutput, extract_listing_from_page
+from app.tools.extract_listing import ExtractListingOutput, clean_html_to_text, extract_listing_from_page
 from app.tools.web_fetch import FetchResult, fetch_url
 from app.workflows.ingestion.graph import run_ingestion
 
@@ -97,9 +121,37 @@ class _Counters:
 class _SourceStats:
     changes: int = 0
     fetch_failed: bool = False
+    # "ok" | "fail" | "error" (the check crashed); drives the log event and the fetch counter.
+    fetch_status: str | None = None
     # US2: one event per stored new/field-changed scholarship, consumed by the
     # alert step after the source's work has committed.
     events: list[ChangeEvent] = field(default_factory=list)
+
+
+_SCRIPT_SCHEME_RE = re.compile(r"\b(?:javascript|vbscript)\s*:", re.IGNORECASE)
+
+
+def _sanitize_text(value: str) -> str:
+    """Strips `<script>`/`<style>` blocks and every tag (inline event handlers live inside
+    tags, so they go with them) and removes script-scheme prefixes. A value with neither
+    markup nor a script scheme is returned unchanged."""
+    if "<" not in value and not _SCRIPT_SCHEME_RE.search(value):
+        return value
+    return _SCRIPT_SCHEME_RE.sub("", clean_html_to_text(value)).strip()
+
+
+def _sanitize_candidate(candidate: dict) -> tuple[dict, list[str]]:
+    """T236. Returns (candidate with every string field sanitized, names of the fields
+    that changed). A field emptied by sanitization becomes `None`."""
+    cleaned = dict(candidate)
+    changed: list[str] = []
+    for key, value in candidate.items():
+        if isinstance(value, str):
+            safe = _sanitize_text(value)
+            if safe != value:
+                cleaned[key] = safe or None
+                changed.append(key)
+    return cleaned, changed
 
 
 def _normalized_name(name: str) -> str:
@@ -214,7 +266,10 @@ def _detect_changes(
 
     seen_ids: set[uuid.UUID] = set()
     listed_names: set[str] = set()
-    for candidate in result.candidates:
+    for raw_candidate in result.candidates:
+        candidate, sanitized_fields = _sanitize_candidate(raw_candidate)
+        if sanitized_fields:
+            logger.warning("sanitized externally-sourced listing fields", extra={"fields": sanitized_fields})
         name = candidate.get("name")
         if not name or not name.strip():
             continue
@@ -398,6 +453,7 @@ def _monitor_one_source(
         )
         success = result.status == "ok"
         stats.fetch_failed = not success
+        stats.fetch_status = "ok" if success else "fail"
         source_repo.touch_source_check(db, source_id, success=success)
         _apply_health_transition(db, source_id, success=success)  # recovery must precede ingestion's source gate
 
@@ -438,6 +494,51 @@ def _alert_step(
         db.rollback()
 
 
+def _validate_candidates_step(
+    db: Session, validate: Callable[[Session, uuid.UUID], object], clock: Callable[[], datetime]
+) -> None:
+    """US7 T244 / ADR-0010. Advisory pre-checks for pending candidate sources.
+
+    The read transaction ends (`commit`) before the first network / LLM call, so no
+    pooled-Neon backend idles inside a transaction across a slow fetch; each
+    validation commits its own short insert. No advisory lock: overlapping runs can at
+    worst append a duplicate advisory row. Any failure is logged and skipped; this step
+    can never fail the run and never touches candidate status."""
+    try:
+        stale_before = clock() - timedelta(days=settings.candidate_validation_recheck_days)
+        candidate_ids = candidate_validation_repo.list_pending_needing_validation(
+            db, stale_before=stale_before, limit=settings.max_candidate_validations_per_run
+        )
+        db.commit()
+    except Exception:  # noqa: BLE001 - advisory step must never fail the run
+        logger.exception("candidate validation selection failed; skipping the step")
+        db.rollback()
+        return
+    for candidate_id in candidate_ids:
+        try:
+            validate(db, candidate_id)
+        except Exception:  # noqa: BLE001 - one bad candidate must not stop the rest
+            logger.exception("validation of candidate %s failed; continuing", candidate_id)
+            db.rollback()
+
+
+def _record_run_end(status: MonitoringStatus, counters: _Counters, started: float) -> None:
+    duration = time.monotonic() - started
+    metrics.MONITORING_RUNS_TOTAL.labels(status=status.value).inc()
+    metrics.MONITORING_RUN_DURATION_SECONDS.observe(duration)
+    logger.log(
+        logging.INFO if status == MonitoringStatus.COMPLETED else logging.ERROR,
+        "monitoring run finished",
+        extra={
+            "status": status.value,
+            "sources_processed": counters.processed,
+            "sources_failed": counters.failed,
+            "changes_detected": counters.changes,
+            "duration_seconds": round(duration, 3),
+        },
+    )
+
+
 def run_source_monitor(
     db: Session,
     *,
@@ -449,41 +550,57 @@ def run_source_monitor(
     alert_channels: Mapping[str, NotificationChannel] | None = None,
     rematch_budget: RematchBudget | None = None,
     now: Callable[[], datetime] | None = None,
+    validate_candidate: Callable[[Session, uuid.UUID], object] | None = None,
 ) -> MonitoringRun:
     run = monitoring_repo.get_run(db, run_id) if run_id is not None else monitoring_repo.create_run(db, trigger)
     if run is None:
         raise ValueError(f"monitoring run {run_id} not found")
 
+    run_token = bind_log_context(run_id=run.id)
+    started = time.monotonic()
+    logger.info("monitoring run started", extra={"trigger": run.trigger.value})
+    validator = validate_candidate or functools.partial(
+        candidate_validation_service.validate_candidate, fetch=fetch, extract_listing=extract_listing
+    )
     counters = _Counters()
     budget = rematch_budget if rematch_budget is not None else RematchBudget(settings.max_alert_rematches_per_run)
     finished = False
     try:
         sources = source_repo.get_monitorable_sources(db, discovery_role=True, access_method="web")
         for source_id in [source.id for source in sources]:
-            stats = _SourceStats()
-            try:
-                processed = _monitor_one_source(
-                    db, run, source_id, stats, fetch=fetch, extract_listing=extract_listing, sleep=sleep,
-                    clock=now or _utcnow,
+            with log_context(source_id=source_id):
+                stats = _SourceStats()
+                try:
+                    processed = _monitor_one_source(
+                        db, run, source_id, stats, fetch=fetch, extract_listing=extract_listing, sleep=sleep,
+                        clock=now or _utcnow,
+                    )
+                except Exception as exc:  # noqa: BLE001 - one bad source must not stop the run
+                    logger.exception("source %s failed during monitoring", source_id)
+                    db.rollback()
+                    processed, stats.fetch_failed, stats.fetch_status = True, True, "error"
+                    _record_crashed_check(db, run, source_id, exc)
+                if not processed:
+                    continue
+                _alert_step(db, run, stats, budget, alert_channels)
+                counters.processed += 1
+                counters.failed += 1 if stats.fetch_failed else 0
+                counters.changes += stats.changes
+                fetch_status = stats.fetch_status or ("fail" if stats.fetch_failed else "ok")
+                metrics.SOURCE_FETCH_TOTAL.labels(status=fetch_status).inc()
+                logger.log(
+                    logging.WARNING if stats.fetch_failed else logging.INFO,
+                    "source check finished",
+                    extra={"fetch_status": fetch_status, "changes": stats.changes},
                 )
-            except Exception as exc:  # noqa: BLE001 - one bad source must not stop the run
-                logger.exception("source %s failed during monitoring", source_id)
-                db.rollback()
-                processed, stats.fetch_failed = True, True
-                _record_crashed_check(db, run, source_id, exc)
-            if not processed:
-                continue
-            _alert_step(db, run, stats, budget, alert_channels)
-            counters.processed += 1
-            counters.failed += 1 if stats.fetch_failed else 0
-            counters.changes += stats.changes
-            monitoring_repo.update_run_counters(
-                db,
-                run.id,
-                sources_processed=counters.processed,
-                sources_failed=counters.failed,
-                changes_detected=counters.changes,
-            )
+                monitoring_repo.update_run_counters(
+                    db,
+                    run.id,
+                    sources_processed=counters.processed,
+                    sources_failed=counters.failed,
+                    changes_detected=counters.changes,
+                )
+        _validate_candidates_step(db, validator, now or _utcnow)
         monitoring_repo.finish_run(
             db,
             run.id,
@@ -494,15 +611,19 @@ def run_source_monitor(
         )
         finished = True
     finally:
-        if not finished:
-            db.rollback()
-            monitoring_repo.finish_run(
-                db,
-                run.id,
-                status=MonitoringStatus.FAILED,
-                sources_processed=counters.processed,
-                sources_failed=counters.failed,
-                changes_detected=counters.changes,
-            )
+        try:
+            if not finished:
+                db.rollback()
+                monitoring_repo.finish_run(
+                    db,
+                    run.id,
+                    status=MonitoringStatus.FAILED,
+                    sources_processed=counters.processed,
+                    sources_failed=counters.failed,
+                    changes_detected=counters.changes,
+                )
+            _record_run_end(MonitoringStatus.COMPLETED if finished else MonitoringStatus.FAILED, counters, started)
+        finally:
+            reset_log_context(run_token)
     db.refresh(run)
     return run

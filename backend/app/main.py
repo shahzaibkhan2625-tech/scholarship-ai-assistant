@@ -18,13 +18,17 @@ from app.api.qa import router as qa_router
 from app.api.scholarships import router as scholarships_router
 from app.api.sources import router as sources_router
 from app.api.url_match import router as url_match_router
+from app.core.logging import configure_logging
+from app.core.metrics import router as metrics_router
+from app.core.request_id import RequestIDMiddleware
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """002: on startup fail any run left `running` by a crashed process, then
+    """002: configure JSON logging (after uvicorn has set up its own loggers, so ours
+    wins), fail any run left `running` by a crashed process, then
     start the monitoring scheduler (a no-op when MONITORING_INTERVAL_MINUTES
     <= 0, which is how tests keep it off); stop it on shutdown. Recovery is
     best-effort so an unreachable DB cannot stop the API from booting."""
@@ -32,6 +36,7 @@ async def lifespan(_app: FastAPI):
     from app.data.repositories.db import SessionLocal
     from app.scheduling.scheduler import start_scheduler, stop_scheduler
 
+    configure_logging()
     try:
         with SessionLocal() as session:
             recovered = monitoring_repo.fail_leftover_running_runs(session)
@@ -48,6 +53,8 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Scholarship AI Assistant", lifespan=lifespan)
+# US8: outermost so every request (and the rate limiter added in B3) is covered by the request id.
+app.add_middleware(RequestIDMiddleware)
 
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
 app.include_router(profile_router, prefix="/profile", tags=["profile"])
@@ -65,6 +72,7 @@ app.include_router(monitoring_router, tags=["monitoring"])
 app.include_router(alerts_router, tags=["alerts"])
 app.include_router(coverage_router, tags=["coverage"])
 app.include_router(scholarships_router, tags=["scholarships"])
+app.include_router(metrics_router, tags=["metrics"])
 
 
 @app.get("/health")

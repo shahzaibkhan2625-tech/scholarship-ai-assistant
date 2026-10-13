@@ -7,6 +7,9 @@ the sources THIS test created (the shared DB may hold real seeded sources) —
 while still recording the filter kwargs the workflow passed.
 """
 
+import io
+import json
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
@@ -14,7 +17,9 @@ from urllib.parse import urlparse
 import pytest
 from sqlalchemy import select
 
-from app.data.repositories import monitoring_repo, scholarship_repo, source_repo
+from app.core import metrics
+from app.core.logging import JsonFormatter, get_log_context
+from app.data.repositories import candidate_validation_repo, monitoring_repo, scholarship_repo, source_repo
 from app.models.monitoring import MonitoringStatus, MonitoringTrigger
 from app.models.scholarship import (
     DegreeLevel,
@@ -24,14 +29,18 @@ from app.models.scholarship import (
     ScholarshipField,
     VerificationStatus,
 )
-from app.models.source import FetchStatus, SourceStatus
+from app.models.source import CandidateSourceStatus, FetchStatus, SourceStatus
 from app.scheduling.locks import try_acquire_source_lock
-from app.schemas.source import SourceRegistryCreate
+from app.schemas.source import CandidateSourceCreate, SourceRegistryCreate
+from app.services.candidate_validation import validate_candidate as _real_validate_candidate
 from app.services.classify import ClassifiedScholarshipFields
 from app.tools.extract_listing import ExtractedListingCandidate, ExtractListingOutput
 from app.tools.web_fetch import FetchResult
 from app.workflows.source_monitor import graph as monitor_graph
 from app.workflows.source_monitor.graph import run_source_monitor
+
+# Captured at import, BEFORE the conftest autouse stub replaces the repo function.
+_REAL_SELECT_PENDING = getattr(candidate_validation_repo, "list_pending_needing_validation", None)
 
 _FAKE_CLASSIFICATION = ClassifiedScholarshipFields(
     degree_level="PhD", degree_level_confidence="inferred",
@@ -779,3 +788,261 @@ def test_every_monitor_lifecycle_write_goes_through_the_one_helper():
                 if any(isinstance(t, ast.Attribute) and t.attr == "lifecycle_status" for t in targets):
                     writers.add(fn.name)
     assert writers == {"_write_lifecycle"}
+
+
+# --- US8 T229: structured logs + metrics --------------------------------------
+
+
+def _sample(name, labels=None) -> float:
+    return metrics.REGISTRY.get_sample_value(name, labels or {}) or 0.0
+
+
+def _no_validation(db, candidate_id):  # keeps these tests off the candidate step
+    return None
+
+
+def _run_quiet(env, **kwargs):
+    return run_source_monitor(
+        env.session, trigger=MonitoringTrigger.MANUAL, fetch=env.fetcher, extract_listing=env.listing,
+        sleep=lambda _d: None, validate_candidate=_no_validation, **kwargs,
+    )
+
+
+def test_a_run_increments_the_run_duration_and_per_status_fetch_counters(env):
+    ok, bad, boom = env.make_source("ok"), env.make_source("bad"), env.make_source("boom")
+    env.listing.by_host[ok.domain] = [_cand(_name(env, "Alpha"))]
+    env.fetcher.failing_hosts.add(bad.domain)
+    env.listing.raise_for.add(boom.domain)
+    before = {
+        "completed": _sample("monitoring_runs_total", {"status": "completed"}),
+        "ok": _sample("source_fetch_total", {"status": "ok"}),
+        "fail": _sample("source_fetch_total", {"status": "fail"}),
+        "error": _sample("source_fetch_total", {"status": "error"}),
+        "dur": _sample("monitoring_run_duration_seconds_count"),
+    }
+
+    _run_quiet(env)
+
+    assert _sample("monitoring_runs_total", {"status": "completed"}) == before["completed"] + 1
+    assert _sample("source_fetch_total", {"status": "ok"}) == before["ok"] + 1
+    assert _sample("source_fetch_total", {"status": "fail"}) == before["fail"] + 1
+    assert _sample("source_fetch_total", {"status": "error"}) == before["error"] + 1  # crashed check
+    assert _sample("monitoring_run_duration_seconds_count") == before["dur"] + 1
+
+
+def test_a_failed_run_is_counted_as_failed(env, monkeypatch):
+    before = _sample("monitoring_runs_total", {"status": "failed"})
+
+    def explode(*_a, **_k):
+        raise RuntimeError("selection exploded")
+
+    monkeypatch.setattr(source_repo, "get_monitorable_sources", explode)
+    with pytest.raises(RuntimeError):
+        _run_quiet(env)
+
+    assert _sample("monitoring_runs_total", {"status": "failed"}) == before + 1
+
+
+@pytest.fixture
+def json_log():
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JsonFormatter())
+    logger = logging.getLogger(monitor_graph.__name__)
+    old_level = logger.level
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    try:
+        yield lambda: [json.loads(line) for line in stream.getvalue().splitlines()]
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(old_level)
+
+
+def test_a_run_emits_structured_start_source_and_finish_events(env, json_log):
+    source = env.make_source()
+    env.listing.by_host[source.domain] = [_cand(_name(env, "Alpha"))]
+
+    run = _run_quiet(env)
+
+    by_message = {
+        line["message"]: line for line in json_log() if line["message"].startswith(("monitoring run", "source check"))
+    }
+    started, finished = by_message["monitoring run started"], by_message["monitoring run finished"]
+    checked = by_message["source check finished"]
+    assert started["run_id"] == finished["run_id"] == checked["run_id"] == str(run.id)
+    assert started["trigger"] == MonitoringTrigger.MANUAL.value
+    assert checked["source_id"] == str(source.id)
+    assert (checked["fetch_status"], checked["changes"]) == ("ok", 1)
+    assert finished["status"] == "completed"
+    assert (finished["sources_processed"], finished["sources_failed"], finished["changes_detected"]) == (1, 0, 1)
+    assert finished["duration_seconds"] >= 0
+    assert "source_id" not in finished  # per-source context does not leak past the source
+
+
+def test_a_failed_source_check_is_logged_at_warning(env, json_log):
+    source = env.make_source()
+    env.fetcher.failing_hosts.add(source.domain)
+    _run_quiet(env)
+    [checked] = [line for line in json_log() if line["message"] == "source check finished"]
+    assert checked["fetch_status"] == "fail" and checked["level"] == "WARNING"
+
+
+def test_log_context_is_cleared_after_a_run(env):
+    env.make_source()
+    _run_quiet(env)
+    assert get_log_context() == {}
+
+
+def test_log_context_is_cleared_after_a_failed_run(env, monkeypatch):
+    monkeypatch.setattr(source_repo, "get_monitorable_sources", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    with pytest.raises(RuntimeError):
+        _run_quiet(env)
+    assert get_log_context() == {}
+
+
+# --- US7/US8 T240 (workflow half) + T244: candidate-validation trigger ---------
+
+
+@pytest.fixture
+def cand_env(env, monkeypatch):
+    scoped: set[uuid.UUID] = set()
+
+    def scoped_select(db, *, stale_before, limit):
+        ids = _REAL_SELECT_PENDING(db, stale_before=stale_before, limit=10_000)
+        return [i for i in ids if i in scoped][:limit]
+
+    monkeypatch.setattr(candidate_validation_repo, "list_pending_needing_validation", scoped_select)
+
+    def make_candidate(label="c", *, validated_days_ago=None):
+        candidate = source_repo.create_candidate_source(
+            env.session, CandidateSourceCreate(url=f"https://cand-{label}-{env.uid}.example.org/scholarships")
+        )
+        scoped.add(candidate.id)
+        if validated_days_ago is not None:
+            candidate_validation_repo.add(
+                env.session, candidate.id, reachable=True, extractable=True, official_signals={},
+                checked_at=datetime.now(timezone.utc) - timedelta(days=validated_days_ago),
+            )
+        return candidate
+
+    def run_with(validator, **kwargs):
+        return run_source_monitor(
+            env.session, trigger=MonitoringTrigger.MANUAL, fetch=env.fetcher, extract_listing=env.listing,
+            sleep=lambda _d: None, validate_candidate=validator, **kwargs,
+        )
+
+    def real_validator(db, candidate_id):
+        return _real_validate_candidate(
+            db, candidate_id, fetch=env.fetcher, extract_listing=env.listing, resolve=lambda _h: ["93.184.216.34"]
+        )
+
+    env.make_candidate, env.run_with, env.real_validator = make_candidate, run_with, real_validator
+    return env
+
+
+def test_pending_candidate_without_validation_is_validated_during_a_run(cand_env):
+    candidate = cand_env.make_candidate("new")
+    cand_env.listing.by_host[urlparse(candidate.url).hostname] = [_cand("Some Listed Scholarship")]
+
+    run = cand_env.run_with(cand_env.real_validator)
+
+    assert run.status == MonitoringStatus.COMPLETED
+    assert (run.sources_processed, run.sources_failed) == (0, 0)  # candidates never count as sources
+    row = candidate_validation_repo.latest_for_candidate(cand_env.session, candidate.id)
+    assert row is not None and row.reachable and row.extractable
+    assert candidate.url in cand_env.fetcher.calls
+
+
+def test_stale_validation_is_redone_and_a_recent_one_is_not(cand_env):
+    stale = cand_env.make_candidate("stale", validated_days_ago=30)
+    fresh = cand_env.make_candidate("fresh", validated_days_ago=1)
+    seen: list[uuid.UUID] = []
+
+    cand_env.run_with(lambda db, cid: seen.append(cid))
+
+    assert stale.id in seen and fresh.id not in seen
+
+
+def test_a_validation_exception_is_logged_and_never_fails_the_run_or_touches_status(cand_env, caplog):
+    bad, good = cand_env.make_candidate("bad"), cand_env.make_candidate("good")
+    seen: list[uuid.UUID] = []
+
+    def validator(db, cid):
+        if cid == bad.id:
+            raise RuntimeError("validator exploded")
+        seen.append(cid)
+
+    caplog.set_level(logging.ERROR)
+    run = cand_env.run_with(validator)
+
+    assert run.status == MonitoringStatus.COMPLETED
+    assert good.id in seen  # log-and-continue: the other candidate is still validated
+    assert any(str(bad.id) in record.getMessage() for record in caplog.records)
+    for candidate in (bad, good):
+        cand_env.session.refresh(candidate)
+        assert candidate.status == CandidateSourceStatus.PENDING and candidate.reviewed_at is None
+
+
+def test_candidate_validation_is_capped_per_run(cand_env, monkeypatch):
+    monkeypatch.setattr(monitor_graph.settings, "max_candidate_validations_per_run", 2)
+    for label in ("a", "b", "c", "d"):
+        cand_env.make_candidate(label)
+    seen: list[uuid.UUID] = []
+
+    cand_env.run_with(lambda db, cid: seen.append(cid))
+
+    assert len(seen) == 2
+
+
+def test_the_read_transaction_is_ended_before_any_validation_call(cand_env, monkeypatch):
+    cand_env.make_candidate("order")
+    events: list[str] = []
+    scoped_select = candidate_validation_repo.list_pending_needing_validation
+
+    def spy_select(db, **kwargs):
+        events.append("select")
+        return scoped_select(db, **kwargs)
+
+    real_commit = cand_env.session.commit
+    monkeypatch.setattr(candidate_validation_repo, "list_pending_needing_validation", spy_select)
+    monkeypatch.setattr(cand_env.session, "commit", lambda: (events.append("commit"), real_commit())[1])
+
+    cand_env.run_with(lambda db, cid: events.append("validate"))
+
+    tail = events[events.index("select"):]
+    assert tail.index("commit") < tail.index("validate")
+
+
+def test_a_failing_candidate_selection_never_fails_the_run(cand_env, monkeypatch, caplog):
+    def explode(*_a, **_k):
+        raise RuntimeError("selection exploded")
+
+    monkeypatch.setattr(candidate_validation_repo, "list_pending_needing_validation", explode)
+    caplog.set_level(logging.ERROR)
+
+    run = cand_env.run_with(lambda db, cid: None)
+
+    assert run.status == MonitoringStatus.COMPLETED
+    assert any("candidate" in record.getMessage().lower() for record in caplog.records)
+
+
+def test_candidate_validation_never_promotes_or_reviews_a_candidate_even_via_the_real_service(cand_env):
+    candidate = cand_env.make_candidate("gov")
+    cand_env.run_with(cand_env.real_validator)
+    cand_env.session.refresh(candidate)
+    assert candidate.status == CandidateSourceStatus.PENDING
+    assert source_repo.get_source_by_domain(cand_env.session, urlparse(candidate.url).hostname) is None
+
+
+def test_the_graph_module_never_references_a_promotion_or_review_path():
+    """Principle IV / SC-006: the validation trigger is advisory only."""
+    import ast
+    from pathlib import Path
+
+    banned = {"approve_candidate_source", "reject_candidate_source", "upsert_source_by_domain", "create_candidate_source"}
+    tree = ast.parse(Path(monitor_graph.__file__).read_text(encoding="utf-8"))
+    names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)} | {
+        n.id for n in ast.walk(tree) if isinstance(n, ast.Name)
+    }
+    assert names & banned == set()
