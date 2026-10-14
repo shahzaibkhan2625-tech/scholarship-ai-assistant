@@ -359,7 +359,11 @@ components:
         change_summary: { type: object }
         channels_requested:
           type: array
-          items: { type: string, enum: [in_app, email] }
+          description: >
+            Channel names requested for this alert. Open-ended by design (a future channel
+            registers in services/alerts.py without a schema change); shipped values are
+            `in_app` and `email`.
+          items: { type: string }
         delivered_in_app_at: { type: string, format: date-time, nullable: true }
         delivered_email_at: { type: string, format: date-time, nullable: true }
         email_error: { type: string, nullable: true }
@@ -375,9 +379,10 @@ components:
 
     AlertPreferencesUpdate:
       type: object
+      description: Partial update; an omitted or null field leaves that preference unchanged.
       properties:
-        in_app_enabled: { type: boolean }
-        email_enabled: { type: boolean }
+        in_app_enabled: { type: boolean, nullable: true }
+        email_enabled: { type: boolean, nullable: true }
 
     CandidateSourceValidation:
       type: object

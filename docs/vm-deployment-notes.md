@@ -97,8 +97,10 @@ The exact sequence that worked, in order, with what to check after each step.
    ```
    git -C <repo-path> branch --show-current
    ```
-   Expect `001-scholarship-mvp`. If not, `git checkout 001-scholarship-mvp`
-   (stash/commit any local changes first).
+   Expect the branch you intend to deploy (historically `001-scholarship-mvp`; for
+   feature 002 it is `002-source-monitoring-hardening` until merged to `main`). If
+   not, `git checkout <branch>` (stash/commit any local changes first). The
+   public listener is now Caddy; see `docs/operations-hardening.md`.
 
 2. **Pull latest**
    ```

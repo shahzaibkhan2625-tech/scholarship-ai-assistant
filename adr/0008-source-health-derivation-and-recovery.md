@@ -51,6 +51,7 @@
 
 - **API-access sources never recover under monitoring.** The monitor selects `discovery_role=True` and `access_method="web"`, so a `failing` API-type source is never re-checked by it. Out of scope for US3; a later slice must decide how API sources are health-checked.
 - **US8 retention must be defined in runs, not rows.** One check writes 2–3 rows (and ingestion adds more), so a floor of `HEALTH_WINDOW_N` *rows* per source can retain fewer than N *checks* and erase the history that explains a `failing` flag. The retention job (T228) and its tests (T219) must preserve at least the last `HEALTH_WINDOW_N` monitoring runs' rows per source.
+- **Resolved in US8 B2:** the runs-not-rows retention floor above shipped as ADR-0011 decision 2 (floors a/b/c, `python -m app.services.retention`), sharing `source_repo.ranked_monitoring_runs` with health derivation. The bullet is kept as the record of why.
 - `api_connector.py:145` calls `mark_source_failing` unconditionally. The monitor's `graph.py` does not import it, so the monitor cannot reach it; not traced further (low priority).
 
 ## Alternatives Considered

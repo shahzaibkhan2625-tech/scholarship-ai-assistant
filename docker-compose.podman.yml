@@ -7,9 +7,15 @@
 # times out with zero requests reaching Uvicorn. `network_mode: host`
 # makes Uvicorn bind directly on the host network namespace.
 #
+# Because both services share the host network namespace, the backend is bound
+# to 127.0.0.1 (ADR-0011 decision 4) and Caddy is the only public listener
+# (80/443). Rootful podman is required for Caddy to bind ports below 1024, which
+# is how this VM is already operated (`sudo podman-compose ...`).
+#
 # Local development uses docker-compose.yml (real Docker) unchanged.
 #
-# VM: /usr/local/bin/podman-compose -f docker-compose.podman.yml up -d --build
+# VM: sudo /usr/local/bin/podman-compose -f docker-compose.podman.yml up -d --build
+# Runbook: docs/operations-hardening.md
 services:
   backend:
     build:
@@ -18,3 +24,43 @@ services:
     network_mode: "host"
     env_file:
       - .env
+    environment:
+      # Overrides any STORAGE_ROOT in .env so the volume mount below and the
+      # setting cannot diverge (NFR-HARDEN-6).
+      STORAGE_ROOT: /data/storage
+    # Replaces the image CMD (which binds 0.0.0.0). --proxy-headers with a
+    # loopback-only trust list makes request.client the real caller behind Caddy,
+    # which the per-IP rate limiter needs (ADR-0011 decision 1).
+    command:
+      - uv
+      - run
+      - uvicorn
+      - app.main:app
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips=127.0.0.1
+    volumes:
+      - backend_storage:/data/storage
+
+  caddy:
+    # Major version pinned on purpose; review periodically (docs/operations-hardening.md).
+    image: docker.io/library/caddy:2-alpine
+    network_mode: "host"
+    environment:
+      SITE_ADDRESS: "${SITE_ADDRESS:-130.61.159.24}"
+    volumes:
+      # :ro read-only, :z shared SELinux label (Oracle Linux enforces SELinux).
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro,z
+      # Persists Caddy's internal CA so the certificate survives redeploys.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+
+volumes:
+  backend_storage:
+  caddy_data:
+  caddy_config:

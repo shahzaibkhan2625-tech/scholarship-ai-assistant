@@ -28,6 +28,10 @@
 - Until T244 lands there is no automatic trigger, so reviewers see "no validation yet" for every candidate.
 - Each validated candidate costs an LLM call; a candidate whose page is not a listing page will read `extractable=false`, which is accurate but not necessarily disqualifying.
 
+## Amendment (US8 B1, recorded in B4)
+
+T244 (the monitor-run trigger) and the workflow half of T240 landed in commit `857422a`, after US8's `graph.py` work, exactly as decision 1 planned. The "no automatic trigger / reviewers see 'no validation yet'" consequence above therefore no longer applies; the SSRF limits and every other decision here are unchanged and are carried into `docs/operations-hardening.md` section 11.
+
 ## Alternatives Considered
 
 - **Do US8's `graph.py` work first so US7 lands whole.** Rejected: blocks seven independent tasks on an unstarted story.

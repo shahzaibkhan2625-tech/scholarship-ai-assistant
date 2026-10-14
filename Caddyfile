@@ -1,0 +1,30 @@
+# TLS-terminating reverse proxy (US8 T232, ADR-0011 decision 4, NFR-HARDEN-1).
+# Caddy is the ONLY public listener; the backend binds 127.0.0.1:8000.
+#
+# SITE_ADDRESS is the public IP or hostname clients use (set in the compose file / .env).
+# There is no domain yet, so the certificate comes from Caddy's own CA (`tls internal`):
+# browsers WILL warn until the root CA is trusted. A real domain removes both the warning
+# and `tls internal` -- see docs/operations-hardening.md section 4.
+{
+	admin off
+	# Clients that connect by IP send no SNI; serve the site certificate to them anyway.
+	default_sni {$SITE_ADDRESS:localhost}
+}
+
+{$SITE_ADDRESS:localhost} {
+	tls internal
+
+	# Defense in depth: /metrics is also bearer-protected inside the app (O-4), but it is
+	# never reachable through the public listener. Operators read it from the VM against
+	# the loopback backend. This must stay ABOVE reverse_proxy (checked by T220).
+	@metrics path /metrics /metrics/*
+	respond @metrics 404
+
+	# Caddy replaces any client-supplied X-Forwarded-For, which is what makes uvicorn's
+	# --forwarded-allow-ips=127.0.0.1 safe for the per-IP rate limiter.
+	reverse_proxy 127.0.0.1:8000
+}
+
+http://:80 {
+	redir https://{host}{uri} permanent
+}
