@@ -178,6 +178,61 @@ def test_official_fetch_exhausts_retries_logs_fail_and_marks_source_failing(db):
     assert source.status == "failing"
 
 
+def test_official_fetch_fail_twice_then_succeed_logs_one_ok_row_with_retry_count_2(db):
+    """US8 T223 / NFR-HARDEN-3 / Scenario 3: a transient failure that recovers within the
+    retry budget leaves exactly ONE fetch-log row (status=ok, retry_count=2) and the
+    source stays active; the failed attempts are not logged as separate rows."""
+    session, created_sources, created_logs = db
+    source = source_repo.upsert_source_by_domain(session, _source_data(status="active"))
+    created_sources.append(source.id)
+
+    calls = {"count": 0}
+
+    def flaky_fetch(url: str) -> FetchResult:
+        calls["count"] += 1
+        if calls["count"] <= 2:
+            return FetchResult(url=url, success=False, status_code=503, error="upstream unavailable")
+        return FetchResult(url=url, success=True, status_code=200, html="<html>recovered</html>")
+
+    result = fetch_official(
+        session, source.id, "https://example.com/page", max_attempts=3, fetch=flaky_fetch, sleep=_no_sleep
+    )
+
+    assert result.success is True and result.content == "<html>recovered</html>"
+    assert calls["count"] == 3
+
+    logs = source_repo.get_fetch_logs_for_source(session, source.id)
+    created_logs += [log.id for log in logs]
+    assert len(logs) == 1
+    assert logs[0].status == "ok" and logs[0].retry_count == 2
+
+    session.refresh(source)
+    assert source.status == "active"
+
+
+def test_official_fetch_exhausted_retries_log_exactly_one_fail_row(db):
+    """US8 T223: exhausted retries produce ONE `fail` row (retry_count = attempts - 1) and
+    mark the source failing; the existing test above only asserts that a fail row exists."""
+    session, created_sources, created_logs = db
+    source = source_repo.upsert_source_by_domain(session, _source_data(status="active"))
+    created_sources.append(source.id)
+
+    def always_failing_fetch(url: str) -> FetchResult:
+        return FetchResult(url=url, success=False, status_code=503, error="upstream unavailable")
+
+    fetch_official(
+        session, source.id, "https://example.com/page", max_attempts=3, fetch=always_failing_fetch, sleep=_no_sleep
+    )
+
+    logs = source_repo.get_fetch_logs_for_source(session, source.id)
+    created_logs += [log.id for log in logs]
+    assert len(logs) == 1
+    assert logs[0].status == "fail" and logs[0].retry_count == 2
+
+    session.refresh(source)
+    assert source.status == "failing"
+
+
 # --- api_connector connector --------------------------------------------------
 
 

@@ -50,6 +50,25 @@ jobs:
         working-directory: backend
         run: uv run pytest
 
+      # Dependency vulnerability gate (US8 T234, NFR-HARDEN-8, constitution Principle V).
+      # pip-audit has no severity filter, so the gate is "no known vulnerability" and every
+      # exception is an explicit, justified --ignore-vuln. Both ignores below have NO upstream
+      # fix version and were checked against the full advisory text on 2026-10-13; re-check
+      # when python-jose or ecdsa publish a release, and drop the ignore then.
+      #  - CVE-2026-85394 (python-jose 3.5.0): forging HS256 tokens needs the service's PUBLIC
+      #    key used as the HMAC key and unrestricted `algorithms`. app/core/security.py decodes
+      #    with algorithms=["HS256"] only and uses the JWT_SECRET_KEY string; no asymmetric
+      #    keys or JWKs exist in the app.
+      #  - PYSEC-2026-1325 (ecdsa 0.19.2, CVE-2024-23342): a timing side channel on EC *signing*
+      #    (sign_digest). The app signs only HS256, never an EC algorithm; ecdsa is present
+      #    solely as python-jose's transitive dependency.
+      - name: Dependency vulnerability audit
+        working-directory: backend
+        run: >-
+          uv run pip-audit --strict
+          --ignore-vuln CVE-2026-85394
+          --ignore-vuln PYSEC-2026-1325
+
       # Scored, threshold-gated checks distinct from the pytest step above
       # (constitution Principle V). Phase 1 gates matching-correctness
       # (threshold 1.0 - Principle II zero-tolerance) and qa-groundedness.

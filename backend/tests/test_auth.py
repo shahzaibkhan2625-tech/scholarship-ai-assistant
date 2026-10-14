@@ -76,7 +76,7 @@ def test_login_success_returns_token(client_and_cleanup) -> None:
     client, created_emails = client_and_cleanup
     email = _unique_email()
     created_emails.append(email)
-    password = "s3cret-pass"
+    password = "s3cret-pass"  # allow-secret
 
     signup = client.post("/auth/signup", json={"email": email, "password": password})
     assert signup.status_code == 201

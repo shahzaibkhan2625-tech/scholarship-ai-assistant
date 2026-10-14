@@ -97,7 +97,7 @@ def other_authed_user(client, db_session_factory):
     cross-user-isolation assertions have two distinct identities to work
     with."""
     email = f"test-{uuid.uuid4().hex}@example.com"
-    password = "s3cret-pass"  # noqa: S105 - throwaway test fixture credential
+    password = "s3cret-pass"  # noqa: S105 - throwaway test fixture credential, allow-secret
 
     signup = client.post("/auth/signup", json={"email": email, "password": password})
     assert signup.status_code == 201
@@ -164,6 +164,39 @@ def test_create_application_returns_201_with_expected_shape(authed_user, scholar
     assert uuid.UUID(body["id"])
     assert body["scholarship_id"] == str(scholarship)
     assert "status" in body
+
+
+def test_upload_document_returns_retryable_error_when_storage_fails(
+    authed_user, application_for, db_session_factory
+) -> None:
+    """US8 T224/T235 (Edge Case "persistent storage unavailable during upload"): a storage
+    write failure is a visible, retry-able error, not a bare 500, and no document row is
+    left behind claiming the upload succeeded."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    class _BrokenStorage:
+        def save(self, user_id, filename, data):
+            raise OSError("disk full")
+
+    headers = authed_user["headers"]
+    application_id = application_for(authed_user["user_id"])
+
+    with patch("app.api.documents.get_storage", return_value=_BrokenStorage()):
+        # `client` shares the app; a non-raising client shows what a real caller would see.
+        response = TestClient(app, raise_server_exceptions=False).post(
+            f"/applications/{application_id}/documents",
+            headers=headers,
+            files={"file": ("transcript.pdf", _text_pdf_bytes(), "application/pdf")},
+            data={"type": "transcript"},
+        )
+
+    assert response.status_code == 503
+    assert "retry" in response.json()["detail"].lower()
+    with db_session_factory() as session:
+        rows = session.query(ApplicationDocument).filter(ApplicationDocument.application_id == application_id).count()
+    assert rows == 0
 
 
 def test_upload_document_requires_auth(client) -> None:

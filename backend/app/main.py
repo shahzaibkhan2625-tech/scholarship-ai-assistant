@@ -18,8 +18,10 @@ from app.api.qa import router as qa_router
 from app.api.scholarships import router as scholarships_router
 from app.api.sources import router as sources_router
 from app.api.url_match import router as url_match_router
+from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.metrics import router as metrics_router
+from app.core.rate_limit import RateLimitMiddleware, TokenBucketLimiter
 from app.core.request_id import RequestIDMiddleware
 
 logger = logging.getLogger(__name__)
@@ -53,7 +55,11 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Scholarship AI Assistant", lifespan=lifespan)
-# US8: outermost so every request (and the rate limiter added in B3) is covered by the request id.
+# Per-process limiter (ADR-0011): state is in memory, so the limit is per worker. Tests reset it.
+rate_limiter = TokenBucketLimiter(settings.rate_limit_per_minute)
+# Starlette makes the LAST middleware added the outermost: the limiter is added first so
+# RequestIDMiddleware wraps it and even a 429 carries an X-Request-ID and an access-log line.
+app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
 app.add_middleware(RequestIDMiddleware)
 
 app.include_router(auth_router, prefix="/auth", tags=["auth"])

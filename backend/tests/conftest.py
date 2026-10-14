@@ -161,7 +161,7 @@ def authed_user(client, db_session_factory):
     yields a dict with `client`, `token`, `user_id`, `headers`, and tears down
     every row the test created for that user afterward."""
     email = f"test-{uuid.uuid4().hex}@example.com"
-    password = "s3cret-pass"  # noqa: S105 - throwaway test fixture credential
+    password = "s3cret-pass"  # noqa: S105 - throwaway test fixture credential, allow-secret
 
     signup = client.post("/auth/signup", json={"email": email, "password": password})
     assert signup.status_code == 201
@@ -195,6 +195,23 @@ def _no_candidate_validation_in_monitor_runs(monkeypatch):
     except RuntimeError:  # settings unavailable (no DATABASE_URL): nothing to guard
         return
     monkeypatch.setattr(candidate_validation_repo, "list_pending_needing_validation", lambda db, **kwargs: [])
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """US8: the app's limiter is process-global in-memory state and every `TestClient` request
+    comes from the same address, so without a reset a long suite would eventually be
+    throttled by tests that have nothing to do with rate limiting."""
+    import sys
+
+    def _reset() -> None:
+        main = sys.modules.get("app.main")
+        if main is not None:
+            main.rate_limiter.reset()
+
+    _reset()
+    yield
+    _reset()
 
 
 @pytest.fixture(autouse=True)
