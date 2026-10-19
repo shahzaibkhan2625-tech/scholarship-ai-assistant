@@ -84,10 +84,33 @@ inside `uv`'s managed environment.
 
 **Fix:** Prefix the command with `uv run`:
 ```
-sudo podman exec backend uv run alembic current
+sudo podman exec scholarship-ai-assistant_backend_1 uv run alembic current
 ```
 This applies to any Python-installed console script run inside the
 container (`alembic`, `pytest`, `uvicorn`, etc.) — not just `alembic`.
+
+## 5. Container names are prefixed, and `sudo` cannot find `podman-compose`
+
+On this VM podman-compose names containers `<project>_<service>_<n>`:
+`scholarship-ai-assistant_backend_1` and `scholarship-ai-assistant_caddy_1`.
+`podman exec backend …` fails; use the full name (or the ID from `sudo podman ps -a`).
+Run compose by full path: `sudo /usr/local/bin/podman-compose -f docker-compose.podman.yml …`
+(`sudo podman-compose` is "command not found": sudo's PATH excludes `/usr/local/bin`).
+
+## 6. Public ports need BOTH the Oracle security list and firewalld
+
+Opening firewalld alone leaves 80/443 timing out from the internet; the Oracle Cloud ingress rules
+(TCP, `0.0.0.0/0`, **destination** ports 80 and 443, on the security list of the VM's subnet) are a
+console step that cannot be done from the VM. Diagnose with a packet capture on `enp0s6`: zero
+packets arriving means the block is upstream of the VM. Full detail: `docs/operations-hardening.md` §3.
+Since the 002 deployment the backend listens on `127.0.0.1:8000` only and Caddy owns 80/443; plain
+`:8000` is no longer reachable from outside (and `8000/tcp` was removed from firewalld).
+
+## 7. Deployment log
+
+- **2026-10-18/19 — 002-source-monitoring-hardening @ `e7b3c24`**: first Caddy/HTTPS deployment. Outcome and
+  rollback info in `docs/operations-hardening.md` §13. Lesson: build the new image *before* removing the old
+  container (`podman-compose … build backend`, then `stop`/`rm`, then `up -d`) to keep the outage to seconds.
 
 ## Verified deployment procedure
 
@@ -124,8 +147,8 @@ The exact sequence that worked, in order, with what to check after each step.
 
 5. **Run migrations (see #4 above for the `uv run` requirement)**
    ```
-   sudo podman exec backend uv run alembic current
-   sudo podman exec backend uv run alembic upgrade head
+   sudo podman exec scholarship-ai-assistant_backend_1 uv run alembic current
+   sudo podman exec scholarship-ai-assistant_backend_1 uv run alembic upgrade head
    ```
    Check: `alembic current` reports the expected head revision.
 
