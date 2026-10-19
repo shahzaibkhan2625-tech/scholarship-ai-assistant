@@ -8,8 +8,9 @@ re-parsing an operator-entered value that might smuggle in a scheme or path.
 import re
 import uuid
 from datetime import datetime
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from app.models.source import (
     AccessMethod,
@@ -54,11 +55,25 @@ class SourceRegistryCreate(BaseModel):
     last_checked_at: datetime | None = None
     last_success_at: datetime | None = None
     notes: str | None = None
+    # 002: omitted != None on re-upsert (see source_repo.upsert_source_by_domain).
+    listing_page_url: str | None = None
+    freshness_window_days: int | None = None
 
     @field_validator("domain")
     @classmethod
     def _domain_is_bare_hostname(cls, value: str) -> str:
         return _validate_domain(value)
+
+    @model_validator(mode="after")
+    def _listing_url_matches_domain(self) -> "SourceRegistryCreate":
+        if self.listing_page_url is None:
+            return self
+        parsed = urlparse(self.listing_page_url)
+        if parsed.scheme.lower() not in ("http", "https"):
+            raise ValueError("listing_page_url must use http or https")
+        if (parsed.hostname or "").lower() != self.domain.lower():
+            raise ValueError("listing_page_url hostname must equal the source domain")
+        return self
 
 
 class SourceRegistryRead(BaseModel):
@@ -83,6 +98,8 @@ class SourceRegistryRead(BaseModel):
     last_checked_at: datetime | None = None
     last_success_at: datetime | None = None
     notes: str | None = None
+    listing_page_url: str | None = None
+    freshness_window_days: int | None = None
 
 
 class CandidateSourceCreate(BaseModel):
@@ -113,6 +130,9 @@ class SourceFetchLogCreate(BaseModel):
     error: str | None = None
     retry_count: int = 0
     items_found: int | None = None
+    fetched_url: str | None = None
+    used_homepage_fallback: bool = False
+    monitoring_run_id: uuid.UUID | None = None
 
 
 class SourceFetchLogRead(BaseModel):
@@ -126,6 +146,9 @@ class SourceFetchLogRead(BaseModel):
     error: str | None = None
     retry_count: int
     items_found: int | None = None
+    fetched_url: str | None = None
+    used_homepage_fallback: bool = False
+    monitoring_run_id: uuid.UUID | None = None
 
 
 class CandidateSourceReject(BaseModel):

@@ -81,7 +81,7 @@ def other_authed_user(client, db_session_factory):
     """A second throwaway user, independent of `authed_user`, for
     cross-user ownership assertions."""
     email = f"test-{uuid.uuid4().hex}@example.com"
-    password = "s3cret-pass"  # noqa: S105 - throwaway test fixture credential
+    password = "s3cret-pass"  # noqa: S105 - throwaway test fixture credential, allow-secret
 
     signup = client.post("/auth/signup", json={"email": email, "password": password})
     assert signup.status_code == 201

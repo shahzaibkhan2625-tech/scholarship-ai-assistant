@@ -32,6 +32,10 @@ class CoverageSummary(BaseModel):
     sources_active: int
     sources_checked: int
     sources_failed: int
+    # 002 US4 (FR-COVAN-3): pending candidate_sources, counted apart from the registry counts.
+    candidate_sources_pending: int = 0
+    # 002 US4: verification_status == verified, excluding closed/expired lifecycle states.
+    verified_opportunities_count: int = 0
     # source_id (str) -> ISO timestamp of that source's most recent fetch attempt.
     last_checked_at: dict[str, datetime] = {}
     # Human-readable "<country> / <source_type>: <reason>" entries — every

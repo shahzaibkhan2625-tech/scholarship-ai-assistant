@@ -49,8 +49,13 @@ class LocalFileStorage:
         ext = Path(filename).suffix
         key = f"documents/{user_id}/{uuid.uuid4()}{ext}"
         path = self._resolve(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        except OSError as exc:
+            # Callers depend on the Protocol's StorageError, not on OSError, so another backend
+            # (e.g. S3) can fail the same way without callers changing.
+            raise StorageError(f"could not write file: {exc}") from exc
         return key
 
     def get(self, file_ref: str) -> bytes:

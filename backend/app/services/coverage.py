@@ -11,7 +11,18 @@ source for every OTHER combination is healthy.
 
 `compute_coverage_summary` is the pure function (fixture-testable without a
 DB); `get_coverage_summary` is the thin DB-backed wrapper the Discovery Agent
-(T089) calls.
+(T089) and `GET /coverage` (002 US4) call.
+
+002 US4 semantics (computed live per request, FR-COVAN-4 — no cache):
+- "failed" follows ADR-0008: a source that has monitoring-run history fails when
+  its LATEST run had any non-OK row (a check is an OK HTTP row plus possibly a
+  FAIL row); a later per-scholarship ingestion row (no run id) does not flip it.
+  A source with no run history falls back to its latest raw row (001 rule).
+- `last_checked_at` is always the most recent row of any kind.
+- `failing` status counts as active-but-unhealthy: it is in `sources_active`,
+  never counts as healthy coverage, and gets its own gap reason.
+- `sources_checked`/`sources_failed` keep the 001 rule (any status, so disabled
+  sources with a log are included).
 """
 
 import uuid
@@ -20,7 +31,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.data.repositories import source_repo
+from app.data.repositories import scholarship_repo, source_repo
 from app.models.source import FetchStatus, SourceStatus
 from app.schemas.discovery import CoverageSummary
 
@@ -45,9 +56,24 @@ class FetchLogSnapshot:
     source_id: uuid.UUID
     status: str  # FetchStatus value
     started_at: datetime
+    monitoring_run_id: uuid.UUID | None = None
+    id: uuid.UUID | None = None  # tiebreak when two rows share a `started_at`
 
 
 _FAILING_STATUSES = {FetchStatus.FAIL.value, FetchStatus.TIMEOUT.value}
+_ACTIVE_STATUSES = {SourceStatus.ACTIVE.value, SourceStatus.FAILING.value}
+
+
+def _latest_outcome_failed(logs: list[FetchLogSnapshot]) -> bool:
+    """`logs` is one source's rows, oldest first (non-empty). Latest monitoring RUN's
+    outcome when the source has run history, else the latest raw row."""
+    run_rows = [entry for entry in logs if entry.monitoring_run_id is not None]
+    if not run_rows:
+        return logs[-1].status in _FAILING_STATUSES
+    latest_run_id = run_rows[-1].monitoring_run_id
+    return any(
+        entry.status in _FAILING_STATUSES for entry in run_rows if entry.monitoring_run_id == latest_run_id
+    )
 
 
 def compute_coverage_summary(
@@ -55,10 +81,13 @@ def compute_coverage_summary(
     fetch_logs: list[FetchLogSnapshot],
     *,
     now: datetime | None = None,
+    candidate_sources_pending: int = 0,
+    verified_opportunities_count: int = 0,
 ) -> CoverageSummary:
     now = now or datetime.now(timezone.utc)
 
-    active_sources = [s for s in sources if s.status == SourceStatus.ACTIVE.value]
+    # `failing` is approved-but-degraded (ADR-0008): counted active, never healthy.
+    active_sources = [s for s in sources if s.status in _ACTIVE_STATUSES]
 
     logs_by_source: dict[uuid.UUID, list[FetchLogSnapshot]] = {}
     for log in fetch_logs:
@@ -70,13 +99,16 @@ def compute_coverage_summary(
     currently_failing_ids: set[uuid.UUID] = set()
 
     for source in sources:
-        logs = sorted(logs_by_source.get(source.id, []), key=lambda entry: entry.started_at)
+        logs = sorted(
+            logs_by_source.get(source.id, []),
+            key=lambda entry: (entry.started_at, entry.id.int if entry.id is not None else 0),
+        )
         if not logs:
             continue
         sources_checked += 1
         latest = logs[-1]
         last_checked_at[str(source.id)] = latest.started_at
-        if latest.status in _FAILING_STATUSES:
+        if _latest_outcome_failed(logs):
             sources_failed += 1
             currently_failing_ids.add(source.id)
 
@@ -90,7 +122,11 @@ def compute_coverage_summary(
 
     for country, source_type in combos:
         combo_active = [s for s in active_sources if s.country == country and s.source_type == source_type]
-        healthy = [s for s in combo_active if s.id not in currently_failing_ids]
+        healthy = [
+            s
+            for s in combo_active
+            if s.id not in currently_failing_ids and s.status != SourceStatus.FAILING.value
+        ]
         label = f"{country or 'unspecified country'} / {source_type}"
         if not healthy:
             reason = "all active sources currently failing" if combo_active else "no active source configured"
@@ -104,6 +140,8 @@ def compute_coverage_summary(
         sources_active=len(active_sources),
         sources_checked=sources_checked,
         sources_failed=sources_failed,
+        candidate_sources_pending=candidate_sources_pending,
+        verified_opportunities_count=verified_opportunities_count,
         last_checked_at=last_checked_at,
         countries_covered=sorted(countries_covered),
         gaps=gaps,
@@ -113,8 +151,10 @@ def compute_coverage_summary(
 def get_coverage_summary(db: Session) -> CoverageSummary:
     """DB-backed wrapper: reads every configured source (any status, via
     `source_repo.get_all_sources` — NOT the active-only gate, since coverage
-    reporting needs to see disabled/failing rows too) and every fetch log,
-    then reduces them with `compute_coverage_summary`. Read-only."""
+    reporting needs to see disabled/failing rows too), plus a BOUNDED slice of the
+    fetch log (each source's latest row and its latest monitoring run's rows —
+    never the whole history), then reduces them with `compute_coverage_summary`.
+    Read-only; a handful of sequential queries, no per-source loop."""
 
     def _enum_value(value):
         return value.value if hasattr(value, "value") else value
@@ -128,12 +168,23 @@ def get_coverage_summary(db: Session) -> CoverageSummary:
         )
         for source in source_repo.get_all_sources(db)
     ]
+    rows = {
+        log.id: log
+        for log in [*source_repo.get_latest_fetch_log_per_source(db), *source_repo.get_latest_run_fetch_logs(db)]
+    }
     logs = [
         FetchLogSnapshot(
             source_id=log.source_id,
             status=_enum_value(log.status),
             started_at=log.started_at,
+            monitoring_run_id=log.monitoring_run_id,
+            id=log.id,
         )
-        for log in source_repo.get_all_fetch_logs(db)
+        for log in rows.values()
     ]
-    return compute_coverage_summary(sources, logs)
+    return compute_coverage_summary(
+        sources,
+        logs,
+        candidate_sources_pending=source_repo.count_pending_candidate_sources(db),
+        verified_opportunities_count=scholarship_repo.count_verified_opportunities(db),
+    )

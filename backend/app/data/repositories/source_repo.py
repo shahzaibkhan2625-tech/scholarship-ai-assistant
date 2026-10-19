@@ -9,22 +9,26 @@ when a fetch is attempted against a non-active `source_id`.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.models.source import (
     CandidateSource,
     CandidateSourceStatus,
     ScholarshipSource,
+    FetchStatus,
     SourceFetchLog,
     SourceRegistry,
     SourceStatus,
     SourceType,
 )
 from app.schemas.source import CandidateSourceCreate, SourceFetchLogCreate, SourceRegistryCreate
+
+
+_PRESERVE_IF_OMITTED = frozenset({"listing_page_url", "freshness_window_days"})
 
 
 class SourceNotApprovedError(Exception):
@@ -41,13 +45,24 @@ class CandidateSourceAlreadyReviewedError(Exception):
 
 
 def get_active_sources(
-    db: Session, country: str | None = None, source_type: str | None = None
+    db: Session,
+    country: str | None = None,
+    source_type: str | None = None,
+    *,
+    discovery_role: bool | None = None,
+    access_method: str | None = None,
 ) -> list[SourceRegistry]:
+    """`discovery_role`/`access_method` (002 T178) are keyword-only and default
+    `None` = no filter, so every existing caller is unchanged."""
     stmt = select(SourceRegistry).where(SourceRegistry.status == SourceStatus.ACTIVE)
     if country is not None:
         stmt = stmt.where(SourceRegistry.country == country)
     if source_type is not None:
         stmt = stmt.where(SourceRegistry.source_type == source_type)
+    if discovery_role is not None:
+        stmt = stmt.where(SourceRegistry.discovery_role == discovery_role)
+    if access_method is not None:
+        stmt = stmt.where(SourceRegistry.access_method == access_method)
     return list(db.execute(stmt).scalars().all())
 
 
@@ -64,11 +79,86 @@ def get_all_fetch_logs(db: Session) -> list[SourceFetchLog]:
     return list(db.execute(select(SourceFetchLog)).scalars().all())
 
 
+def get_latest_fetch_log_per_source(db: Session) -> list[SourceFetchLog]:
+    """The single most recent fetch-log row of each source, any kind — for coverage
+    (002 US4) so it never loads the whole history. `DISTINCT ON` walks the
+    `source_id` index; bounded at one row per source."""
+    stmt = (
+        select(SourceFetchLog)
+        .distinct(SourceFetchLog.source_id)
+        .order_by(SourceFetchLog.source_id, SourceFetchLog.started_at.desc(), SourceFetchLog.id.desc())
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def get_latest_run_fetch_logs(db: Session) -> list[SourceFetchLog]:
+    """Every row belonging to each source's most recent MONITORING RUN (ADR-0008:
+    one check is several rows, outcome is per run). Rows with a NULL
+    `monitoring_run_id` are ignored. Bounded at a few rows per source."""
+    latest_run = (
+        select(SourceFetchLog.source_id, SourceFetchLog.monitoring_run_id)
+        .where(SourceFetchLog.monitoring_run_id.is_not(None))
+        .distinct(SourceFetchLog.source_id)
+        .order_by(SourceFetchLog.source_id, SourceFetchLog.started_at.desc(), SourceFetchLog.id.desc())
+        .subquery()
+    )
+    stmt = select(SourceFetchLog).join(
+        latest_run,
+        and_(
+            SourceFetchLog.source_id == latest_run.c.source_id,
+            SourceFetchLog.monitoring_run_id == latest_run.c.monitoring_run_id,
+        ),
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def count_pending_candidate_sources(db: Session) -> int:
+    return db.execute(
+        select(func.count()).select_from(CandidateSource).where(CandidateSource.status == CandidateSourceStatus.PENDING)
+    ).scalar_one()
+
+
 def get_source_by_id(db: Session, source_id: uuid.UUID) -> SourceRegistry | None:
     stmt = select(SourceRegistry).where(
         SourceRegistry.id == source_id, SourceRegistry.status == SourceStatus.ACTIVE
     )
     return db.execute(stmt).scalar_one_or_none()
+
+
+_MONITORABLE_STATUSES = (SourceStatus.ACTIVE, SourceStatus.FAILING)
+
+
+def get_monitorable_sources(
+    db: Session,
+    *,
+    discovery_role: bool | None = None,
+    access_method: str | None = None,
+) -> list[SourceRegistry]:
+    """002 US3 (ADR-0008): the MONITOR's selection query — `ACTIVE | FAILING`, so a
+    failing source stays scheduled and can recover (O-2). `PENDING` and `DISABLED`
+    are never returned. `get_active_sources` is unchanged and remains the gate for
+    discovery, Q&A, matching and search."""
+    stmt = select(SourceRegistry).where(SourceRegistry.status.in_(_MONITORABLE_STATUSES))
+    if discovery_role is not None:
+        stmt = stmt.where(SourceRegistry.discovery_role == discovery_role)
+    if access_method is not None:
+        stmt = stmt.where(SourceRegistry.access_method == access_method)
+    return list(db.execute(stmt).scalars().all())
+
+
+def get_monitorable_source_by_id(db: Session, source_id: uuid.UUID) -> SourceRegistry | None:
+    """Monitor-only counterpart of `get_source_by_id` (`ACTIVE | FAILING`); backs the
+    connectors' `allow_failing=True` gate."""
+    stmt = select(SourceRegistry).where(
+        SourceRegistry.id == source_id, SourceRegistry.status.in_(_MONITORABLE_STATUSES)
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def get_source_any_status(db: Session, source_id: uuid.UUID) -> SourceRegistry | None:
+    """Read-only lookup regardless of status — for the health/fetch-log views only.
+    Never used to gate a fetch."""
+    return db.get(SourceRegistry, source_id)
 
 
 def get_source_by_domain(db: Session, domain: str) -> SourceRegistry | None:
@@ -78,11 +168,18 @@ def get_source_by_domain(db: Session, domain: str) -> SourceRegistry | None:
 
 def upsert_source_by_domain(db: Session, data: SourceRegistryCreate) -> SourceRegistry:
     """Idempotent seed-loader primitive: update the row for `data.domain` if
-    one exists, otherwise insert. Never deletes."""
+    one exists, otherwise insert. Never deletes.
+
+    Every 001 field is full-replace on update (unchanged). The 002 fields in
+    `_PRESERVE_IF_OMITTED` follow `model_fields_set` instead: omitted keeps the
+    stored value, an explicit `None` clears it — so a pre-002 seed that doesn't
+    know about them can't silently wipe an operator-set `listing_page_url`."""
 
     existing = get_source_by_domain(db, data.domain)
     if existing is not None:
         for field, value in data.model_dump().items():
+            if field in _PRESERVE_IF_OMITTED and field not in data.model_fields_set:
+                continue
             setattr(existing, field, value)
         db.commit()
         db.refresh(existing)
@@ -187,10 +284,135 @@ def mark_source_failing(db: Session, source_id: uuid.UUID) -> SourceRegistry | N
     return source
 
 
+def touch_source_check(
+    db: Session, source_id: uuid.UUID, *, success: bool, now: datetime | None = None
+) -> SourceRegistry | None:
+    """002 monitoring bookkeeping: `last_checked_at` is set on every check,
+    `last_success_at` only when `success`. Never changes `status`. Looks up by
+    id directly (not active-only) like `mark_source_failing`."""
+    source = db.get(SourceRegistry, source_id)
+    if source is None:
+        return None
+    stamp = now or datetime.now(timezone.utc)
+    source.last_checked_at = stamp
+    if success:
+        source.last_success_at = stamp
+    db.commit()
+    db.refresh(source)
+    return source
+
+
+def reactivate_source(db: Session, source_id: uuid.UUID) -> SourceRegistry | None:
+    """002 O-2 recovery: `failing -> active` ONLY. A `disabled`/`pending`/`active`
+    source is returned unchanged — recovery never resurrects an operator-disabled
+    or unapproved source."""
+    source = db.get(SourceRegistry, source_id)
+    if source is None:
+        return None
+    if source.status == SourceStatus.FAILING:
+        source.status = SourceStatus.ACTIVE
+        db.commit()
+        db.refresh(source)
+    return source
+
+
+# Upper bound on how many recent monitoring runs per source the streak scan reads.
+_FAILURE_SCAN_RUNS = 100
+
+
+def ranked_monitoring_runs(source_ids: list[uuid.UUID] | None = None):
+    """ADR-0008 / ADR-0011: THE definition of a source's "recent monitoring runs",
+    shared by health (`_failure_streaks`) and retention so they cannot drift.
+
+    Subquery with one row per (source, run): `source_id`, `monitoring_run_id`,
+    `failed`, and `rn` (1 = newest). One outcome per (source, run): failed if ANY of
+    that source's rows in the run is not `OK` (a failed check is an `OK` HTTP row plus
+    a `FAIL` row). Rows with a NULL `monitoring_run_id` (discovery / ingestion stage
+    rows) are ignored. Runs rank newest-first by their latest row; the run id breaks
+    a timestamp tie so the ranking is deterministic."""
+    per_run = (
+        select(
+            SourceFetchLog.source_id.label("source_id"),
+            SourceFetchLog.monitoring_run_id.label("monitoring_run_id"),
+            func.max(SourceFetchLog.started_at).label("last_at"),
+            func.bool_or(SourceFetchLog.status != FetchStatus.OK).label("failed"),
+        )
+        .where(SourceFetchLog.monitoring_run_id.is_not(None))
+        .group_by(SourceFetchLog.source_id, SourceFetchLog.monitoring_run_id)
+    )
+    if source_ids is not None:
+        per_run = per_run.where(SourceFetchLog.source_id.in_(source_ids))
+    per_run = per_run.subquery()
+    return select(
+        per_run.c.source_id,
+        per_run.c.monitoring_run_id,
+        per_run.c.failed,
+        func.row_number()
+        .over(
+            partition_by=per_run.c.source_id,
+            order_by=(per_run.c.last_at.desc(), per_run.c.monitoring_run_id.desc()),
+        )
+        .label("rn"),
+    ).subquery()
+
+
+def _failure_streaks(db: Session, source_ids: list[uuid.UUID] | None = None) -> dict[uuid.UUID, int]:
+    """ADR-0008: consecutive failed monitoring-RUN outcomes per source (absent = 0),
+    over `ranked_monitoring_runs`; a single set-based query."""
+    ranked = ranked_monitoring_runs(source_ids)
+    rows = db.execute(
+        select(ranked.c.source_id, ranked.c.failed)
+        .where(ranked.c.rn <= _FAILURE_SCAN_RUNS)
+        .order_by(ranked.c.source_id, ranked.c.rn)
+    ).all()
+
+    streaks: dict[uuid.UUID, int] = {}
+    ended: set[uuid.UUID] = set()
+    for source_id, failed in rows:
+        if source_id in ended:
+            continue
+        if failed:
+            streaks[source_id] = streaks.get(source_id, 0) + 1
+        else:
+            ended.add(source_id)
+    return streaks
+
+
+def consecutive_failure_count(db: Session, source_id: uuid.UUID) -> int:
+    return _failure_streaks(db, [source_id]).get(source_id, 0)
+
+
+def list_source_health(db: Session, status: SourceStatus | None = None) -> list[tuple[SourceRegistry, int]]:
+    """Every non-`pending` registry source with its derived failure streak, ordered by
+    name. `pending` is excluded (ADR-0008); `disabled` is included."""
+    stmt = select(SourceRegistry).where(SourceRegistry.status != SourceStatus.PENDING)
+    if status is not None:
+        stmt = stmt.where(SourceRegistry.status == status)
+    sources = list(db.execute(stmt.order_by(SourceRegistry.name, SourceRegistry.id)).scalars().all())
+    if not sources:
+        return []
+    streaks = _failure_streaks(db, [source.id for source in sources])
+    return [(source, streaks.get(source.id, 0)) for source in sources]
+
+
+def get_recent_fetch_logs(db: Session, source_id: uuid.UUID, limit: int = 50) -> list[SourceFetchLog]:
+    """Newest-first, `limit`-bounded (never loads a source's whole history)."""
+    stmt = (
+        select(SourceFetchLog)
+        .where(SourceFetchLog.source_id == source_id)
+        .order_by(SourceFetchLog.started_at.desc(), SourceFetchLog.id.desc())
+        .limit(limit)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
 def log_fetch(db: Session, data: SourceFetchLogCreate) -> SourceFetchLog:
     payload = data.model_dump(exclude_unset=False)
     if payload.get("started_at") is None:
-        payload.pop("started_at")
+        # Application clock, not the DB `now()` default: that is the TRANSACTION
+        # start time, so rows written in one transaction tie, and the per-run
+        # health streak (ADR-0008) needs strictly ordered timestamps.
+        payload["started_at"] = datetime.now(timezone.utc)
     log = SourceFetchLog(**payload)
     db.add(log)
     db.commit()
@@ -205,7 +427,7 @@ def get_fetch_logs_for_source(db: Session, source_id: uuid.UUID) -> list[SourceF
     stmt = (
         select(SourceFetchLog)
         .where(SourceFetchLog.source_id == source_id)
-        .order_by(SourceFetchLog.started_at.desc())
+        .order_by(SourceFetchLog.started_at.desc(), SourceFetchLog.id.desc())  # id: deterministic on a timestamp tie
     )
     return list(db.execute(stmt).scalars().all())
 

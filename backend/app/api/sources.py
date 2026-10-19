@@ -12,11 +12,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.data.repositories import source_repo
+from app.data.repositories import candidate_validation_repo, source_repo
 from app.data.repositories.db import get_db
 from app.data.repositories.source_repo import CandidateSourceAlreadyReviewedError, CandidateSourceNotFoundError
 from app.models.source import CandidateSourceStatus
 from app.models.user import User
+from app.schemas.candidate_validation import CandidateSourceValidationRead
 from app.schemas.source import (
     CandidateSourceReject,
     CandidateSourceRead,
@@ -91,3 +92,21 @@ def reject_candidate(
     except CandidateSourceAlreadyReviewedError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return CandidateSourceRead.model_validate(candidate)
+
+
+@router.get(
+    "/sources/candidates/{candidate_id}/validations",
+    response_model=list[CandidateSourceValidationRead],
+    responses={404: {"description": "candidate_id not found"}},
+)
+def list_candidate_validations(
+    candidate_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[CandidateSourceValidationRead]:
+    """Advisory pre-check history, newest first (US7). Read-only: it informs the
+    approve/reject decision and never gates it."""
+    if source_repo.get_candidate_source_by_id(db, candidate_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"candidate_source {candidate_id} not found")
+    rows = candidate_validation_repo.list_for_candidate(db, candidate_id)
+    return [CandidateSourceValidationRead.model_validate(row) for row in rows]

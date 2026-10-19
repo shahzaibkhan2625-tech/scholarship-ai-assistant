@@ -18,7 +18,7 @@ def create(db: Session, match: Match) -> Match:
 
 
 def list_for_user(db: Session, user_id: uuid.UUID) -> list[Match]:
-    stmt = select(Match).where(Match.user_id == user_id).order_by(Match.created_at.desc())
+    stmt = select(Match).where(Match.user_id == user_id).order_by(Match.created_at.desc(), Match.id.desc())
     return list(db.execute(stmt).scalars().all())
 
 
@@ -26,7 +26,7 @@ def latest_for_user_and_scholarship(db: Session, user_id: uuid.UUID, scholarship
     stmt = (
         select(Match)
         .where(Match.user_id == user_id, Match.scholarship_id == scholarship_id)
-        .order_by(Match.created_at.desc())
+        .order_by(Match.created_at.desc(), Match.id.desc())  # id: deterministic pick on a timestamp tie
         .limit(1)
     )
     return db.execute(stmt).scalar_one_or_none()

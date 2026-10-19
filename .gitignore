@@ -18,6 +18,12 @@ venv/
 env/
 uv.lock.bak
 
+# Scratch test-run output (full-suite / red / green captures)
+backend/full_*.txt
+backend/red_*.txt
+backend/green_*.txt
+backend/rerun_*.txt
+
 # Local object storage (uploaded/generated documents)
 backend/data/storage/
 
@@ -39,3 +45,4 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 .claude/
+backend/full_final.txt

@@ -22,6 +22,12 @@ SEED_FILE = Path(__file__).resolve().parents[1] / "data" / "seeds" / "seed_sourc
 
 def load_seed_rows(path: Path = SEED_FILE) -> list[SourceRegistryCreate]:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or []
+    for row in raw:
+        # 002: fill the column from the legacy key only when the row has no
+        # explicit `listing_page_url` key (an explicit key, even null, wins).
+        legacy = (row.get("extraction_rules") or {}).get("list_page_url")
+        if "listing_page_url" not in row and legacy is not None:
+            row["listing_page_url"] = legacy
     return [SourceRegistryCreate.model_validate(row) for row in raw]
 
 

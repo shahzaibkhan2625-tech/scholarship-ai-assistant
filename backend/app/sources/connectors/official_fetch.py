@@ -33,10 +33,12 @@ alongside, and a miss is never logged as a coverage gap — this is a
 best-effort signal, not a completeness guarantee (ADR-0005 Decision 4).
 """
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import Callable, NamedTuple
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
@@ -49,7 +51,20 @@ from app.tools.detect_candidate_links import find_candidate_links
 from app.tools.extract_listing import ExtractListingOutput, extract_listing_from_page
 from app.tools.web_fetch import FetchResult, fetch_url
 
+logger = logging.getLogger(__name__)
+
+# 002 D3: small fixed vocabulary for `failure_kind`, set where each failure is
+# detected -- never derived by matching on error-message text.
+FAILURE_FETCH_ERROR = "fetch_error"
+FAILURE_EMPTY_EXTRACTION = "empty_extraction"
+FAILURE_REDIRECT_ANOMALY = "redirect_anomaly"
+
 __all__ = [
+    "FAILURE_FETCH_ERROR",
+    "FAILURE_EMPTY_EXTRACTION",
+    "FAILURE_REDIRECT_ANOMALY",
+    "FetchTarget",
+    "resolve_fetch_target",
     "OfficialFetchResult",
     "fetch_official",
     "CachedScholarshipRef",
@@ -57,6 +72,48 @@ __all__ = [
     "fetch_and_extract_listing",
     "SourceNotApprovedError",
 ]
+
+
+class FetchTarget(NamedTuple):
+    url: str
+    used_homepage_fallback: bool
+
+
+def _valid_listing_candidate(candidate: object, domain: str) -> bool:
+    """Same rule as `SourceRegistryCreate._listing_url_matches_domain`: http(s)
+    and hostname equal to the source domain (case-insensitive). Kept as a
+    separate helper (the schema validator is deliberately not refactored); a
+    parity test keeps the two in step."""
+    if not isinstance(candidate, str) or not candidate:
+        return False
+    parsed = urlparse(candidate)
+    return parsed.scheme.lower() in ("http", "https") and (parsed.hostname or "").lower() == domain.lower()
+
+
+def resolve_fetch_target(source) -> FetchTarget:
+    """Pure (no DB, no I/O, no caching): which URL to fetch for `source`.
+    Precedence: `listing_page_url` column -> legacy
+    `extraction_rules["list_page_url"]` -> `https://{domain}` (the only branch
+    with `used_homepage_fallback=True`). An invalid candidate is skipped with a
+    warning and the next tier tried; this never raises."""
+
+    legacy = (source.extraction_rules or {}).get("list_page_url")
+    for candidate in (source.listing_page_url, legacy):
+        if candidate is None:
+            continue
+        if _valid_listing_candidate(candidate, source.domain):
+            return FetchTarget(candidate, False)
+        logger.warning("ignoring invalid listing URL %r for source domain %s", candidate, source.domain)
+    return FetchTarget(f"https://{source.domain}", True)
+
+
+def _bare_host(url: str) -> str:
+    host = (urlparse(url).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def _is_homepage(url: str) -> bool:
+    return urlparse(url).path.rstrip("/") == ""
 
 
 @dataclass(frozen=True)
@@ -68,12 +125,24 @@ class OfficialFetchResult:
     http_status: int | None = None
     fetched_at: datetime | None = None
     error: str | None = None
+    final_url: str | None = None
+    # 002 D3: fixed vocabulary ("fetch_error"); None on success.
+    failure_kind: str | None = None
 
 
 class _FetchFailed(Exception):
     def __init__(self, fetch_result: FetchResult):
         super().__init__(fetch_result.error)
         self.fetch_result = fetch_result
+
+
+def _gate_source(db: Session, source_id: uuid.UUID, allow_failing: bool):
+    """The Principle IV fetch gate. Default: active-only (001, unchanged).
+    `allow_failing=True` (monitoring recovery only, ADR-0008) also admits a
+    `failing` source; `pending` and `disabled` stay blocked either way."""
+    if allow_failing:
+        return source_repo.get_monitorable_source_by_id(db, source_id)
+    return source_repo.get_source_by_id(db, source_id)
 
 
 def fetch_official(
@@ -84,8 +153,12 @@ def fetch_official(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     fetch: Callable[[str], FetchResult] = fetch_url,
     sleep: Callable[[float], None] | None = None,
+    used_homepage_fallback: bool = False,
+    monitoring_run_id: uuid.UUID | None = None,
+    skip_failing_transition: bool = False,
+    allow_failing: bool = False,
 ) -> OfficialFetchResult:
-    source = source_repo.get_source_by_id(db, source_id)
+    source = _gate_source(db, source_id, allow_failing)
     if source is None:
         raise SourceNotApprovedError(f"source {source_id} is not an active, approved source")
 
@@ -109,6 +182,9 @@ def fetch_official(
                 status=FetchStatus.OK,
                 http_status=fetch_result.status_code,
                 retry_count=outcome.attempts - 1,
+                fetched_url=url,
+                used_homepage_fallback=used_homepage_fallback,
+                monitoring_run_id=monitoring_run_id,
             ),
         )
         return OfficialFetchResult(
@@ -118,6 +194,7 @@ def fetch_official(
             content=fetch_result.html,
             http_status=fetch_result.status_code,
             fetched_at=datetime.now(timezone.utc),
+            final_url=fetch_result.final_url,
         )
 
     failed = outcome.last_error
@@ -133,9 +210,16 @@ def fetch_official(
             http_status=http_status,
             error=error_message,
             retry_count=outcome.attempts - 1,
+            fetched_url=url,
+            used_homepage_fallback=used_homepage_fallback,
+            monitoring_run_id=monitoring_run_id,
         ),
     )
-    source_repo.mark_source_failing(db, source_id)
+    if not skip_failing_transition:
+        # 002 D5: monitoring passes skip_failing_transition=True so ONE failed
+        # attempt never takes a source out of the active set; the default
+        # (discovery, 001) still marks the source failing exactly as before.
+        source_repo.mark_source_failing(db, source_id)
 
     return OfficialFetchResult(
         source_id=source_id,
@@ -143,6 +227,7 @@ def fetch_official(
         success=False,
         http_status=http_status,
         error=error_message,
+        failure_kind=FAILURE_FETCH_ERROR,
     )
 
 
@@ -169,7 +254,7 @@ def _last_successful_extraction(db: Session, source_id: uuid.UUID):
     LISTING-EXTRACTION success (status OK *and* `items_found` populated) for
     this source — not just a raw HTTP-200, which `fetch_official` above logs
     on every attempt regardless of whether extraction ever ran.
-    `get_fetch_logs_for_source` is already ordered `started_at desc`."""
+    `get_fetch_logs_for_source` is already ordered `started_at desc, id desc` (deterministic on a tie)."""
     for log in source_repo.get_fetch_logs_for_source(db, source_id):
         if log.status == FetchStatus.OK and log.items_found is not None:
             return log
@@ -189,6 +274,12 @@ class ListingExtractionResult:
     candidates: list[dict] = field(default_factory=list)  # ready for run_ingestion; "ok" only
     cached: list[CachedScholarshipRef] = field(default_factory=list)  # already-persisted refs; "cached" only
     error: str | None = None
+    fetched_url: str | None = None
+    used_homepage_fallback: bool = False
+    # 002 D3: "fetch_error" | "empty_extraction" | "redirect_anomaly"; None unless status == "fail".
+    failure_kind: str | None = None
+    # 002 D2: this call's grounded accepted_count; "ok" only.
+    accepted_count: int | None = None
 
 
 def _detect_and_record_candidate_sources(db: Session, url: str, html: str) -> None:
@@ -221,25 +312,50 @@ def _detect_and_record_candidate_sources(db: Session, url: str, html: str) -> No
 def fetch_and_extract_listing(
     db: Session,
     source_id: uuid.UUID,
-    url: str,
+    url: str | None = None,
     *,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     fetch: Callable[[str], FetchResult] = fetch_url,
     extract_listing: Callable[..., ExtractListingOutput] = extract_listing_from_page,
     sleep: Callable[[float], None] | None = None,
+    monitoring_run_id: uuid.UUID | None = None,
+    bypass_cache: bool = False,
+    skip_failing_transition: bool = False,
+    allow_failing: bool = False,
 ) -> ListingExtractionResult:
     """T135: fetch (`fetch_official` above) -> `extract_listing` -> shaped
     result, gated by a two-layer cache so a source isn't re-fetched/
     re-extracted more often than its own `update_frequency` claims it
     changes (T135/A9). All `source_repo` reads/writes for the extraction
     step live here, in the connector tier — never in the Discovery Agent
-    (see module docstring)."""
+    (see module docstring).
 
-    source = source_repo.get_source_by_id(db, source_id)
+    `url=None` (002) resolves the target via `resolve_fetch_target`; an
+    explicit `url` behaves exactly as in 001 (`(url, False)`, never resolved,
+    never redirect-checked)."""
+
+    source = _gate_source(db, source_id, allow_failing)
     if source is None:
         raise SourceNotApprovedError(f"source {source_id} is not an active, approved source")
 
-    last_extraction = _last_successful_extraction(db, source_id)
+    resolved = url is None
+    if resolved:
+        target = resolve_fetch_target(source)
+        url, used_homepage_fallback = target.url, target.used_homepage_fallback
+    else:
+        used_homepage_fallback = False
+    log_context = dict(
+        fetched_url=url, used_homepage_fallback=used_homepage_fallback, monitoring_run_id=monitoring_run_id
+    )
+
+    # 002 T177: monitoring must never receive "cached" (a cached result cannot
+    # detect change); default False leaves every 001/discovery call unchanged.
+    last_extraction = None if bypass_cache else _last_successful_extraction(db, source_id)
+    # On the resolved path a cached row only counts if it was fetched from this
+    # very target (NULL pre-002 rows never match), so changing/clearing the
+    # listing URL is never answered from a different page's extraction.
+    if last_extraction is not None and resolved and last_extraction.fetched_url != url:
+        last_extraction = None
     if last_extraction is not None:
         age = datetime.now(timezone.utc) - last_extraction.started_at
         if age < _extraction_ttl(source.update_frequency):
@@ -247,11 +363,57 @@ def fetch_and_extract_listing(
                 CachedScholarshipRef(scholarship_id=ss.scholarship_id, verification_status=ss.verification_status)
                 for ss in source_repo.get_scholarship_sources_by_source(db, source_id)
             ]
-            return ListingExtractionResult(source_id=source_id, status="cached", cached=cached)
+            return ListingExtractionResult(
+                source_id=source_id,
+                status="cached",
+                cached=cached,
+                fetched_url=url,
+                used_homepage_fallback=used_homepage_fallback,
+            )
 
-    fetch_result = fetch_official(db, source_id, url, max_attempts=max_attempts, fetch=fetch, sleep=sleep)
+    fetch_result = fetch_official(
+        db,
+        source_id,
+        url,
+        max_attempts=max_attempts,
+        fetch=fetch,
+        sleep=sleep,
+        used_homepage_fallback=used_homepage_fallback,
+        monitoring_run_id=monitoring_run_id,
+        skip_failing_transition=skip_failing_transition,
+        allow_failing=allow_failing,
+    )
     if not fetch_result.success:
-        return ListingExtractionResult(source_id=source_id, status="fail", error=fetch_result.error)
+        return ListingExtractionResult(
+            source_id=source_id,
+            status="fail",
+            error=fetch_result.error,
+            fetched_url=url,
+            used_homepage_fallback=used_homepage_fallback,
+            failure_kind=fetch_result.failure_kind,
+        )
+
+    if resolved and fetch_result.final_url:
+        redirect_error = None
+        if _bare_host(fetch_result.final_url) != _bare_host(f"https://{source.domain}"):
+            redirect_error = f"off-domain redirect: {fetch_result.final_url}"
+        elif _is_homepage(fetch_result.final_url) and not _is_homepage(url):
+            redirect_error = f"redirected to homepage: {url}"
+        if redirect_error is not None:
+            source_repo.log_fetch(
+                db,
+                SourceFetchLogCreate(
+                    source_id=source_id, status=FetchStatus.FAIL, error=redirect_error, retry_count=0, **log_context
+                ),
+            )
+            return ListingExtractionResult(
+                source_id=source_id,
+                status="fail",
+                error=redirect_error,
+                fetched_url=url,
+                used_homepage_fallback=used_homepage_fallback,
+                failure_kind=FAILURE_REDIRECT_ANOMALY,
+            )
 
     _detect_and_record_candidate_sources(db, url, fetch_result.content or "")
 
@@ -267,10 +429,21 @@ def fetch_and_extract_listing(
         if extraction.rejected_count:
             detail = f"listing extraction yielded 0 grounded candidates (rejected {extraction.rejected_count} ungrounded)"
         source_repo.log_fetch(
-            db, SourceFetchLogCreate(source_id=source_id, status=FetchStatus.FAIL, error=detail, retry_count=0)
+            db,
+            SourceFetchLogCreate(
+                source_id=source_id, status=FetchStatus.FAIL, error=detail, retry_count=0, **log_context
+            ),
         )
-        source_repo.mark_source_failing(db, source_id)
-        return ListingExtractionResult(source_id=source_id, status="fail", error=detail)
+        if not skip_failing_transition:
+            source_repo.mark_source_failing(db, source_id)
+        return ListingExtractionResult(
+            source_id=source_id,
+            status="fail",
+            error=detail,
+            fetched_url=url,
+            used_homepage_fallback=used_homepage_fallback,
+            failure_kind=FAILURE_EMPTY_EXTRACTION,
+        )
 
     # Some candidates were hallucinated and rejected by grounding but others
     # were accepted: proceed with the good ones, but the rejection is still
@@ -288,8 +461,16 @@ def fetch_and_extract_listing(
             retry_count=0,
             items_found=extraction.accepted_count,
             error=log_note,
+            **log_context,
         ),
     )
 
     raw_candidates = [candidate.model_dump(exclude_none=True) for candidate in extraction.candidates]
-    return ListingExtractionResult(source_id=source_id, status="ok", candidates=raw_candidates)
+    return ListingExtractionResult(
+        source_id=source_id,
+        status="ok",
+        candidates=raw_candidates,
+        fetched_url=url,
+        used_homepage_fallback=used_homepage_fallback,
+        accepted_count=extraction.accepted_count,
+    )

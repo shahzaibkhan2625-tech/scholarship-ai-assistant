@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 
-from app.data.files.storage import InvalidFileRefError, LocalFileStorage
+from app.data.files.storage import InvalidFileRefError, LocalFileStorage, StorageError
 
 
 @pytest.fixture
@@ -92,3 +92,17 @@ def test_delete_with_malicious_file_ref_raises(storage):
 def test_exists_with_malicious_file_ref_raises(storage):
     with pytest.raises(InvalidFileRefError):
         storage.exists("../../../../etc/passwd")
+
+
+def test_save_wraps_os_errors_in_storage_error(storage, monkeypatch):
+    """US8 T235: callers depend on the Protocol's `StorageError`, not on `OSError`, so a
+    different backend (e.g. S3) can fail the same way without callers changing."""
+    from pathlib import Path
+
+    def _boom(self, data):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_bytes", _boom)
+
+    with pytest.raises(StorageError, match="disk full"):
+        storage.save(uuid.uuid4(), "transcript.pdf", b"data")

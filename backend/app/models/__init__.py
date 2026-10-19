@@ -3,4 +3,17 @@ resolve string-based relationship() forward references (e.g.
 Scholarship.funding_details -> "FundingDetails") regardless of which model
 module a caller imports first."""
 
-from app.models import application, document, funding, match, profile, requirement, scholarship, source, user  # noqa: F401
+from app.models import (  # noqa: F401
+    alert,
+    application,
+    candidate_validation,
+    document,
+    funding,
+    match,
+    monitoring,
+    profile,
+    requirement,
+    scholarship,
+    source,
+    user,
+)

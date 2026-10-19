@@ -17,13 +17,14 @@ ignored"; data-model.md §6 "never a row left in an ambiguous state"):
 """
 
 import hashlib
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.data.files.storage import get_storage
+from app.data.files.storage import StorageError, get_storage
 from app.data.repositories import application_repo, document_repo, scholarship_repo
 from app.data.repositories.db import get_db
 from app.models.document import DocumentType
@@ -31,6 +32,8 @@ from app.models.user import User
 from app.schemas.document import UploadedDocument
 from app.services.profile import get_or_create_profile
 from app.workflows.doc_pipeline.graph import run_doc_pipeline
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -52,8 +55,16 @@ def upload_document(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
 
     file_bytes = file.file.read()
-    storage = get_storage()
-    file_ref = storage.save(current_user.id, file.filename or "upload", file_bytes)
+    try:
+        file_ref = get_storage().save(current_user.id, file.filename or "upload", file_bytes)
+    except (StorageError, OSError):
+        # Nothing has been persisted yet (the row is created after the save), so the upload can
+        # simply be retried; a bare 500 would tell the user nothing.
+        logger.exception("document upload: storage write failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="We couldn't store your file right now. Please retry the upload in a moment.",
+        )
     checksum = hashlib.sha256(file_bytes).hexdigest()
 
     document = document_repo.create_application_document(db, current_user.id, application_id, file_ref, checksum)

@@ -17,6 +17,9 @@ class FetchResult:
     status_code: int | None = None
     html: str | None = None
     error: str | None = None
+    # 002: the post-redirect URL (httpx follows redirects), so callers can tell
+    # "the page I asked for" from "a redirect landed me somewhere else".
+    final_url: str | None = None
 
 
 def fetch_url(url: str, *, timeout: float = _TIMEOUT_SECONDS) -> FetchResult:
@@ -38,6 +41,13 @@ def fetch_url(url: str, *, timeout: float = _TIMEOUT_SECONDS) -> FetchResult:
             success=False,
             status_code=response.status_code,
             error=f"Server responded with HTTP {response.status_code}",
+            final_url=str(response.url),
         )
 
-    return FetchResult(url=url, success=True, status_code=response.status_code, html=response.text)
+    return FetchResult(
+        url=url,
+        success=True,
+        status_code=response.status_code,
+        html=response.text,
+        final_url=str(response.url),
+    )
