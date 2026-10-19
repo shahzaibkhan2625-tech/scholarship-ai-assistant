@@ -86,7 +86,7 @@ unchanged; none failed. `specs/001-scholarship-mvp/` has no diff.
 
 | # | Step | What was done | Result |
 |---|---|---|---|
-| 1 | HTTPS: `http://<host>/health` upgrades to HTTPS | **Statically verified only**: `Caddyfile` has `tls internal`, an HTTP→HTTPS redirect and a loopback `reverse_proxy`; `tests/infra/test_deploy_config.py`. The stack was never started. | **NOT DEMONSTRATED** — open item 3 |
+| 1 | HTTPS: `http://<host>/health` upgrades to HTTPS | **Statically verified only**: `Caddyfile` has `tls internal`, an HTTP→HTTPS redirect and a loopback `reverse_proxy`; `tests/infra/test_deploy_config.py`. The stack was never started when this log was first written. | **DEMONSTRATED 2026-10-19** from outside the VM — see open item 3 (closed) and `docs/operations-hardening.md` §13 |
 | 2 | Rate limit: `429` after threshold; second IP unaffected | `tests/core/test_rate_limit.py` (`test_request_beyond_the_limit_gets_429_with_json_body_and_retry_after`, `test_a_second_client_ip_is_unaffected`, `test_the_bucket_refills_with_time`) | PASS (in-process; behind-Caddy IP handling relies on `--proxy-headers`, asserted statically, not exercised live) |
 | 3 | Retry/backoff: fail twice then succeed → one row, `retry_count=2`, `ok` | `tests/sources/test_connectors.py::test_official_fetch_fail_twice_then_succeed_logs_one_ok_row_with_retry_count_2` and the exhausted-retries test beside it (T223's tests live in `test_connectors.py`, not `test_retry_policy.py` as the task text says), plus `tests/sources/test_retry_policy.py` | PASS |
 | 4 | Logs/metrics: JSON log line for a run; `/metrics` counter increments | `tests/core/test_logging.py`, `tests/core/test_metrics.py`, `tests/workflows/test_source_monitor.py::test_a_run_increments_the_run_duration_and_per_status_fetch_counters` | PASS |
@@ -108,19 +108,27 @@ log is outstanding for them.
 2. **Neon point-in-time recovery.** Whether PITR is enabled, its restore window, and a restore
    drill into a scratch branch have not been checked or performed (no console access). Steps:
    `docs/operations-hardening.md` section 8. Record the date, restore point and result here.
-3. **HTTPS from the public internet.** `https://130.61.159.24/health` working, the HTTP redirect,
-   port 8000 being unreachable from outside, and the VM firewall (Oracle security list +
-   firewalld) have not been exercised. Steps: `docs/operations-hardening.md` sections 3–4.
+3. **HTTPS from the public internet. — CLOSED 2026-10-19.** Deployed to the Oracle VM
+   (`002-source-monitoring-hardening` @ `e7b3c24`, 2026-10-18) and verified from outside the VM:
+   `https://130.61.159.24/health` returns 200 (self-signed `tls internal` certificate);
+   `http://130.61.159.24/` redirects (308) to HTTPS; `https://…/metrics` returns 404 (also for
+   `/Metrics`); plain `http://…:8000` is unreachable from outside and `8000/tcp` was removed from
+   firewalld. The first external attempt failed because the Oracle security-list ingress rules for
+   80/443 were missing (a console step); it passed once they were added. Full record, rollback
+   info and the security-list pitfalls: `docs/operations-hardening.md` §13 and §3.
+
+   *Items 1 and 2 above remain open and are unchanged by this update.*
 
 ## Additional unverified items found while writing this log
 
 Not among the three, but equally unproven:
 
-- **The `Caddyfile` has not been validated by Caddy.** No Caddy or container runtime exists on the
-  development machine; only the repository's static checks ran. Run the `caddy validate` command in
-  runbook section 2 before first start.
-- **The compose file has not been brought up** under podman-compose on Oracle Linux (rootful
-  podman, SELinux `:z` label, the `${SITE_ADDRESS:-…}` interpolation, container names).
+- **The `Caddyfile` has not been validated by Caddy.** — *Resolved 2026-10-18:* `caddy validate`
+  (Caddy 2, via podman on the VM) reported `Valid configuration` before the deploy.
+- **The compose file has not been brought up** under podman-compose on Oracle Linux. — *Resolved
+  2026-10-18:* brought up with rootful podman-compose; SELinux `:z` mount, the `${SITE_ADDRESS:-…}`
+  default and the loopback bind all worked (no AVC denials). The container names turned out to be
+  `scholarship-ai-assistant_backend_1` / `_caddy_1`.
 - **Document persistence across a real redeploy** (US8 step 5) — see row 5 above.
 - **The first production retention run** (large one-time delete) — see row 6 above.
 
