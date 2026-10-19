@@ -15,12 +15,15 @@ deployed.
 on `001-scholarship-mvp`. The VM ran Phase 0 code for two weeks before this
 was noticed.
 
-**Fix:** The VM is now checked out on `001-scholarship-mvp`. Verify with
-`git -C <repo-path> branch --show-current` after any redeploy or VM rebuild —
-don't assume.
+**Fix (original, historical):** the VM was switched to `001-scholarship-mvp`.
 
-**Permanent fix:** Merging `001-scholarship-mvp` into `main` removes this trap
-entirely, since a fresh clone/redeploy defaults to `main`.
+**Permanent fix (done):** `main` now carries the 001 work and, since 2026-10-19, the whole 002 feature
+(merge commit `7b3f4cb`, which also brought in the last 001-branch commits). **`main` is now the branch to
+track.** The VM's checkout was switched to `main` the same day (`git checkout main && git pull`). The
+trap above can no longer silently serve stale code from a fresh clone, but still verify with
+`git -C <repo-path> branch --show-current` and `git -C <repo-path> log -1 --oneline` after any
+redeploy or VM rebuild. Feature branches should be merged to `main` before they are deployed, or the
+VM must be deliberately switched and switched back.
 
 ## 2. Two separate Podman installs (root vs. user)
 
@@ -120,9 +123,9 @@ The exact sequence that worked, in order, with what to check after each step.
    ```
    git -C <repo-path> branch --show-current
    ```
-   Expect the branch you intend to deploy (historically `001-scholarship-mvp`; for
-   feature 002 it is `002-source-monitoring-hardening` until merged to `main`). If
-   not, `git checkout <branch>` (stash/commit any local changes first). The
+   Expect `main` (the branch to track; see section 1). If not, `git checkout main && git pull`
+   (stash/commit any local changes first). If you are deliberately deploying a feature branch
+   for testing, say so in the deployment log (section 7) and switch back to `main` afterwards. The
    public listener is now Caddy; see `docs/operations-hardening.md`.
 
 2. **Pull latest**

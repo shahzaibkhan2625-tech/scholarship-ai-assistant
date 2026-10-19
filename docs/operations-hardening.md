@@ -33,9 +33,9 @@ Internet ──80/443──▶ Caddy (host network) ──127.0.0.1:8000──�
 Follow the "Verified deployment procedure" in [vm-deployment-notes.md](vm-deployment-notes.md),
 with these B4 differences:
 
-1. **Branch:** confirm the branch you intend to deploy with `git branch --show-current`. The
-   notes' example branch name (`001-scholarship-mvp`) is historical; this feature lives on
-   `002-source-monitoring-hardening` until merged.
+1. **Branch:** the VM tracks `main` (feature 002 was merged on 2026-10-19, `7b3f4cb`). Confirm with
+   `git branch --show-current` and `git log -1 --oneline` before building. The example branch name
+   in the older notes (`001-scholarship-mvp`) is historical.
 2. **First cutover to Caddy only:** after this change, `http://<ip>:8000` stops working from
    outside (by design). Anything that called the API on :8000 directly must move to
    `https://<ip>/`.
