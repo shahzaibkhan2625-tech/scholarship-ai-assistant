@@ -90,8 +90,8 @@ unchanged; none failed. `specs/001-scholarship-mvp/` has no diff.
 | 2 | Rate limit: `429` after threshold; second IP unaffected | `tests/core/test_rate_limit.py` (`test_request_beyond_the_limit_gets_429_with_json_body_and_retry_after`, `test_a_second_client_ip_is_unaffected`, `test_the_bucket_refills_with_time`) | PASS (in-process; behind-Caddy IP handling relies on `--proxy-headers`, asserted statically, not exercised live) |
 | 3 | Retry/backoff: fail twice then succeed → one row, `retry_count=2`, `ok` | `tests/sources/test_connectors.py::test_official_fetch_fail_twice_then_succeed_logs_one_ok_row_with_retry_count_2` and the exhausted-retries test beside it (T223's tests live in `test_connectors.py`, not `test_retry_policy.py` as the task text says), plus `tests/sources/test_retry_policy.py` | PASS |
 | 4 | Logs/metrics: JSON log line for a run; `/metrics` counter increments | `tests/core/test_logging.py`, `tests/core/test_metrics.py`, `tests/workflows/test_source_monitor.py::test_a_run_increments_the_run_duration_and_per_status_fetch_counters` | PASS |
-| 5 | Document persistence across a container restart | Static only: compose mounts the named volume `backend_storage` at `/data/storage` and forces `STORAGE_ROOT` to it (`test_deploy_config.py`); storage-failure handling is tested (`test_upload_document_returns_retryable_error_when_storage_fails`). A real restart was **not** performed. | **NOT DEMONSTRATED** (needs the VM; runbook section 10) |
-| 6 | Retention: floors keep health history; old rows beyond them pruned; CLI dry run | `tests/services/test_retention.py` (floors a/b/c, scope isolation, dry run == real run, batching, CLI). Dry run against the dev DB: 0 rows. | PASS (automated); production-scale first run still to be done by the owner (runbook section 7) |
+| 5 | Document persistence across a container restart | Static checks (compose volume at `/data/storage`, `STORAGE_ROOT` forced) **and a real recreate on the VM, 2026-10-22**: uploaded a PDF through the live HTTPS API, removed and recreated both containers (new backend ID, same image, no `--build`), then compared SHA-256 and size of the file in the volume, the `application_documents.checksum`, and a read through the app's storage layer. All identical. Test data removed afterwards. The upload itself returned a 500 (Gemini quota; see defect below) after the file and row were saved. | **PASS 2026-10-22** (procedure: `docs/operations-hardening.md` section 10) |
+| 6 | Retention: floors keep health history; old rows beyond them pruned; CLI dry run | `tests/services/test_retention.py` (floors a/b/c, scope isolation, dry run == real run, batching, CLI). Dry run against the dev DB: 0 rows. **First production run 2026-10-22 on the VM: dry run 0 rows, real run `deleted 0 row(s)`**; the fetch log held 650 rows, oldest 44 days (inside the 90-day window), so 0 is correct. | PASS (automated); **first production run PASS 2026-10-22** (nothing old enough to delete yet; first real deletion expected ~2026-12-07) |
 | 7 | Backups: Neon PITR enabled | Document-only check; no access to the Neon console. | **NOT DEMONSTRATED** — open item 2 |
 | 8 | Security: `pip-audit` clean; no secret literals; sanitization | `pip-audit` run (clean, see above); `tests/test_no_secrets_in_repo.py` (also scans `Caddyfile`, compose, `.env.example`); `tests/sources/test_monitor_sanitization.py` | PASS |
 
@@ -105,6 +105,11 @@ log is outstanding for them.
    scholarship sites, are deselected by default and run weekly in `.github/workflows/deep-ci.yml`.
    They were **not run** here. Command: `cd backend && uv run pytest -m smoke`. T169 designates it as the real-network check for the three re-enabled
    listing sources (US6); whether its single listing test covers all three was not verified.
+   **Update 2026-10-22 (partial run):** only the two Qdrant tests were run (`-k qdrant`; the Gemini quota was
+   exhausted, so the Gemini and discovery tests were deliberately deferred). **Both failed**: `ConnectError: [WinError 10054]
+   connection forcibly closed`. The same TLS reset was reproduced with plain `curl` from the VM, so it is not this laptop's
+   network. Most likely the free-tier Qdrant cluster is suspended or removed (the failure mode T130 found); not confirmed
+   without the Qdrant console. **Still open**, and now a real finding: the vector search behind Q&A and matching may be down.
 2. **Neon point-in-time recovery.** Whether PITR is enabled, its restore window, and a restore
    drill into a scratch branch have not been checked or performed (no console access). Steps:
    `docs/operations-hardening.md` section 8. Record the date, restore point and result here.
@@ -129,8 +134,8 @@ Not among the three, but equally unproven:
   2026-10-18:* brought up with rootful podman-compose; SELinux `:z` mount, the `${SITE_ADDRESS:-…}`
   default and the loopback bind all worked (no AVC denials). The container names turned out to be
   `scholarship-ai-assistant_backend_1` / `_caddy_1`.
-- **Document persistence across a real redeploy** (US8 step 5) — see row 5 above.
-- **The first production retention run** (large one-time delete) — see row 6 above.
+- ~~Document persistence across a real redeploy~~ - **resolved 2026-10-22** (PASS, row 5 above).
+- ~~The first production retention run~~ - **resolved 2026-10-22** (0 rows, correct; row 6 above). The first run that actually deletes rows is still ahead.
 
 ## Drift and gaps found and fixed during B4
 
@@ -143,3 +148,20 @@ Not among the three, but equally unproven:
 | `CoverageSnapshot.claims_complete_coverage`: contract `enum: [false]`, live `const: false` | Same meaning; the comparator folds `const` into `enum` |
 | T171 guardrail test file `test_source_monitor_guardrails.py` was never created in US1 though the invariant held | **Created** in B4 (4 tests) |
 | ~78 task boxes (T143–T215, T249, T250) unticked in `tasks.md` although committed | Ticked after checking each against its files and commit; T171/T172/T173 annotated with actual file names |
+
+## Post-deployment verification, 2026-10-22
+
+| Item | Result |
+|---|---|
+| Document persistence across a real container recreate | **PASS** (row 5) |
+| First production retention run | **PASS**, 0 rows deleted, correct (row 6) |
+| Live smoke tests | **Partial / FAIL**: Qdrant pair failed (connection reset); Gemini and discovery tests not run (daily quota exhausted), to be run after the quota resets |
+| Neon point-in-time recovery | **Still open** (open item 2) |
+
+Defects and observations found while doing this:
+- **Upload returns a bare 500 when the LLM provider errors** (Gemini 429). The saved file and row are kept but carry no flag.
+  A fix is proposed and awaiting approval (not yet changed).
+- **Gemini free-tier quota (20 requests/day observed) is exhausted**, which also blocks the LLM smoke tests.
+- **Qdrant Cloud unreachable** from both networks (see open item 1 update).
+- **SSH to the VM flapped** (port 22 timed out for minutes, three times) while HTTPS stayed up; self-recovering, cause unknown.
+- Removing the backend container requires removing Caddy first (`depends_on`); runbook sections 10 and 12 updated.

@@ -226,14 +226,27 @@ Backup recovery is demonstrated by you, not by the build (SC-009).
 
 ## 10. Persistent-volume redeploy check
 
-Proves uploaded documents survive a redeploy (NFR-HARDEN-6, quickstart US8 step 5):
+Proves uploaded documents survive a redeploy (NFR-HARDEN-6, quickstart US8 step 5). Procedure as
+actually run on 2026-10-22 (the API has **no document download or delete endpoint**, so retrieval is
+verified at the storage layer plus the database checksum):
 
-1. Upload a document through the API; note its id.
-2. `sudo podman exec scholarship-ai-assistant_backend_1 ls /data/storage/documents` shows the file.
-3. Remove and recreate the container (section 2 steps 3–4; **not** `podman-compose down -v`,
-   which deletes the volume).
-4. Download the document again; it must be identical.
-5. `sudo podman volume ls` shows `…backend_storage`, `…caddy_data`, `…caddy_config`.
+1. Sign up / log in a throwaway user, `POST /applications`, then `POST /applications/{id}/documents`
+   (multipart: `type=unclassified`, `file=@x.pdf`). Record the SHA-256 of the local file.
+2. From the DB (`application_documents`: `file_ref`, `checksum`) and inside the container
+   (`sudo podman exec scholarship-ai-assistant_backend_1 sha256sum /data/storage/documents/*/*.pdf`) confirm all three hashes agree.
+3. **Recreate both containers, in this order** (Caddy was created with a dependency on the backend, so
+   `podman rm` of the backend fails with "has dependent containers" while Caddy exists):
+   ```
+   sudo podman stop scholarship-ai-assistant_caddy_1 && sudo podman rm scholarship-ai-assistant_caddy_1
+   sudo podman stop scholarship-ai-assistant_backend_1 && sudo podman rm scholarship-ai-assistant_backend_1
+   sudo /usr/local/bin/podman-compose -f docker-compose.podman.yml up -d      # no --build
+   ```
+   Confirm the backend container ID changed. **Not** `podman-compose down -v` (deletes the volumes).
+4. Re-check: same SHA-256 and size inside the new container, same `application_documents` row, and the
+   app's own storage code reads it (`get_storage().exists(ref)` / `.get(ref)` via `podman exec ... uv run python -c`).
+5. `sudo podman volume ls` shows `...backend_storage`, `...caddy_data`, `...caddy_config`.
+6. Clean up: delete the test rows (`application_documents`, `applications`, `profiles`, `users`) and the
+   file (`get_storage().delete(ref)`), scoped to the test user id only.
 
 Never run `podman volume rm` / `down -v` on these without a backup: `backend_storage` holds
 the only copy of uploaded documents and `caddy_data` holds the CA the clients trust. Document
@@ -258,6 +271,9 @@ changes.
 | `app/core/metrics.py` imports `get_current_user` from `app.api` (layering inversion) | Cleanup candidate | tasks.md US7 note |
 | `created_at.desc()` same-transaction ties | **Closed** in US8 B2 (id tiebreakers at 7 sites) | commit 5603428 |
 | Document storage has no off-VM backup | Open | §10 |
+| **Document upload returns a bare 500 when the LLM provider errors** (e.g. Gemini 429). The file and the `application_documents` row are already saved, but the row has no flag explaining the failure and the HTTP 500 is the only trace. `_extract_fields_node` catches only `DocumentFieldExtractionError` (bad JSON), not provider/transport errors. Found 2026-10-22. | **Open, fix proposed** | `app/workflows/doc_pipeline/graph.py`, `app/tools/extract_document_fields.py` |
+| **Gemini free-tier quota is tiny** (20 requests/day for `gemini-2.5-flash` observed). Once used up, every LLM-backed endpoint (document parsing, Q&A, URL matching, generation) fails until the quota resets (about a 24h window); the LLM smoke tests also cannot pass. | Operational constraint; consider a paid key | observed 2026-10-22 |
+| **Qdrant Cloud endpoint resets TLS connections** from both this laptop and the VM (2026-10-22): `test_qdrant_reachable` and `test_qdrant_collection_query_works` fail with a connection reset. Likely a suspended or removed free-tier cluster (the T130 failure mode) but not confirmed; needs the Qdrant console. | **Open, owner action** | `tests/smoke/test_live_services.py` |
 | **Smoke-test coverage unverified.** Could not confirm the live listing smoke test covers all three re-enabled sources (DAAD, Stipendium Hungaricum, KAUST); it appears to target a single source. Verify and expand in a future slice. | Open | `backend/tests/smoke/test_discovery_listing_extraction_live.py`, verification log |
 | Caddy `2-alpine` is a major-version pin and moves with minor releases | Review periodically (at least quarterly) and after each Caddy security notice | compose |
 
@@ -267,6 +283,8 @@ changes.
 |---|---|---|
 | 429 for everyone at once | `--proxy-headers` / `--forwarded-allow-ips` missing, all callers look like 127.0.0.1 | `sudo podman inspect backend` → command; recreate container |
 | `http://<ip>:8000` works from outside | backend bound `0.0.0.0` or firewall open | `ss -tlnp \| grep 8000` must show 127.0.0.1; §3 |
+| `podman rm scholarship-ai-assistant_backend_1` says "has dependent containers" | Caddy was created depending on the backend | Stop and remove `scholarship-ai-assistant_caddy_1` first, then the backend (section 10 step 3) |
+| SSH to the VM times out intermittently (port 22 only; 80/443 stay up) while a series of connections is being made | Observed three times for 2-5 minutes on 2026-10-22, each time self-recovering; cause unknown (network path or an upstream rate limit; not the VM's firewalld) | Wait a few minutes; batch commands into one SSH session; if it persists check the Oracle security list rule for 22 and the instance console |
 | Caddy exits immediately | cannot bind 80/443 (rootless podman, or port taken) or Caddyfile invalid | `sudo podman logs scholarship-ai-assistant_caddy_1`; §2 step 3 |
 | Browser certificate warning | expected with `tls internal` | §4 |
 | Browser warning *reappeared* after a redeploy | `caddy_data` volume was deleted, new CA | re-trust the root CA |
@@ -296,3 +314,14 @@ Outcome (all verified): `https://130.61.159.24/health` 200 (self-signed certific
 
 Not done in this deployment: Neon point-in-time-recovery check and restore drill (§8), the live smoke tests,
 the document-persistence redeploy check (§10), and the first production retention run (§7).
+
+### Post-deployment checks, 2026-10-22
+
+- **Document persistence across a real recreate: PASS** (section 10 procedure). Same SHA-256 and size, same DB row, readable
+  through the app's storage layer in the new container. Test data removed afterwards.
+- **First production retention run: PASS.** Dry run on the VM: 0 rows; real run: `deleted 0 row(s)`. The fetch log held 650
+  rows, the oldest 44 days old (inside the 90-day window), so 0 is correct. 92 monitoring runs show the scheduler working.
+  The first run that deletes anything is expected around 2026-12-07.
+- **Smoke tests:** Qdrant pair run and **failed** (connection reset, see section 11); Gemini and discovery smoke tests not run (daily quota
+  exhausted). Neon PITR still open (section 8).
+- **Defect found:** upload returns 500 when Gemini errors (section 11).

@@ -115,6 +115,17 @@ Since the 002 deployment the backend listens on `127.0.0.1:8000` only and Caddy 
   rollback info in `docs/operations-hardening.md` §13. Lesson: build the new image *before* removing the old
   container (`podman-compose … build backend`, then `stop`/`rm`, then `up -d`) to keep the outage to seconds.
 
+## 8. Removing the backend container fails while Caddy exists; SSH can flap
+
+- `sudo podman rm scholarship-ai-assistant_backend_1` fails with "container ... has dependent containers which must be removed before it"
+  because `scholarship-ai-assistant_caddy_1` was created with a dependency on it (compose `depends_on`). Remove in this order:
+  Caddy first, then the backend, then `up -d`. Removing both in one `podman rm a b` command in the
+  wrong order removes Caddy but leaves the backend, which then only *restarts* with the same container ID,
+  so check that the ID actually changed when you mean to recreate. Named volumes are unaffected.
+- SSH (port 22) timed out for a few minutes at a time, three times in one session on 2026-10-22, while
+  80/443 kept serving. It recovered by itself each time. Batch several commands per SSH session and retry
+  after a few minutes before suspecting the VM; check `https://<ip>/health` to see whether the app is up.
+
 ## Verified deployment procedure
 
 The exact sequence that worked, in order, with what to check after each step.
@@ -170,3 +181,5 @@ The exact sequence that worked, in order, with what to check after each step.
    are both consistent with the *old* container serving (see #3). Only the
    actual route list confirms the new code is live. Compare the output
    against the routes you expect the deployed commit to expose.
+- **2026-10-22 - post-deployment checks** (persistence across a real recreate, first retention run, partial
+  smoke run): results in `docs/operations-hardening.md` section 13 and `docs/t-002-verification-log.md`.
