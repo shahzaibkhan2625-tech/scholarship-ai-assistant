@@ -25,15 +25,24 @@ runs — a failure here can never lose the user's file (Edge Cases).
    checks satisfaction (`requirement_satisfaction`, no LLM) plus profile
    inconsistencies — all NO-LLM comparisons, per constitution Principle II.
 
+4. The LLM provider is unavailable while extracting (a `google.genai` API error such as a 429
+   quota response or a 5xx, or an unconfigured key): the file parsed fine and is already saved, so the
+   upload is not rejected. `state["extraction_unavailable"]` is set, an `extraction_unavailable`
+   flag with a retry-able message is written to the row, nothing is marked satisfied, and the caller
+   still returns `201`. Any other exception is a bug and propagates (500).
+
 `parsed_meta` is populated only when extraction actually found at least one
 informative field (`value_status == "known"`) — there is nothing useful to
 persist otherwise, and leaving it NULL is the honest default (mirrors
 `ingestion`'s "never guess" discipline)."""
 
+import logging
 from typing import Any, TypedDict
 
+from google.genai import errors as genai_errors
 from langgraph.graph import END, START, StateGraph
 
+from app.core.llm import LlmNotConfiguredError
 from app.data.repositories import document_repo
 from app.models.document import ApplicationDocument, DocumentType
 from app.models.requirement import Requirement, RequirementCategory
@@ -49,6 +58,8 @@ from app.tools.extract_document_fields import (
     extract_document_fields,
 )
 from app.tools.pdf_parse import ParsedDocument, PdfParseError, parse_pdf
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["DocPipelineState", "run_doc_pipeline"]
 
@@ -68,6 +79,13 @@ _NEEDS_OCR_MESSAGE = (
 )
 
 
+_EXTRACTION_UNAVAILABLE_MESSAGE = (
+    "Your file was saved, but automatic reading of its contents is temporarily unavailable "
+    "(the language-model service could not be reached or is over its usage limit). "
+    "Please upload the document again later; nothing you uploaded was lost."
+)
+
+
 class DocPipelineState(TypedDict, total=False):
     db: Any
     document: ApplicationDocument
@@ -79,6 +97,7 @@ class DocPipelineState(TypedDict, total=False):
     parsed: ParsedDocument | None
     needs_ocr: bool
     extracted: ExtractedDocumentFields | None
+    extraction_unavailable: bool
     matching_requirements: list[Requirement]
     satisfaction_outcomes: list[SatisfactionOutcome]
     error: str | None
@@ -121,6 +140,15 @@ def _extract_fields_node(state: DocPipelineState) -> dict:
         # the file itself parsed fine, so we proceed with "nothing extracted"
         # rather than blocking the upload.
         return {}
+    except (genai_errors.APIError, LlmNotConfiguredError) as exc:
+        # The LLM provider is down, over quota, or not configured: the same reasoning applies (the
+        # file parsed fine and is already saved), but unlike bad JSON this is an outage the user
+        # should be told about, so it is recorded as a flag. Deliberately narrow: any other
+        # exception is a bug and still propagates (500).
+        logger.warning(
+            "document field extraction unavailable (%s, code=%s)", type(exc).__name__, getattr(exc, "code", None)
+        )
+        return {"extraction_unavailable": True}
     return {"extracted": extracted}
 
 
@@ -165,6 +193,8 @@ def _flag_missing_node(state: DocPipelineState) -> dict:
         flags.append({"type": "parse_error", "message": state["error"]})
     elif state.get("needs_ocr"):
         flags.append({"type": "needs_ocr", "message": _NEEDS_OCR_MESSAGE})
+    elif state.get("extraction_unavailable"):
+        flags.append({"type": "extraction_unavailable", "message": _EXTRACTION_UNAVAILABLE_MESSAGE})
     else:
         extracted = state.get("extracted")
         if extracted is not None and extracted.value_status == "known":
