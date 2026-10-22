@@ -167,3 +167,82 @@ def test_profile_document_inconsistency_is_flagged_not_resolved(pipeline_fixture
     # original GPA is untouched.
     session.refresh(profile)
     assert float(profile.education_records[0].gpa) == 3.5
+
+
+# -- extraction_unavailable: LLM provider errors in the extract_fields node ----------------
+
+
+def _run_with_extraction_raising(pipeline_fixture, error):
+    session, profile, scholarship, make_document = pipeline_fixture
+    document = make_document()
+    with patch("app.workflows.doc_pipeline.graph.extract_document_fields", side_effect=error):
+        final_state = run_doc_pipeline(
+            session,
+            document=document,
+            file_bytes=_text_pdf_bytes(),
+            filename="transcript.pdf",
+            declared_type="transcript",
+            profile=profile,
+            scholarship=scholarship,
+        )
+    session.refresh(document)
+    return final_state, document
+
+
+def test_provider_error_marks_extraction_unavailable_without_failing_the_pipeline(pipeline_fixture) -> None:
+    from google.genai import errors as genai_errors
+
+    error = genai_errors.ClientError(429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}})
+    final_state, document = _run_with_extraction_raising(pipeline_fixture, error)
+
+    assert final_state.get("error") is None
+    assert final_state.get("extraction_unavailable") is True
+    assert final_state.get("extracted") is None
+    assert document.parsed_meta is None
+    assert document.satisfies_requirement_id is None
+    assert [flag["type"] for flag in document.inconsistency_flags] == ["extraction_unavailable"]
+
+
+def test_llm_not_configured_is_treated_the_same_way(pipeline_fixture) -> None:
+    from app.core.llm import LlmNotConfiguredError
+
+    final_state, document = _run_with_extraction_raising(pipeline_fixture, LlmNotConfiguredError("no key"))
+
+    assert final_state.get("extraction_unavailable") is True
+    assert [flag["type"] for flag in document.inconsistency_flags] == ["extraction_unavailable"]
+
+
+def test_unrelated_exception_in_extraction_still_propagates(pipeline_fixture) -> None:
+    with pytest.raises(RuntimeError, match="boom"):
+        _run_with_extraction_raising(pipeline_fixture, RuntimeError("boom"))
+
+
+def test_bad_json_extraction_failure_is_still_silent_not_flagged(pipeline_fixture) -> None:
+    """Pre-existing behaviour kept unchanged: DocumentFieldExtractionError proceeds with nothing
+    extracted and writes no flag (it is not a provider outage)."""
+    from app.tools.extract_document_fields import DocumentFieldExtractionError
+
+    final_state, document = _run_with_extraction_raising(pipeline_fixture, DocumentFieldExtractionError("bad json"))
+
+    assert final_state.get("extraction_unavailable") is None
+    assert document.inconsistency_flags is None
+
+
+def test_successful_extraction_never_sets_extraction_unavailable(pipeline_fixture) -> None:
+    session, profile, scholarship, make_document = pipeline_fixture
+    document = make_document()
+    with patch(
+        "app.workflows.doc_pipeline.graph.extract_document_fields", return_value=ExtractedDocumentFields()
+    ):
+        final_state = run_doc_pipeline(
+            session,
+            document=document,
+            file_bytes=_text_pdf_bytes(),
+            filename="transcript.pdf",
+            declared_type="transcript",
+            profile=profile,
+            scholarship=scholarship,
+        )
+    session.refresh(document)
+    assert final_state.get("extraction_unavailable") is None
+    assert document.inconsistency_flags is None

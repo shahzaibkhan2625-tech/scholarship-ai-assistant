@@ -160,7 +160,7 @@ Not among the three, but equally unproven:
 
 Defects and observations found while doing this:
 - **Upload returns a bare 500 when the LLM provider errors** (Gemini 429). The saved file and row are kept but carry no flag.
-  A fix is proposed and awaiting approval (not yet changed).
+  Fixed on branch `fix/upload-llm-provider-errors` (file and row kept, row flagged `extraction_unavailable`, 201); not yet deployed.
 - **Gemini free-tier quota (20 requests/day observed) is exhausted**, which also blocks the LLM smoke tests.
 - **Qdrant Cloud unreachable** from both networks (see open item 1 update).
 - **SSH to the VM flapped** (port 22 timed out for minutes, three times) while HTTPS stayed up; self-recovering, cause unknown.

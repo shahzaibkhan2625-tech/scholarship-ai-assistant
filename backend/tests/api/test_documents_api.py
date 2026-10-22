@@ -319,3 +319,82 @@ def test_upload_scanned_document_returns_201_with_needs_ocr_flag(authed_user, ap
     assert body["parsed_meta"] is None
     assert body["inconsistency_flags"] is not None
     assert any(flag.get("type") == "needs_ocr" for flag in body["inconsistency_flags"])
+
+
+# -- LLM provider failures during the field-extraction step -------------------------------
+# Found live on 2026-10-22: a Gemini 429 (daily free-tier quota) escaped the pipeline and the
+# upload returned a bare 500, leaving the saved row with no record of why. Provider/transport
+# errors are not a reason to reject an upload whose file already parsed fine: the file and row
+# are kept and flagged `extraction_unavailable` (201, retry-able note). Unrelated exceptions must
+# still surface as 500 so real bugs are not swallowed.
+
+
+def _provider_errors():
+    from google.genai import errors as genai_errors
+
+    from app.core.llm import LlmNotConfiguredError
+
+    quota = {"error": {"code": 429, "message": "quota exceeded", "status": "RESOURCE_EXHAUSTED"}}
+    unavailable = {"error": {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}}
+    return [
+        pytest.param(genai_errors.ClientError(429, quota), id="client-error-429"),
+        pytest.param(genai_errors.ServerError(503, unavailable), id="server-error-503"),
+        pytest.param(LlmNotConfiguredError("GEMINI_API_KEY is not configured"), id="llm-not-configured"),
+    ]
+
+
+def _upload_with_extraction_raising(authed_user, application_for, error, *, raise_server_exceptions=True):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    application_id = application_for(authed_user["user_id"])
+    client = TestClient(app, raise_server_exceptions=raise_server_exceptions)
+    with patch("app.workflows.doc_pipeline.graph.extract_document_fields", side_effect=error):
+        response = client.post(
+            f"/applications/{application_id}/documents",
+            headers=authed_user["headers"],
+            files={"file": ("transcript.pdf", _text_pdf_bytes(), "application/pdf")},
+            data={"type": "transcript"},
+        )
+    return application_id, response
+
+
+@pytest.mark.parametrize("error", _provider_errors())
+def test_upload_keeps_file_and_row_and_flags_extraction_unavailable_on_llm_provider_error(
+    authed_user, application_for, db_session_factory, error
+) -> None:
+    from app.data.files.storage import get_storage
+
+    application_id, response = _upload_with_extraction_raising(authed_user, application_for, error)
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["parsed_meta"] is None
+    assert body["satisfies_requirement_id"] is None
+    flags = body["inconsistency_flags"] or []
+    unavailable = [flag for flag in flags if flag.get("type") == "extraction_unavailable"]
+    assert len(unavailable) == 1
+    assert "again" in unavailable[0]["message"].lower()  # retry-able note
+    assert not any(flag.get("type") == "parse_error" for flag in flags)
+
+    with db_session_factory() as session:
+        rows = session.query(ApplicationDocument).filter(ApplicationDocument.application_id == application_id).all()
+        assert len(rows) == 1
+        assert rows[0].parsed_meta is None
+        assert any(flag.get("type") == "extraction_unavailable" for flag in rows[0].inconsistency_flags)
+        file_ref = rows[0].file_ref
+
+    storage = get_storage()
+    try:
+        assert storage.exists(file_ref)  # the user's file was never lost
+    finally:
+        storage.delete(file_ref)
+
+
+def test_upload_still_returns_500_for_an_unrelated_exception_in_extraction(authed_user, application_for) -> None:
+    """The catch is deliberately narrow: a bug must not be disguised as 'service unavailable'."""
+    _, response = _upload_with_extraction_raising(
+        authed_user, application_for, RuntimeError("boom"), raise_server_exceptions=False
+    )
+    assert response.status_code == 500
