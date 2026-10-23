@@ -296,6 +296,7 @@ changes.
 | Permission denied reading the Caddyfile | SELinux label | keep `:z` on the mount; `ausearch -m avc` |
 | Logs show 5xx with a `request_id` | app error | grep that id in `sudo podman logs scholarship-ai-assistant_backend_1` |
 | A source reads `failing` with fewer failures than `HEALTH_WINDOW_N` | discovery flips on first failure; monitoring recovers it next run | ADR-0008 |
+| `pytest -k qdrant` (or any `-k` filter) on the smoke tests silently selects nothing | `pyproject.toml`'s `addopts = "-m 'not smoke'"` deselects them by default; `-k` doesn't override a marker exclusion | add `-m smoke`, e.g. `pytest -m smoke -k qdrant tests/smoke/` |
 
 ## 13. Deployment record
 
