@@ -296,6 +296,8 @@ changes.
 | Permission denied reading the Caddyfile | SELinux label | keep `:z` on the mount; `ausearch -m avc` |
 | Logs show 5xx with a `request_id` | app error | grep that id in `sudo podman logs scholarship-ai-assistant_backend_1` |
 | A source reads `failing` with fewer failures than `HEALTH_WINDOW_N` | discovery flips on first failure; monitoring recovers it next run | ADR-0008 |
+| `pytest -k qdrant` (or any `-k` filter) on the smoke tests silently selects nothing | `pyproject.toml`'s `addopts = "-m 'not smoke'"` deselects them by default; `-k` doesn't override a marker exclusion | add `-m smoke`, e.g. `pytest -m smoke -k qdrant tests/smoke/` |
+| `/metrics` through Caddy returns 200 instead of the expected 404 | Tested with `Host: 127.0.0.1` (e.g. `curl https://127.0.0.1/metrics`), which doesn't match the Caddyfile's site block (keyed on `$SITE_ADDRESS`, the public IP); the request falls through to Caddy's unmatched default instead of hitting the `@metrics` guard | use the public IP as the Host, e.g. `curl https://<public-ip>/metrics`, or pass `-H "Host: <public-ip>"` |
 
 ## 13. Deployment record
 
