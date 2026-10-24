@@ -292,6 +292,94 @@ def test_listing_step_does_not_build_a_homepage_url_when_a_listing_url_is_config
         assert url is None
 
 
+def test_offline_discovery_flow_two_new_web_sources_with_correctly_mocked_extraction(db):
+    """Regression test (2026-10-24): reproduces the LIVE smoke test's exact shape
+    (two brand-new web sources, one international_org + one gov, no
+    listing_page_url -> homepage fallback) but with fully offline mocks: a
+    fake `httpx.get` (no network) and a fake `extract_listing_from_page` (no
+    LLM) returning grounded candidates directly. Everything else -- the real
+    `listing_fetch_tool` -> `fetch_and_extract_listing` -> `resolve_fetch_target`
+    chain, caching, redirect checks -- runs unmocked, exactly as US6 left it.
+
+    This proves the discovery/connector code itself is not regressed: when
+    `extract_listing` actually returns grounded candidates, `run_discovery`
+    returns them. It isolates discovery's own logic from two separate,
+    already-identified problems: (1) `tests/smoke/test_discovery_listing_extraction_live.py`'s
+    own `_fake_httpx_get` omits `.url`, which crashes `fetch_url`
+    (`app/tools/web_fetch.py`, `final_url=str(response.url)`, added in US6's
+    `0205d23` after the smoke test was last touched) -- fixed alongside this
+    test; and (2) whatever the real Gemini call/grounding actually does in
+    production, which this test deliberately does not exercise."""
+    from app.tools.extract_listing import ExtractedListingCandidate, ExtractListingOutput
+
+    session, created_sources, created_scholarships = db
+
+    intl_domain = f"discovery-test-intl-{uuid.uuid4().hex}.example.com"
+    gov_domain = f"discovery-test-gov-{uuid.uuid4().hex}.example.com"
+    intl_country = f"Offline-Intl-{uuid.uuid4().hex[:8]}"
+    gov_country = f"Offline-Gov-{uuid.uuid4().hex[:8]}"
+
+    intl_source = _active_api_source(
+        session, created_sources,
+        name="Offline Test Intl Source", source_type="international_org",
+        access_method="web", domain=intl_domain, country=intl_country,
+    )
+    gov_source = _active_api_source(
+        session, created_sources,
+        name="Offline Test Gov Source", source_type="gov",
+        access_method="web", domain=gov_domain, country=gov_country,
+    )
+    profile = _profile(target_countries=[intl_country, gov_country], target_fields=[])
+
+    def ok_api(db_arg, source_id, query):
+        return ApiConnectorOutput(source_id=source_id, query=query, status="ok", records=[])
+
+    def fake_httpx_get(url: str, **_kwargs) -> SimpleNamespace:
+        # Correctly set `.url` -- the fix for the bug this test exists to isolate.
+        return SimpleNamespace(status_code=200, text="<html>offline fixture</html>", url=url)
+
+    def fake_extract_listing(_html: str, *, source_url: str) -> ExtractListingOutput:
+        if intl_domain in source_url:
+            candidate = ExtractedListingCandidate(name="Offline Intl Fixture Scholarship")
+        else:
+            candidate = ExtractedListingCandidate(name="Offline Gov Fixture Scholarship")
+        return ExtractListingOutput(candidates=[candidate], accepted_count=1, rejected_count=0)
+
+    # `fetch_and_extract_listing`'s `extract_listing` parameter defaults to the
+    # real `extract_listing_from_page` *at def time*: patching that name on the
+    # `official_fetch` module afterward does not change the already-bound
+    # default, so `listing_fetch_tool`'s plain (no-kwarg) call would silently
+    # keep using the real one. Patch the name `listing_fetch_tool` itself looks
+    # up (a normal per-call lookup, not a bound default) with a thin wrapper
+    # that forces the real function's `extract_listing` kwarg to our fake,
+    # while still running every other real step (resolve_fetch_target, the
+    # two-layer cache, redirect checks, logging, mark_source_failing).
+    import app.sources.connectors.official_fetch as official_fetch_module
+
+    real_fetch_and_extract_listing = official_fetch_module.fetch_and_extract_listing
+
+    def wrapped_fetch_and_extract_listing(db_arg, source_id, url=None, **kwargs):
+        kwargs.setdefault("extract_listing", fake_extract_listing)
+        return real_fetch_and_extract_listing(db_arg, source_id, url, **kwargs)
+
+    with patch("app.tools.web_fetch.httpx.get", side_effect=fake_httpx_get), \
+         patch("app.tools.listing_fetch.fetch_and_extract_listing", side_effect=wrapped_fetch_and_extract_listing), \
+         patch("app.workflows.ingestion.graph.classify_service.classify_candidate", return_value=_FAKE_CLASSIFICATION):
+        run = run_discovery(session, profile, fetch_api=ok_api)
+
+    our_results = [
+        item for item in run.discovery_result.results
+        if item.source_id in {intl_source.id, gov_source.id}
+    ]
+    for item in our_results:
+        created_scholarships.append(item.scholarship_id)
+
+    assert len(our_results) >= 2, (
+        f"offline mocked discovery flow returned fewer than 2 candidates for 2 fresh web "
+        f"sources -- this IS a code regression. got: {our_results}, fetch_errors={run.fetch_errors}"
+    )
+
+
 def test_agent_module_does_not_import_the_connector_or_resolver_or_build_a_homepage_url():
     import ast
     import inspect
