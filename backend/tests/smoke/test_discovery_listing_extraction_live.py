@@ -108,7 +108,16 @@ def _fake_httpx_get(url: str, **_kwargs) -> SimpleNamespace:
         html = _HEC_LIKE_HTML
     else:
         html = "<html></html>"  # any other active source: empty -> never a real LLM call
-    return SimpleNamespace(status_code=200, text=html)
+    # `.url` must be set: `app/tools/web_fetch.py`'s `fetch_url` reads
+    # `str(response.url)` into `final_url` on every call (added in US6's
+    # 0205d23, after this fixture was last touched) -- a bare
+    # `SimpleNamespace(status_code=200, text=html)` raises `AttributeError`
+    # here, which this file's own retry/fetch-error path then quietly turns
+    # into a normal FAIL row (never an exception reaching the discovery
+    # agent), making every run fail with 0 candidates regardless of what
+    # Gemini would have returned. Found 2026-10-24 investigating why this
+    # test kept returning 0 candidates; see docs/operations-hardening.md.
+    return SimpleNamespace(status_code=200, text=html, url=url)
 
 
 def test_discovery_endpoint_extracts_real_listing_candidates_across_two_source_types(authed_user, db_session_factory):
