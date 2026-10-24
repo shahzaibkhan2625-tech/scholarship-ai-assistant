@@ -275,8 +275,9 @@ changes.
 | `app/core/metrics.py` imports `get_current_user` from `app.api` (layering inversion) | Cleanup candidate | tasks.md US7 note |
 | `created_at.desc()` same-transaction ties | **Closed** in US8 B2 (id tiebreakers at 7 sites) | commit 5603428 |
 | Document storage has no off-VM backup | Open | §10 |
-| **Document upload no longer returns a 500 when the LLM provider errors** (fixed on branch `fix/upload-llm-provider-errors`, found 2026-10-22 when a Gemini 429 escaped the pipeline). A genai API error (429, 5xx) or an unconfigured key during field extraction now keeps the file and row and flags the row `extraction_unavailable` (201, retry-able note); `parsed_meta` stays empty and nothing is marked satisfied. There is no re-extract endpoint, so the user re-uploads once the service is back. Unrelated exceptions still return 500. | Fixed (pending deploy) | `app/workflows/doc_pipeline/graph.py` |
+| **Document upload no longer returns a 500 when the LLM provider errors** (fixed on branch `fix/upload-llm-provider-errors`, found 2026-10-22 when a Gemini 429 escaped the pipeline). A genai API error (429, 5xx) or an unconfigured key during field extraction now keeps the file and row and flags the row `extraction_unavailable` (201, retry-able note); `parsed_meta` stays empty and nothing is marked satisfied. There is no re-extract endpoint, so the user re-uploads once the service is back. Unrelated exceptions still return 500. | **Fixed, deployed 2026-10-24** | `app/workflows/doc_pipeline/graph.py` |
 | **Other LLM-backed endpoints (Q&A, URL matching, generation) still return a bare 500 when the provider errors** (e.g. Gemini quota exhausted); only document upload was hardened. | Open, out of scope of the upload fix | observed 2026-10-22 |
+| **Discovery swallows a provider error into an empty result, not a 500.** A Gemini/provider error (or a malformed-response parse error) raised during listing extraction is caught by `agents/discovery/agent.py`'s broad per-step exception handler, which only appended to an in-memory `fetch_errors` list that `app.api.discovery` never logs or returns — so the failure was previously invisible end-to-end (0 candidates, no log, no `source_fetch_log` row). **Fixed 2026-10-24** (`fix/discovery-log-swallowed-errors`): the handler now logs the source id/domain/dimension and the exception type (`logger.error`, never `str(exc)` or page content). Not yet re-verified against a real live failure (the smoke test's own Gemini calls succeed or fail independently of this logging change). | Fixed | `app/agents/discovery/agent.py`, `tests/agents/test_discovery_agent.py` |
 | **A corrupt PDF in the CV-import path returns a bare 500.** `POST /profile/import-cv` (`app/api/profile.py`, `_extract_text_from_upload`) reads PDFs with `pypdf`; a corrupt or truncated file raises `PdfStreamError`, which is not caught. Pre-existing (unchanged by the 2026-10-23 pypdf bump) and not fixed. No test uploads a PDF on this path. | Open, not fixed | `app/api/profile.py` |
 | **Gemini free-tier quota is tiny** (20 requests/day for `gemini-2.5-flash` observed). Once used up, every LLM-backed endpoint (document parsing, Q&A, URL matching, generation) fails until the quota resets (about a 24h window); the LLM smoke tests also cannot pass. | Operational constraint; consider a paid key | observed 2026-10-22 |
 | **Qdrant Cloud endpoint resets TLS connections** from both this laptop and the VM (2026-10-22): `test_qdrant_reachable` and `test_qdrant_collection_query_works` fail with a connection reset. Likely a suspended or removed free-tier cluster (the T130 failure mode) but not confirmed; needs the Qdrant console. | **Open, owner action** | `tests/smoke/test_live_services.py` |
@@ -331,8 +332,12 @@ the document-persistence redeploy check (§10), and the first production retenti
   rows, the oldest 44 days old (inside the 90-day window), so 0 is correct. 92 monitoring runs show the scheduler working.
   The first run that deletes anything is expected around 2026-12-07.
 - **Smoke tests:** Qdrant pair run and **failed** (connection reset, see section 11); Gemini and discovery smoke tests not run (daily quota
-  exhausted). Neon PITR still open (section 8).
+  exhausted). Neon PITR still open (section 8). **Updated 2026-10-24:** Gemini test PASSED (quota reset); discovery test
+  FAILED again, but on a real bug, not quota — see the 2026-10-24 section below and §11. Neon PITR **CLOSED** — restore
+  drill passed, see the 2026-10-24 section below and §8.
 - **Defect found and fixed in code:** upload returned 500 when Gemini errors (section 11); not yet deployed to the VM.
+  **Updated 2026-10-24: deployed.** The containers were recreated 2026-10-24 for the Neon password rotation; the running
+  image includes this fix.
 
 ### Post-deployment checks, 2026-10-24
 

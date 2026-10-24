@@ -92,7 +92,7 @@ unchanged; none failed. `specs/001-scholarship-mvp/` has no diff.
 | 4 | Logs/metrics: JSON log line for a run; `/metrics` counter increments | `tests/core/test_logging.py`, `tests/core/test_metrics.py`, `tests/workflows/test_source_monitor.py::test_a_run_increments_the_run_duration_and_per_status_fetch_counters` | PASS |
 | 5 | Document persistence across a container restart | Static checks (compose volume at `/data/storage`, `STORAGE_ROOT` forced) **and a real recreate on the VM, 2026-10-22**: uploaded a PDF through the live HTTPS API, removed and recreated both containers (new backend ID, same image, no `--build`), then compared SHA-256 and size of the file in the volume, the `application_documents.checksum`, and a read through the app's storage layer. All identical. Test data removed afterwards. The upload itself returned a 500 (Gemini quota; see defect below) after the file and row were saved. | **PASS 2026-10-22** (procedure: `docs/operations-hardening.md` section 10) |
 | 6 | Retention: floors keep health history; old rows beyond them pruned; CLI dry run | `tests/services/test_retention.py` (floors a/b/c, scope isolation, dry run == real run, batching, CLI). Dry run against the dev DB: 0 rows. **First production run 2026-10-22 on the VM: dry run 0 rows, real run `deleted 0 row(s)`**; the fetch log held 650 rows, oldest 44 days (inside the 90-day window), so 0 is correct. | PASS (automated); **first production run PASS 2026-10-22** (nothing old enough to delete yet; first real deletion expected ~2026-12-07) |
-| 7 | Backups: Neon PITR enabled | Document-only check; no access to the Neon console. | **NOT DEMONSTRATED** — open item 2 |
+| 7 | Backups: Neon PITR enabled | Restore drill performed 2026-10-24 (branch from a point in time, row counts compared, branch deleted) — see open item 2, now closed. | **PASS 2026-10-24** (open item 2, closed) |
 | 8 | Security: `pip-audit` clean; no secret literals; sanitization | `pip-audit` run (clean, see above); `tests/test_no_secrets_in_repo.py` (also scans `Caddyfile`, compose, `.env.example`); `tests/sources/test_monitor_sanitization.py` | PASS |
 
 ## The three honest open items
@@ -166,8 +166,8 @@ Not among the three, but equally unproven:
 |---|---|
 | Document persistence across a real container recreate | **PASS** (row 5) |
 | First production retention run | **PASS**, 0 rows deleted, correct (row 6) |
-| Live smoke tests | **Partial / FAIL**: Qdrant pair failed (connection reset); Gemini and discovery tests not run (daily quota exhausted), to be run after the quota resets |
-| Neon point-in-time recovery | **Still open** (open item 2) |
+| Live smoke tests | **Partial / FAIL**: Qdrant pair failed (connection reset); Gemini and discovery tests not run (daily quota exhausted), to be run after the quota resets. **Updated 2026-10-24:** Gemini test now PASSED (quota reset); discovery test FAILED again, but on a real bug (a swallowed provider error produced 0 candidates), not quota — fixed to log, not yet re-verified live. See open item 1 and the 2026-10-24 section below. |
+| Neon point-in-time recovery | **Still open** (open item 2). **Updated 2026-10-24: CLOSED** — restore drill passed, see open item 2 and the 2026-10-24 section below. |
 
 Defects and observations found while doing this:
 - **Upload returns a bare 500 when the LLM provider errors** (Gemini 429). The saved file and row are kept but carry no flag.
