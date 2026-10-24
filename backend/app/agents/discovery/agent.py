@@ -66,6 +66,7 @@ verified by the same guardrail suite plus its connector-tier sibling
 (`tests/sources/test_official_fetch_guardrails.py`).
 """
 
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -79,6 +80,8 @@ from app.services.coverage import get_coverage_summary
 from app.tools.api_connector import ApiConnectorOutput, api_connector_tool
 from app.tools.listing_fetch import ListingFetchOutput, listing_fetch_tool
 from app.workflows.ingestion.graph import run_ingestion
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["QueryPlanStep", "DiscoveryRunResult", "build_query_plan", "run_discovery"]
 
@@ -280,6 +283,17 @@ def _run_step(
                 step_label=step_label,
             )
     except Exception as exc:  # noqa: BLE001 - one tool's failure must never crash the whole discovery run
+        # This is the only place a tool-call exception (e.g. a provider error
+        # surfacing unhandled from listing extraction) is observed at all --
+        # previously it only reached `fetch_errors`, which `app.api.discovery`
+        # never logs or returns, making the failure invisible end-to-end. Log
+        # only the source id/domain and the exception TYPE (never `str(exc)`
+        # or any fetched page content), so a real incident is never traced
+        # back through secrets or raw HTML ending up in the log.
+        logger.error(
+            "discovery step failed for source_id=%s domain=%s dimension=%s: %s",
+            step.source_id, getattr(source, "domain", "unknown"), step.dimension, type(exc).__name__,
+        )
         fetch_errors.append(f"{step_label}: {exc}")
         return
 
