@@ -6,6 +6,7 @@
 | Repo state | `main` @ `4dade20` (CI green), Alembic head `f2b8d4a6c1e3` |
 | Compared against | `specs/scholarship-ai-assistant-master-blueprint-v1.md` (v1.6, "BP"), `specs/scholarship-ai-assistant-prd-v1.md` (v1 FINAL, "PRD"), `specs/charter.md`, `specs/001-*` and `specs/002-*` (spec, tasks), ADR-0001..0011, `docs/operations-hardening.md` §11 |
 | Type | Read-only analysis. No code changed. No Gemini calls made. |
+| Owner decisions | Recorded 2026-10-25 in §7, ADR-0012 (free tier, build order, source approval) and ADR-0013 (meaning of "verified"). Roadmap in §6 reflects them. |
 
 ## 0. How this was produced, and what to trust
 
@@ -27,11 +28,13 @@
 |---|---|---|
 | Built | 35 | 45% |
 | Partial | 26 | 34% |
-| Missing | 4 | 5% |
-| Deferred-by-decision | 12 | 16% |
+| Missing | 5 | 6% |
+| Deferred-by-decision | 11 | 14% |
 | **Total** | **77** | |
 
-The small *Missing* count is misleading on its own: most of the real distance to the product vision sits in the 26 *Partial* rows, where a capability exists but is narrower than the requirement (one listing page, four hard-constraint dimensions, five sources). The four *Missing* rows are monitoring cost control (M-36), natural-language constraint parsing (M-49), live-fetch escalation in Q&A (M-51), and a draft review loop (M-63). Of the 12 *Deferred* rows, only the frontend (M-67), large-scale source expansion (M-10) and reminders (M-38) materially block the stated product goals.
+(Counts updated 2026-10-25: M-10 moved from *Deferred* to *Missing* because ADR-0012 supersedes the Blueprint deferral and schedules it as feature 006.)
+
+The small *Missing* count is misleading on its own: most of the real distance to the product vision sits in the 26 *Partial* rows, where a capability exists but is narrower than the requirement (one listing page, four hard-constraint dimensions, five sources). The five *Missing* rows are large-scale source expansion (M-10, now scheduled), monitoring cost control (M-36), natural-language constraint parsing (M-49), live-fetch escalation in Q&A (M-51), and a draft review loop (M-63). Of the 11 *Deferred* rows, only the frontend (M-67) and reminders (M-38) materially block the stated product goals.
 
 ### 1.2 Top 5 gaps
 
@@ -96,9 +99,9 @@ Citations: BP = Blueprint section, PRD IDs as written in the PRD. Evidence is `p
 | ID | Requirement | Status | Evidence | Gap |
 |---|---|---|---|---|
 | M-07 | Governed Source Registry; a candidate is never authoritative (FR-DISC-3/5; FR-VERIFY-2; BP §29) | **Built** | `models/source.py:80,121`; ADR-0001 (separate tables + status filter); `tests/sources/test_source_registry_compliance.py` | None |
-| M-08 | Human-only approval gate for new sources (BP §7.0, §29; FR-CANDVAL-3) | **Partial** | `api/sources.py:51-95` depends only on `get_current_user`; `models/user.py` has no role column | Any logged-in user can approve or reject a source; no operator role |
+| M-08 | Human-only approval gate for new sources (BP §7.0, §29; FR-CANDVAL-3) | **Partial** | `api/sources.py:51-95` depends only on `get_current_user`; `models/user.py` has no role column | Any logged-in user can approve or reject a source; no operator role. **Decision 2026-10-25 (ADR-0012):** restrict to operators, minimal slice in feature 004, fuller roles in 006 |
 | M-09 | Coverage of national, regional/state and university sources in any country (FR-DISC-1; BP §29, §30) | **Partial** | `models/source.py:30-90` (12 types; free-text `country`/`region`); `seed_sources.yaml` (5 rows) | No regional/state level or institution hierarchy; one university; 5 countries; `region` holds continents |
-| M-10 | Large-scale source/country expansion (BP §22 Phase 6, §36) | **Deferred-by-decision** | BP §36 "Future/Advanced (Phase 6)"; BP A11 "small, carefully researched registry" | Directly conflicts with product goal (a); roadmap pulls it forward as 006 |
+| M-10 | Large-scale source/country expansion (BP §22 Phase 6, §36) | **Missing** | BP §36 labelled it "Future/Advanced (Phase 6)" and BP A11 seeds a small registry; **superseded by ADR-0012 (2026-10-25)**, which schedules it as feature 006, built after 003 and 004 | Not built; conflicts with product goal (a) until 006 ships |
 | M-11 | Multi-channel retrieval: APIs, MCP, approved search, aggregators as signal (FR-DISC-1; BP §30.1) | **Partial** | `api_connector.py` has no provider (ADR-0001 #3); `AccessMethod.MCP` has no implementation; `tools/search.py:40` `NotImplementedError` | Only registry-gated web listing pages work |
 | M-12 | Systematic query plan across dimensions (FR-DISC-6; BP §30.3) | **Partial** | `agents/discovery/agent.py:114`; `source_repo.py:59` | Only country, field, degree_level, nationality (no university, funding type, intake, deadline); country filter is exact-match against ISO seed codes so "Germany" or "Pakistan" match no source on that dimension |
 | M-13 | Ranked, verified, source-attributed results plus coverage (AC-2; BP §3.1) | **Partial** | `agents/discovery/agent.py:289`; `api/discovery.py:37` | Returns unranked ids; no profile match; synchronous request |
@@ -108,7 +111,7 @@ Citations: BP = Blueprint section, PRD IDs as written in the PRD. Evidence is `p
 | M-17 | Extract candidates from listing pages (BP §31 EXTRACT; T135) | **Partial** | `tools/extract_listing.py:110,119`; `official_fetch.py:312` | One page per source, no pagination; `detail_url` extracted but never followed; EACEA yields 0 grounded candidates (136/136 recent attempts) |
 | M-18 | Normalise and classify (BP §31) | **Partial** | `tools/classify.py:66-78,140` | 32 English country names and 20 fields, substring match ("uk" inside longer words); LLM fallback failure swallowed; live data: 8 NULL country, `usa` vs `USA`, multi-valued country strings |
 | M-19 | Deduplicate (BP §31; ADR-0002) | **Built** | `services/dedup.py`; `tests/workflows/test_ingestion.py` | Scalar columns not reconciled on merge (ADR-0002, accepted) |
-| M-20 | Verify against the official source (FR-VERIFY-1/3; BP §32) | **Partial** | `grep official_source_confirmed=True app/` returns nothing; `scholarship_repo.py:91` `mark_confirmed_by_monitoring`; `source_monitor/graph.py:315`; ADR-0009 | `VERIFIED` means "re-sighted on an approved listing", not "confirmed on the scholarship's own official page"; no step opens that page for discovered records |
+| M-20 | Verify against the official source (FR-VERIFY-1/3; BP §32) | **Partial** | `grep official_source_confirmed=True app/` returns nothing; `scholarship_repo.py:91` `mark_confirmed_by_monitoring`; `source_monitor/graph.py:315`; ADR-0009 | `VERIFIED` means "re-sighted on an approved listing", not "confirmed on the scholarship's own official page"; no step opens that page for discovered records. **Decision 2026-10-25 (ADR-0013):** `verified` requires the scholarship's own official page with a deadline and eligibility present; listing-only records become `listed`; the 34 current rows are reclassified in feature 004 |
 | M-21 | Conflict resolution: official > recent > reliable (FR-VERIFY-7) | **Built** | `services/conflict_resolution.py`; ADR-0002 | None |
 | M-22 | Provenance on every record (FR-VERIFY-4; FR-INTEL-4) | **Built** | `models/source.py:185` (`scholarship_sources`); `scholarship_fields` | None |
 | M-23 | Failed fetch is never "none found"; retry/backoff (FR-VERIFY-6; NFR-REL-2; BP §33) | **Built** | `sources/retry_policy.py:14-16`; `source_fetch_log`; `tests/sources` | Provider (LLM) errors inside discovery are only logged, not recorded in `source_fetch_log` |
@@ -300,6 +303,8 @@ Evidence it already bites: a real `429 RESOURCE_EXHAUSTED` is recorded in `sourc
 
 Folder names follow the existing `specs/00N-*` convention. Each item lists scope, the matrix gaps it closes, why in this order, and free-tier feasibility.
 
+**Build order (updated 2026-10-25 per ADR-0012): 003 -> 004 -> 006 -> 005 -> 007 -> 008/009.** Source expansion (006) is pulled ahead of matching (005) but only after quota governance (003) and trustworthy records (004). Folder numbers are stable identifiers, not build order. The free tier is kept until 006, where the paid-tier decision is taken.
+
 ### 003 `quota-governance-and-cheap-monitoring` (do first)
 - **Scope:** LLM budget service with priorities and 429 back-off in `core/llm.py`; content-hash skip and ETag/Last-Modified; per-source cadence from `update_frequency`; record provider errors in `source_fetch_log` (not just logs); per-source `extraction_rules` hook (deterministic extraction first); budget visible in `/metrics`.
 - **Closes:** M-36, M-23 (provider-error gap), M-35 (hash), part of M-33.
@@ -307,21 +312,21 @@ Folder names follow the existing `specs/00N-*` convention. Each item lists scope
 - **Quota:** 48 -> ~1-2 calls/day (E). Hotfix option: set a longer monitoring interval today (config only).
 
 ### 004 `trustworthy-scholarship-records`
-- **Scope:** follow `detail_url` to extract deadline and requirements; a real official-page confirmation step and a clear split between "listed" and "verified" (or rename); backfill the 34 existing rows; country normalisation (ISO codes plus multi-country support) and fix `usa`/`USA`; classify improvements; fix or retire the EACEA extraction (facet-list page); populate `requirements`/`funding_details`; index documents for Q&A on discovered records; first extraction and verification evals with recorded fixtures.
-- **Closes:** M-17, M-18, M-20, M-28, M-46 (data side), M-52, M-56/57 (their requirement dependency), M-69 (partly).
+- **Scope:** follow `detail_url` to extract deadline and requirements; the official-page confirmation step and the `listed` / `verified` split defined by ADR-0013 (`verified` needs the scholarship's own official page with a deadline and eligibility present; the 34 current rows are reclassified to `listed` by a data migration and promoted only after confirmation); **a minimal operator restriction on source approve/reject (ADR-0012), as its own small slice**; backfill the 34 existing rows; country normalisation (ISO codes plus multi-country support) and fix `usa`/`USA`; classify improvements; fix or retire the EACEA extraction (facet-list page); populate `requirements`/`funding_details`; index documents for Q&A on discovered records; first extraction and verification evals with recorded fixtures.
+- **Closes:** M-08 (minimal restriction), M-17, M-18, M-20, M-28, M-46 (data side), M-52, M-56/57 (their requirement dependency), M-69 (partly).
 - **Why second:** matching, Q&A, generation and reminders all consume this data; building them first would produce confident-looking `unknown`s.
 - **Quota:** backfill ~34 calls throttled to ≤12/day (E), steady state ~0-2/day (E); relies on 003.
 
 ### 005 `match-any-profile`
-- **Scope:** hard-constraint evaluators for country/residence, field, funding, language, age, spouse/dependent; GPA scale normalisation; nationality-country mapping; profile fields for age, languages, finances, dependants; batch "match me" endpoint with deterministic pre-filter and shortlist soft-matching; discovery results ranked by match; populate `required_documents` and `remaining_actions`; intent-specific response schemas.
+- **Scope:** hard-constraint evaluators for country/residence, field, funding, language, age, spouse/dependent; GPA scale normalisation; **country matching that handles names and aliases (for example "USA", "US", "United States", local-language names, and demonyms such as "Pakistani" for nationality), using a deterministic alias table with ISO codes as the canonical form, applied to both user input and stored values**; nationality-country mapping; profile fields for age, languages, finances, dependants; batch "match me" endpoint with deterministic pre-filter and shortlist soft-matching; discovery results ranked by match; populate `required_documents` and `remaining_actions`; intent-specific response schemas.
 - **Closes:** M-04, M-12 (country filter), M-13, M-41, M-43, M-45, M-46, M-53.
-- **Why third:** it turns 004's data into value for any user, and the hard-constraint work is LLM-free.
+- **Why now in the order (built after 006):** it turns 004's data into value for any user, and the hard-constraint work is LLM-free. Storage-side country normalisation (ISO codes, `usa`/`USA`, multi-country values) is done in 004; alias handling for user input and matching is done here.
 - **Quota:** hard constraints 0; soft matching ~5-10/day per active user (E): fits only a few users on the free tier (S5, S6).
 
 ### 006 `source-coverage-at-scale`
-- **Scope:** operator role and approval queue (also a standalone hotfix); jurisdiction/level modelling (country, region/state, institution, parent source); bulk candidate import from curated official directories (for example ministry institution lists) with deterministic pre-checks and robots/ToS recording; country seed packs under governance review; per-source extraction rules; multilingual keyword lists and Unicode-aware grounding; pull the `universities`/`programs` tables into use.
+- **Scope:** fuller operator roles and an approval queue (the minimal restriction ships earlier, in 004); a per-source LLM cost budget and the paid-tier decision as the spec's first question (ADR-0012); jurisdiction/level modelling (country, region/state, institution, parent source); bulk candidate import from curated official directories (for example ministry institution lists) with deterministic pre-checks and robots/ToS recording; country seed packs under governance review; per-source extraction rules; multilingual keyword lists and Unicode-aware grounding; pull the `universities`/`programs` tables into use.
 - **Closes:** M-08, M-09, M-10, M-11 (partly), M-12, M-14, M-16, M-54.
-- **Why fourth:** scaling coverage before records are trustworthy and quota is governed multiplies untrusted data and LLM spend. It also reverses the BP §36 Phase 6 deferral, which should be a conscious owner decision (see §7).
+- **Why third in build order:** scaling coverage before records are trustworthy and quota is governed multiplies untrusted data and LLM spend, so it follows 003 and 004. The owner pulled it ahead of matching (005); this reverses the BP §36 Phase 6 label and is recorded in ADR-0012.
 - **Quota:** validation ~3/day for ~20 candidates/week (E) with deterministic-first checks.
 
 ### 007 `application-assistance-complete`
@@ -343,18 +348,22 @@ Folder names follow the existing `specs/00N-*` convention. Each item lists scope
 
 ### Quick wins that need no feature folder
 - Config: lengthen `MONITORING_INTERVAL_MINUTES` until 003 ships.
-- Hotfix: operator role check on source approve/reject (M-08).
+- Operator restriction on source approve/reject (M-08): by decision it ships as a small slice of 004 (ADR-0012); it can be pulled earlier as a hotfix if desired.
 - Decide whether the 3 unmonitored seeds (DAAD, Stipendium Hungaricum, KAUST) should be enabled, retired, or kept as verification-only; today they are neither fetched nor monitored.
 
 ---
 
-## 7. Decisions needed from the owner
+## 7. Owner decisions (recorded 2026-10-25)
 
-1. **Quota stance.** Stay on the free tier (then 003 is mandatory and multi-user batch matching is out of reach), or move to a paid key (then 003 is still worth doing for cost, but the roadmap can be more ambitious).
-2. **Pull forward Phase 6 source expansion?** The Blueprint defers large-scale expansion, but product goal (a) needs it. This analysis recommends 006 right after 004/005, which is a change to BP §36 that should be recorded in an ADR.
-3. **What should "verified" mean?** Official-page confirmation (more work, matches the Blueprint) or an honest rename of the current meaning.
-4. **Unmonitored seed sources.** Enable, retire, or keep as verification-only.
-5. **Operator model.** A single-owner tool can use a config-level operator allowlist; a SaaS path needs real roles.
+| # | Question | Decision | Recorded in |
+|---|---|---|---|
+| 1 | Quota stance | **Stay on the free tier for now.** Decide on a paid key at feature 006. 003 is therefore mandatory, and multi-user batch matching stays out of reach until then. | ADR-0012 |
+| 2 | Pull forward Phase 6 source expansion? | **Yes, in priority, but built after 003 and 004.** Build order is 003, 004, 006, 005, 007, 008/009. Supersedes the BP §36 Phase 6 label for source expansion (M-10). | ADR-0012 |
+| 3 | What should "verified" mean? | **Confirmed on the scholarship's own official page, with a deadline and eligibility present.** A record seen only on a listing gets a weaker `listed` status. The 34 current rows are reclassified to `listed`. | ADR-0013 |
+| 4 | Source approval is unrestricted (any logged-in user) | **Restrict it.** Minimal operator restriction in feature 004; fuller roles and a reviewer queue in 006. | ADR-0012; §6 features 004 and 006 |
+| 5 | Country matching | **Must handle names and aliases**, folded into feature 005 (storage-side normalisation is in 004). | §6 features 004 and 005 |
+
+**Still open:** what to do with the 3 unmonitored seed sources (DAAD, Stipendium Hungaricum, KAUST): enable, retire, or keep as verification-only. It is a question for the 004 or 006 specs, not blocking 003.
 
 ## 8. What I could not verify
 
