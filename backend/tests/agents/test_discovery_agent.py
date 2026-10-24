@@ -146,6 +146,65 @@ def test_tool_call_raising_an_exception_also_surfaces_as_a_traced_failure_not_a_
     assert run.discovery_result.coverage is not None  # still attached despite the exception
 
 
+class _FakeProviderError(Exception):
+    """Stands in for an unhandled Gemini/provider error raised out of the real
+    `listing_fetch_tool` -> `fetch_and_extract_listing` -> `extract_listing_from_page`
+    chain (none of which catches it) -- exactly the gap found investigating why
+    `tests/smoke/test_discovery_listing_extraction_live.py` returned 0 candidates
+    with no trace anywhere: `_run_step`'s broad `except Exception` caught it
+    silently, and `app.api.discovery.discover()` never returns or logs
+    `fetch_errors`, so nothing about the failure was ever observable."""
+
+
+def test_web_listing_step_exception_is_logged_with_source_and_type_not_silently_swallowed(db, caplog):
+    import logging
+
+    session, created_sources, _ = db
+    domain = f"discovery-test-{uuid.uuid4().hex}.example.com"
+    source = _active_api_source(
+        session,
+        created_sources,
+        name="Discovery Test Web Source (provider error)",
+        source_type="gov",
+        access_method="web",
+        domain=domain,
+    )
+    profile = _profile()
+
+    def ok_api(db_arg, source_id, query):
+        return ApiConnectorOutput(source_id=source_id, query=query, status="ok", records=[])
+
+    secret_like = "sk-fake-not-a-real-secret-zzz999"  # allow-secret: planted fake, asserted absent from logs
+    page_like = "<html>" + "scholarship listing content " * 50 + "</html>"
+
+    def raising_listing_fetch(_db, _source_id, _url):
+        raise _FakeProviderError(f"provider call failed ({secret_like}) while parsing: {page_like}")
+
+    with caplog.at_level(logging.ERROR):
+        run = run_discovery(session, profile, listing_fetch=raising_listing_fetch, fetch_api=ok_api)
+
+    # (a) never a silent empty result and never a crash: the run completes,
+    # this source contributes nothing, and a coverage summary is still
+    # attached -- exactly the "still 200, 0 results for that source" contract
+    # `app.api.discovery.discover()` forwards `run.discovery_result` under
+    # unchanged (no new raise reaches it).
+    assert all(item.source_id != source.id for item in run.discovery_result.results)
+    assert run.discovery_result.coverage is not None
+    assert any(str(source.id) in err for err in run.fetch_errors)
+
+    # (b) the swallow is no longer silent: something was actually logged,
+    # naming the source and the exception type.
+    error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert error_records, "expected the swallowed listing-fetch exception to be logged"
+    logged_text = "\n".join(r.getMessage() for r in error_records)
+    assert domain in logged_text
+    assert "_FakeProviderError" in logged_text
+
+    # Never log secrets or the raw page content the exception happened to carry.
+    assert secret_like not in logged_text
+    assert page_like not in logged_text
+
+
 _FAKE_CLASSIFICATION = ClassifiedScholarshipFields(
     degree_level="MS",
     degree_level_confidence="inferred",
