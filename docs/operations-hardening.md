@@ -222,6 +222,10 @@ Backup recovery is demonstrated by you, not by the build (SC-009).
 - **Rotating `JWT_SECRET_KEY` invalidates every session** (users must log in again). Rotate
   on suspected leak. Rotate SMTP/Qdrant/Gemini/Neon credentials at the provider, edit `.env`,
   recreate the backend container.
+- **After rotating the Neon password:** update `DATABASE_URL` in `.env` on both the laptop and
+  the VM, then recreate the containers in the same dependency order as §10 step 3 — remove
+  `scholarship-ai-assistant_caddy_1` first, then `scholarship-ai-assistant_backend_1` (Caddy
+  depends on the backend), then `podman-compose up -d` (no `--build`). Done 2026-10-24.
 - `.env` file mode on the VM should be `600`, owned by the deploying user.
 
 ## 10. Persistent-volume redeploy check
@@ -329,3 +333,18 @@ the document-persistence redeploy check (§10), and the first production retenti
 - **Smoke tests:** Qdrant pair run and **failed** (connection reset, see section 11); Gemini and discovery smoke tests not run (daily quota
   exhausted). Neon PITR still open (section 8).
 - **Defect found and fixed in code:** upload returned 500 when Gemini errors (section 11); not yet deployed to the VM.
+
+### Post-deployment checks, 2026-10-24
+
+- **Neon password rotated.** Role `neondb_owner` password rotated on the Neon console (production branch, pooled
+  endpoint). Laptop and VM `.env` updated; VM containers recreated (`scholarship-ai-assistant_caddy_1` then
+  `scholarship-ai-assistant_backend_1`, no `--build`; see §9). Verified via loopback + HTTPS `/health` 200, scheduler
+  restarted with no DB errors, and a SHA-256 hash match (not the value) between the container's and the laptop's
+  `DATABASE_URL`. No password or connection string is recorded here or elsewhere in the repo.
+- **Neon PITR restore drill: PASS.** Full record in `docs/t-002-verification-log.md` (open item 2, now closed):
+  branch from ~10:00 AM PKT on 2026-10-24, `scholarships` 34 = 34, `source_fetch_log` 798 vs 818, `monitoring_runs`
+  129 vs 134, Alembic head matched, verified read-only, branch deleted afterward. Proves a restore window of at
+  least ~5 hours on the Free plan.
+- **Live smoke tests after the Gemini quota reset:** `test_gemini_generation_reachable` **PASS**. The discovery
+  live-extraction test **FAILED again**, but on substance (0 candidates, expected ≥2), not quota/429 — a real
+  regression or environment issue, still open (see `docs/t-002-verification-log.md` open item 1).

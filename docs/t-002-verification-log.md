@@ -110,9 +110,20 @@ log is outstanding for them.
    connection forcibly closed`. The same TLS reset was reproduced with plain `curl` from the VM, so it is not this laptop's
    network. Most likely the free-tier Qdrant cluster is suspended or removed (the failure mode T130 found); not confirmed
    without the Qdrant console. **Still open**, and now a real finding: the vector search behind Q&A and matching may be down.
-2. **Neon point-in-time recovery.** Whether PITR is enabled, its restore window, and a restore
-   drill into a scratch branch have not been checked or performed (no console access). Steps:
-   `docs/operations-hardening.md` section 8. Record the date, restore point and result here.
+   **Update 2026-10-24 (Gemini quota reset, after the Neon password rotation):** `test_gemini_generation_reachable`
+   **PASSED**. `test_discovery_endpoint_extracts_real_listing_candidates_across_two_source_types` **FAILED again**, but
+   not with a 429/quota error — confirmed via debug-level logs, no rate-limit text anywhere. It is a genuine assertion
+   failure: the discovery endpoint returned 0 candidates from the two freshly-seeded dedicated sources, expected ≥2.
+   Not retried. Qdrant was not re-tested this time. **Still open**, now narrowed to a real discovery-endpoint defect
+   rather than quota exhaustion.
+2. **Neon point-in-time recovery. — CLOSED 2026-10-24.** PITR restore drill performed (procedure:
+   `docs/operations-hardening.md` §8): created a scratch branch from a point in time ~10:00 AM PKT on 2026-10-24,
+   compared against production, then deleted the branch. `scholarships` 34 = 34 (match); `source_fetch_log` 798
+   (branch) vs 818 (production) and `monitoring_runs` 129 (branch) vs 134 (production) — both lower on the branch,
+   as expected for an earlier point in time; Alembic head matched on both. All comparisons were read-only against
+   the branch's own connection string, which was never written to the VM's or the laptop's `.env`. This proves a
+   restorable window of **at least ~5 hours** on the Neon Free plan; the plan's exact retention limit was not
+   otherwise confirmed from the console.
 3. **HTTPS from the public internet. — CLOSED 2026-10-19.** Deployed to the Oracle VM
    (`002-source-monitoring-hardening` @ `e7b3c24`, 2026-10-18) and verified from outside the VM:
    `https://130.61.159.24/health` returns 200 (self-signed `tls internal` certificate);
@@ -165,3 +176,12 @@ Defects and observations found while doing this:
 - **Qdrant Cloud unreachable** from both networks (see open item 1 update).
 - **SSH to the VM flapped** (port 22 timed out for minutes, three times) while HTTPS stayed up; self-recovering, cause unknown.
 - Removing the backend container requires removing Caddy first (`depends_on`); runbook sections 10 and 12 updated.
+
+## Post-deployment verification, 2026-10-24
+
+| Item | Result |
+|---|---|
+| Neon password rotation | Role `neondb_owner` password rotated on the Neon console (production branch, pooled endpoint). Laptop and VM `.env` updated; VM containers recreated (`scholarship-ai-assistant_caddy_1` then `scholarship-ai-assistant_backend_1`, no `--build`). Verified via loopback + HTTPS `/health` 200, scheduler restarted with no DB errors, and a SHA-256 hash match (never the value) between the running container's `DATABASE_URL` and the laptop's. No password or connection string appears here or anywhere else in the repo. |
+| Neon point-in-time recovery | **PASS** — see open item 2 above (now closed) for the full drill record |
+| Live smoke test — Gemini | **PASS** (`test_gemini_generation_reachable`, quota had reset) |
+| Live smoke test — discovery | **FAIL** — not quota; a genuine assertion failure (0 candidates, expected ≥2). See open item 1 update above. |
