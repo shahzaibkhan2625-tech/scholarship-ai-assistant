@@ -19,7 +19,7 @@ Help students find, understand, and apply to scholarships they're actually eligi
 - **Backend:** FastAPI (Python 3.12)
 - **Database:** PostgreSQL via Neon
 - **Vector store:** Qdrant Cloud
-- **Agent orchestration:** LangGraph + LangChain, OpenAI Agents SDK
+- **Agent orchestration:** LangGraph + LangChain (Gemini via google-genai; no OpenAI Agents SDK)
 - **Infra:** Docker, GitHub Actions CI
 - **Frontend (later phase):** React + TypeScript
 
@@ -34,4 +34,4 @@ These are non-negotiable and apply across all agents and phases:
 
 ## Status
 
-Phase 0 (scaffolding). No auth, database models/migrations, frontend, or real agent/matching/Q&A logic exists yet — those land in later workstreams.
+Phases 0–5 complete and deployed (cloud VM, HTTPS). Feature 003 (LLM quota governance) is next.
