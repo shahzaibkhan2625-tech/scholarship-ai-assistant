@@ -1,4 +1,4 @@
-# Scholarship AI Assistant — Master Blueprint v1.6
+# Scholarship AI Assistant — Master Blueprint v1.7
 
 **Status:** Implementation-ready · **Audience:** Claude Code sessions + human developers · **Build method:** Spec-Driven, phase- and session-independent
 
@@ -11,6 +11,8 @@
 **v1.4 change theme:** adds a **Development Execution Model** (§39–§42) for the Manager (Chat UI) ↔ Worker (CLI) workflow — a **Workstream** layer as the fresh-session boundary, a **context ladder** so no session re-loads the whole blueprint, and concrete **Workstream Brief + Completion Summary** handoff templates. Process only; no architecture change; still 5 agents. See §43 (v1.4 changelog).
 
 **v1.5 change theme:** closes the **Manager → new-Manager-session** continuity gap. Defines a third, distinct handoff artifact — the **Manager Handoff Packet** (planning state carried between Chat UI Manager sessions) — kept separate from the Worker's Completion Summary and the Worker's Workstream Brief. See §42 and §44 (v1.5 changelog).
+
+**v1.7 change theme (2026-10-25):** records the decisions taken **after Phase 5 shipped** that the v1.6 text did not cover, without redesigning the architecture or adding any agent. A **gap analysis** (`docs/blueprint-gap-analysis.md`) compared this blueprint and the PRD with the built system and found the main gaps: stored records carry little matchable data, monitoring alone exceeds the free LLM quota, source coverage is thin, and "verified" claimed more than was known. Decisions: stay on the **free LLM tier** until feature 006 (ADR-0012); **pull large-scale source expansion forward** from Phase 6 and build in the order **003 → 004 → 006 → 005 → 007 → 008/009** (ADR-0012); **restrict source approval to operators** (ADR-0012); **"verified" means confirmed on the scholarship's own official page** with deadline and eligibility, and listing-only records get a weaker **`listed`** status (ADR-0013); a **central LLM budget** with priority classes, unchanged-page skip, per-source cadence, and provider failures kept out of source health (ADR-0014, feature 003); **country names and aliases** in matching (feature 005); a temporary **360-minute monitoring interval** until feature 003 ships. See §22 (post-Phase-5 roadmap) and §46 (v1.7 changelog).
 
 **v1.6 change theme:** integrates 5 production-grade concepts **without adding any new agent**. *Consolidations:* names the **Agent Loop & Human Gates** pattern (§7.0) and the **Harness** model+constraints+verification frame (§9.1). *New:* **Evals & the Checker** — scored grading with a CI score-regression gate, established early (§25.1, §22 Phase 0/1). *Timing:* a **minimal deployable cloud runtime** lands at end of Phase 2, not Phase 5 (§22, §21). *Excluded:* the **FDE (Forward Deployed Engineer)** positioning material is **positioning, not architecture** — it lives in a separate README/positioning doc, not this blueprint. See §45 (v1.6 changelog).
 
@@ -512,6 +514,8 @@ scholarships(id, name, provider, country, university_id, program_id, field, degr
              lifecycle_status[newly_discovered/verified/unverified/updated/expired/closed/reopened/stale/source_unavailable],
              opening_date, deadline, closing_status, conditions, exceptions, notes,
              retrieved_at, last_verified_at, verification_status)
+             -- Amended 2026-10-25 (v1.7, ADR-0013): a weaker `listed` status is added for records seen only on a listing page;
+             --   `verified` requires the scholarship's own official page with deadline + eligibility present. Planned in feature 004 (not yet built).
 universities(id, name, country)
 programs(id, university_id, name, field, duration, intake)
 -- per-field value with status, so "unknown" is never guessed (§1):
@@ -658,6 +662,8 @@ MVP: email/password, hashed (bcrypt/argon2), JWT access tokens, Signup/Login/Log
 
 *Deployment timing (v1.6, updated):* Docker packages the **backend** app (local parity from Phase 0). The **managed-DB/vector** part of the "leave the laptop early" goal was pulled forward: **PostgreSQL (Neon)** and **Qdrant Cloud** are both managed cloud services from **Phase 0**, not local containers — this partially resolves the earlier ⚠️ NOT YET DEFINED provider choice for DB/vector. A **minimal cloud runtime for the backend app itself** (containerized app + public endpoint + managed object storage) still lands at **end of Phase 2** (§22); **full production hardening = Phase 5**, **SaaS-scale managed infra = Phase 6**. Backend-hosting provider + object storage: ⚠️ NOT YET DEFINED — needs decision.
 
+*LLM provider & quota (Amended 2026-10-25, v1.7):* generation runs on **Google Gemini (`gemini-2.5-flash`) on the free tier**, with an **observed limit of about 20 requests/day per project** (quota is per project, not per API key). The project stays on the free tier until feature 006, where the paid-tier decision is taken (**ADR-0012**). All LLM calls pass through **one central budget** (ADR-0014, feature 003). *Drift to reconcile:* the implementation also calls Gemini for embeddings (live smoke test `test_gemini_embedding_reachable`), which departs from A2 and the Hugging Face row above; the decision is recorded under §46 ⚠️.
+
 ---
 
 ## 22. Phase / Tier Plan
@@ -707,9 +713,24 @@ Each phase ends with the repo in a **stable, contract-defined state**. Per phase
 ### Phase 5 — Production hardening + source monitoring & coverage analytics
 - **Scope:** observability, rate limits, retries/backoff, security hardening, backups, deployment config; **`source_monitor` workflow** (scheduled re-fetch of approved sources → diff → ingestion → alerts, §35-Monitoring); **source-health monitoring**; **coverage analytics** (dashboards over `source_fetch_log`); **semi-automated candidate-source validation** (still human-approved).
 - **DoD:** approved sources are re-checked on a schedule; new/changed/closed scholarships are picked up; coverage + source health are visible; stale records flagged.
+- **Status (Amended 2026-10-25, v1.7):** built as feature `specs/002-source-monitoring-hardening/`, deployed to the cloud VM with HTTPS on 2026-10-19 and merged to `main`. Post-deploy checks passed (document persistence, first retention run, Neon point-in-time restore drill, Qdrant and Gemini smoke tests). *Known gap:* monitoring alone was estimated at ~48 LLM requests/day against the ~20/day free quota; stopgap = monitoring interval raised from 60 to **360 minutes** on 2026-10-25 until feature 003 governs cost (see §35).
 
 ### Phase 6 — SaaS + live assisted submission
 - **Scope:** multi-tenancy enforcement, billing, plans, usage/quotas, notifications, managed infra; **wider source coverage + more connectors/countries**; per-tenant sources; **live approval-gated assisted submission** (portal field-mapping tool, final-approval gate; optional per-portal form-filling sub-agent only if justified per §8).
+- **Amended 2026-10-25 (v1.7, ADR-0012):** *wider source coverage + more connectors/countries* is **pulled forward** out of Phase 6 into feature **006** (built after 003 and 004). Multi-tenancy, billing, quotas and live submission stay in Phase 6 and remain optional.
+
+### Post-Phase-5 roadmap — feature folders 003–009 *(NEW — v1.7, 2026-10-25)*
+
+After Phase 5 each new capability is a **numbered spec-kit feature folder** (`specs/00N-*`), not an extension of an earlier one. The order comes from the gap analysis (`docs/blueprint-gap-analysis.md` §6) and ADR-0012. **Build order: 003 → 004 → 006 → 005 → 007 → 008/009** (folder numbers are names, not the build order).
+
+| Order | Feature | Scope (short) | Why here | Status (2026-10-25) |
+|---|---|---|---|---|
+| 1 | **003 quota-governance** | Central LLM budget with priority classes and a user-facing reserve; unchanged-page skip; per-source cadence; provider failures recorded but kept out of source health; deterministic extraction rules with LLM fallback and a parity check; budget visible in metrics and logs | Every later feature adds LLM load; quota must be governed first | spec, plan, tasks, ADR-0014 done; not implemented |
+| 2 | **004 trustworthy-scholarship-records** | Follow detail pages; deadline, eligibility, requirements, funding; `verified` vs `listed` (ADR-0013); reclassify existing rows; storage-side country normalisation; fix or retire EACEA extraction; minimal operator restriction on source approval | Matching, Q&A and alerts are only as good as the stored record | not started |
+| 3 | **006 source-coverage-at-scale** | National, regional/state and university sources in any country; jurisdiction/level modelling; bulk candidate import from official directories; fuller operator roles and approval queue; per-source extraction rules; **paid-tier decision** | Owner's product goal; pulled ahead of Phase 6 (ADR-0012) | not started |
+| 4 | **005 match-any-profile** | More hard-constraint dimensions; country names and aliases; GPA normalisation; batch "match me"; ranked discovery results | Turns trustworthy data into value for any user | not started |
+| 5 | **007 application-assistance** | Complete the human-approved application path | Depends on records and matching | not started |
+| 6 | **008 frontend**, **009 evals & KPIs** | React + TypeScript UI; measured KPIs | UI and measurement over a trustworthy core | not started |
 
 ---
 
@@ -830,6 +851,11 @@ No new agent; evals are a verification/CI concern (harness §9.1), implemented a
 - **A11 (v1.1):** MVP seeds a **small, carefully researched registry** (a few countries/types) — not an exhaustive world list. Coverage grows by adding registry entries, not by rewriting architecture.
 - **A12 (v1.1):** Coverage is reported as *measured* (checked/failed/gaps), never asserted as complete.
 - **A13 (v1.3):** Matching is a **guardrailed agent**, not a pure rule-based service. Hard constraints and exclusions are computed deterministically and passed to the agent as locked, read-only context; the agent reasons only over soft preferences and fuzzy criteria. This trades a small amount of determinism for reasoning quality on ambiguous criteria, guarded against by schema-lock, evidence-required, and no-guess output guardrails plus a mandatory hard-constraint regression test matrix (§25).
+- **A14 (v1.7, ADR-0012):** the project stays on the **free LLM tier** (observed ~20 requests/day for `gemini-2.5-flash`, per project) until feature 006, where the paid-tier decision is taken. Accuracy is never traded for cost: no lighter model and no skipped verification to save quota.
+- **A15 (v1.7, ADR-0013):** **"verified" means confirmed on the scholarship's own official page with a deadline and eligibility present.** A record seen only on a listing page gets the weaker status **`listed`**. Existing records are reclassified in feature 004.
+- **A16 (v1.7, ADR-0014):** every LLM call goes through **one central budget** with priority classes (user-facing, one-off backfill, scheduled monitoring, candidate validation) and a reserve for user-facing work. Background work is deferred, never failed, when the reserve is reached; students get a clear "temporarily unavailable, try after <time>" answer, never a server error or a false "not eligible". Provider failures (quota, outage, unparseable response) never mark a source as failing.
+- **A17 (v1.7, ADR-0012):** source approval is restricted to **operators** (not any logged-in user); minimal restriction in feature 004, fuller roles and a review queue in feature 006. A10 (human-governed approval) is unchanged.
+- **A18 (v1.7):** A11 ("small seed registry") still describes the MVP, but **large-scale expansion is now scheduled** as feature 006 instead of Phase 6 (ADR-0012).
 
 ---
 
@@ -891,6 +917,8 @@ Approved Registry ──► Runtime Discovery ──► {Approved source: use pe
 ```
 A newly discovered source is **never** authoritative until approved. MVP = manual approval; Phase 5 = semi-automated checks, still human-confirmed.
 
+*Amended 2026-10-25 (v1.7, ADR-0012):* the approval gate is restricted to **operators**. As built in Phase 5, any logged-in user could approve or reject a candidate source, and signup is open. Minimal operator restriction ships in feature 004; fuller roles and an approval queue in feature 006. *Coverage target:* the registry must grow to **national, regional/state and individual-university** sources in **any country** (any user, not one profile), discovered through official directories and validated candidates, never through unofficial pages as facts (feature 006).
+
 ---
 
 ## 30. Multi-Source Discovery & Coverage Engine *(NEW — v1.1)*
@@ -902,6 +930,8 @@ A newly discovered source is **never** authoritative until approved. MVP = manua
 **30.2 Rule — no per-source agents:** each channel is a **connector/tool**; combining/dedup/verify are **services/workflows**. One Discovery Agent orchestrates.
 
 **30.3 Exhaustive (systematic) search strategy:** the agent builds a **query plan** across dimensions — country · university · degree level · field · nationality · funding type · intake · academic/language requirements · scholarship type (gov/university/provider) · research/fellowship · current & upcoming deadlines — rather than one generic query like *"scholarships for Pakistani students."* Multiple targeted strategies run through approved tools.
+
+*Amended 2026-10-25 (v1.7):* the country dimension must match **names and aliases** (for example "USA", "US", "United States", local-language names, and demonyms such as "Pakistani" for nationality) through a deterministic alias table with ISO codes as the canonical form, applied to both user input and stored values. As built, the filter compared exact strings, so "Germany" matched nothing. Storage-side normalisation: feature 004; alias matching: feature 005.
 
 **30.4 Coverage engine (measurable, not guaranteed):** derived from `source_registry` + `source_fetch_log`, exposes per country/region: configured sources · active sources · successfully checked · failed · last checked · **countries covered · universities covered · providers covered** · newly discovered candidates · verified opportunities · **coverage gaps**. Coverage spans both high-visibility destinations and **less-obvious countries/regions** (e.g., China, Norway, Morocco, other European/African/Asian/Middle-Eastern/Americas/Oceania sources). The UI states coverage as *measured*, and never claims "no scholarship missed" or 100% global coverage.
 
@@ -935,6 +965,7 @@ DISCOVER → EXTRACT → NORMALIZE → CLASSIFY → DEDUPLICATE → VERIFY(offic
 
 - **Provenance on every record:** `scholarship_sources` stores source_id, url, retrieved_at, verified_at, verification_status (verified / unverified / conflicting), reliability, evidence_snippet.
 - **Lifecycle/freshness status (v1.2, first-class):** each scholarship carries `lifecycle_status` ∈ `newly_discovered · verified · unverified · updated · expired · closed · reopened · stale · source_unavailable`, plus `retrieved_at` / `last_verified_at` / `deadline`. Freshness is a first-class field, not an afterthought.
+- **Meaning of `verified` (Amended 2026-10-25, v1.7, ADR-0013):** `verified` requires that the scholarship's **own official page** was read and that a **deadline and eligibility** are present. A record only re-sighted on an approved listing page is **`listed`**, a weaker status, and is shown as such. This tightens ADR-0009, under which a re-sighting on a listing counted as confirmation; at the time of the gap analysis all 34 stored records were marked verified while none had a deadline. Implemented in feature 004.
 - **Rule:** the system never presents unsupported claims as fact. If official info can't be confirmed → mark **unverified / could-not-confirm**, don't invent or guess. It does not invent facts, eligibility, spouse/dependent policy, funding, or deadlines.
 - **Conflict-resolution policy (when sources disagree):** prefer **official over third-party**, **more-recent over older**, **higher-reliability over lower**; if still unresolved → mark **conflicting** and surface both with sources rather than picking silently.
 
@@ -951,6 +982,7 @@ DISCOVER → EXTRACT → NORMALIZE → CLASSIFY → DEDUPLICATE → VERIFY(offic
 | Page structure changed / extraction fails | log, keep prior record, flag for re-check; never overwrite good data with empty |
 | Verification fails | store as `unverified`, do not publish as fact |
 | Scholarship can't be confirmed | present as *could-not-confirm*, not absent |
+| LLM provider failure during extraction/validation (quota exhausted, outage, unparseable response) — *v1.7, ADR-0014* | record a **provider outcome** in `source_fetch_log` (not a site failure); do **not** count it toward the source's failure streak or health; keep existing records unchanged; back off until the provider's retry time; never shown as "no scholarship found" |
 
 Every outcome lands in `source_fetch_log`, feeding coverage (§30.4) and source health (Phase 5).
 
@@ -982,6 +1014,8 @@ Each schema is **intent-specific** — no single universal template — while ev
 Source Registry ─► Scheduled Monitoring ─► New/Changed content ─► ingestion (§31) ─► profile re-match ─► Notify/Alert
 ```
 Detects: newly published scholarships · changed requirements/deadlines · closing/reopening · funding changes · source failures · stale records. MVP ships the registry + fetch-log that make this a later drop-in — **no MVP monitoring load.**
+
+*Amended 2026-10-25 (v1.7, ADR-0014, feature 003):* monitoring must be **cost-governed**. A page whose content has not changed since the last successful extraction costs **no LLM call** (fingerprint skip, plus a forced full re-check at least every 7 days and within the freshness window); each source is checked on a **cadence derived from its `update_frequency`** instead of a global timer; every LLM call passes the central budget (A16). Built Phase 5 monitoring called the LLM on every run, about 48 requests/day for 2 sources against the ~20/day free quota; until 003 ships, the monitoring interval is **360 minutes** (stopgap, 2026-10-25).
 
 ---
 
@@ -1039,7 +1073,9 @@ Every major capability, explicitly labeled. **MVP** = built first for personal u
 | Scheduled source monitoring + notifications | **Production (Phase 5)** |
 | Coverage analytics dashboards + source-health | **Production (Phase 5)** |
 | Semi-automated candidate-source validation | **Production (Phase 5)** |
-| Large-scale source/country expansion | **Future/Advanced (Phase 6)** |
+| Large-scale source/country expansion | **Future/Advanced (Phase 6)** → *amended v1.7: pulled forward to feature 006 (ADR-0012)* |
+| LLM quota governance + cost-aware monitoring *(v1.7)* | **Production (feature 003, before further features)** |
+| Official-page verification + `listed` status *(v1.7)* | **Production (feature 004)** |
 | Live approval-gated portal submission | **Future/Advanced (Phase 6)** |
 | SaaS multi-tenancy, billing, quotas | **Future/Advanced (Phase 6)** |
 
@@ -1363,6 +1399,46 @@ NOT INCLUDED (by design): full prior conversation / transcripts.
 ---
 
 *End of Master Blueprint v1.6 — 5 agents; loop + harness named; evals & CI score-gate (early); minimal cloud runtime at Phase 2; FDE/positioning routed out. Ready for Workstream-by-Workstream execution from artifacts alone.*
+
+## 46. v1.7 Revision Notes — post-Phase-5 decisions *(2026-10-25)*
+
+These decisions were taken after Phase 5 shipped, from a gap analysis of this blueprint and the PRD against the built system (`docs/blueprint-gap-analysis.md`: 77 requirements, 35 Built, 26 Partial, 5 Missing, 11 Deferred-by-decision). The full reasoning is in the cited ADRs; this table records what changed in the blueprint.
+
+| # | Change | Modified/New | Section | Phase / feature | Why (one line) | Source |
+|---|---|---|---|---|---|---|
+| 1 | v1.7 change theme | Modified | header | — | Records the post-Phase-5 decisions | gap analysis |
+| 2 | `listed` status noted beside the lifecycle/verification enums | Modified | §14 | 004 | Listing-only records must not look verified | ADR-0013 |
+| 3 | LLM provider, free-tier limit, central budget; embeddings drift flagged | Modified | §21 | 003, 006 | The provider and its quota were not recorded anywhere | ADR-0012, ADR-0014 |
+| 4 | Phase 5 status + 360-minute stopgap | Modified | §22 Phase 5 | 002 (done) | Records what shipped and the quota gap found | runbook, 2026-10-25 |
+| 5 | Wider coverage pulled out of Phase 6 | Modified | §22 Phase 6 | 006 | Owner's product goal needs it before SaaS | ADR-0012 |
+| 6 | **Post-Phase-5 roadmap 003–009** with build order | **New** | §22 | 003–009 | Spec-kit rule: new capability = new feature folder | gap analysis §6, ADR-0012 |
+| 7 | Assumptions A14–A18 | **New** | §27 | — | Free tier, verified meaning, budget, operator approval, expansion timing | ADR-0012/13/14 |
+| 8 | Operator-only approval; coverage at every level in any country | Modified | §29 | 004, 006 | Any logged-in user could approve sources | ADR-0012 |
+| 9 | Country names and aliases | Modified | §30.3 | 004, 005 | Exact-string filter missed common names | gap analysis M-12 |
+| 10 | Meaning of `verified` | Modified | §32 | 004 | `verified` overstated what was known | ADR-0013 |
+| 11 | LLM provider failure row | Modified | §33 | 003 | A quota error was recorded as a site failure | ADR-0014 |
+| 12 | Cost-governed monitoring | Modified | §35 | 003 | Monitoring alone exceeded the free quota | ADR-0014 |
+| 13 | Capability labels for expansion, quota governance, official-page verification | Modified | §36 | 003, 004, 006 | Labels must match the new order | ADR-0012/13/14 |
+
+### Consistency audit (v1.7)
+- **No new agent** — budget, cadence, fingerprint skip and verification status are services/workflow rules; agent count stays **5**. ✅
+- **Governance kept** — A10 (human approval) and FR-VERIFY-2 are unchanged; approval is narrowed to operators, not loosened. ✅
+- **Groundedness kept** — the `verified` change makes labels stricter, never looser; deterministic extraction rules must pass the same grounding check as LLM output (feature 003). ✅
+- **Phase numbering kept** — Phases 0–6 are unchanged; only the *wider coverage* item moves from Phase 6 to feature 006, recorded here and in ADR-0012. ✅
+- **Nothing deleted** — every v1.6 sentence is kept; amendments are added beside it with a date and source. Part B (agent PRD) is unchanged. ✅
+- **ADR-0009 superseded in part** by ADR-0013 (meaning of a listing re-sighting); ADR-0008's failed-run definition amended by ADR-0014 (provider failures excluded). ✅
+
+### ⚠️ NOT YET DEFINED — needs decision (introduced/confirmed by v1.7)
+1. **Paid LLM tier** — taken at feature 006 (ADR-0012); cost model to be measured first.
+2. **Embeddings provider** — the implementation uses Gemini embeddings; A2 and §21 say a local Hugging Face model. Decide which is canonical and update A2/§21 or the code.
+3. **DAAD, Stipendium Hungaricum, KAUST** — seeded but not monitored (`discovery_role=false`, robots review pending): enable, retire, or keep as verification-only (004 or 006 spec).
+4. **EACEA listing extraction** — 136/136 recent attempts yielded 0 grounded candidates; fix or retire in feature 004.
+
+**Net effect (v1.7):** the blueprint now states the **free-tier constraint and how it is governed**, a **stricter meaning of verified**, **operator-only source approval**, **country aliases**, and the **post-Phase-5 build order 003 → 004 → 006 → 005 → 007 → 008/009**, with every change traced to an ADR or the gap analysis. No agent, phase number or requirement ID was removed. Agent count remains **5**.
+
+---
+
+*End of Master Blueprint v1.7 — 5 agents; post-Phase-5 decisions recorded (free-tier governance, verified vs listed, operator approval, country aliases, roadmap 003–009).*
 
 <!-- The section below is a separate document type (PRD). It defines WHAT/WHY at the product and agent-behavior level. It does not replace or duplicate the architecture defined above. -->
 
