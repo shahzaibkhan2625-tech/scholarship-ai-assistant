@@ -2,10 +2,10 @@
 
 | Field | Value |
 |---|---|
-| PRD version | v1.0 (FINAL) |
-| Status | **FINAL / LOCKED** — all 8 Open Decisions approved & incorporated (Stage 1 complete) |
-| Last updated | 2026-09-05 |
-| Source of truth | Master Blueprint v1.5 (architecture) — this PRD does not redesign it |
+| PRD version | v1.1 (FINAL, amended) |
+| Status | **FINAL / LOCKED** — all 8 Open Decisions approved & incorporated (Stage 1 complete); **amended 2026-10-25 (v1.1)** with 4 post-Phase-5 decisions OD-9…OD-12, see §34 |
+| Last updated | 2026-10-25 (v1.1); v1.0 locked 2026-09-05 |
+| Source of truth | Master Blueprint v1.7 (architecture; v1.0 was written against v1.5) — this PRD does not redesign it |
 | Document type | Product requirements (WHAT / WHY). Architecture (HOW) stays in the Blueprint. |
 
 **Truth hierarchy.** Blueprint > PRD for structural/architecture decisions; PRD defines product behavior and scope. Section references like *(BP §n)* point to the Master Blueprint for traceability. Requirement IDs (`FR-*`, `NFR-*`) are for downstream Spec-Driven Development.
@@ -77,6 +77,7 @@ Per Blueprint capability labels *(BP §36)*, the MVP includes:
 - Application/Submission Assistant orchestration (prepare + approvals, no live send) — Post-MVP *(BP §36, Phase 4)*.
 - Scheduled source monitoring + notifications, coverage analytics, source-health, semi-automated candidate-source validation — Production *(Phase 5)*.
 - Large-scale source/country expansion, **live approval-gated submission**, SaaS multi-tenancy/billing/quotas — Future/Advanced *(Phase 6)*.
+  - *Amended 2026-10-25 (v1.1, OD-10):* large-scale source/country expansion is **pulled forward** to feature 006, built after quota governance (003) and trustworthy records (004). Live submission and SaaS multi-tenancy/billing/quotas stay Future *(BP §22, ADR-0012)*.
 
 ## 10. Core User Journeys
 
@@ -120,6 +121,8 @@ Grouped below in §12–§22. Each capability has **Input → Processing → Out
 - **FR-DISC-5** Newly discovered sources become **candidates** requiring governed approval; they are never treated as authoritative automatically *(BP §29)*.
 - **FR-DISC-6** Discovery shall support systematic query dimensions (country, university, degree level, field, nationality, funding type, intake, requirements, deadlines) rather than a single generic query *(BP §30.3)*.
 - **FR-DISC-7** The product shall **not** claim 100% global coverage; it shall target maximum practical coverage with measurable metrics (§21) *(BP §30.4)*.
+- **FR-DISC-8 (v1.1, OD-12)** Approving or rejecting a candidate source shall be restricted to **operators**; an ordinary signed-up user shall not be able to change source authority *(BP §29, ADR-0012)*.
+- **FR-DISC-9 (v1.1, OD-10)** Coverage shall extend to **national, regional/state and individual-university** scholarship sources in **any country**, for any user's profile, not a fixed country list; new sources still enter only as governed candidates (FR-DISC-5) *(BP §29, §22 roadmap, feature 006)*.
 
 ## 15. Matching Requirements  (`FR-MATCH`)
 
@@ -131,6 +134,7 @@ Grouped below in §12–§22. Each capability has **Input → Processing → Out
 - **FR-MATCH-4** Output shall use a fixed, structured verdict object: eligibility verdict (Eligible / Likely / Possibly / Not / Unknown-requires-verification) + match-strength (Strong / Possible / Not) + hard/soft/exclusion breakdown + missing information + evidence *(BP §18)*.
 - **FR-MATCH-6 (OD-3, approved)** Matching shall be **intelligent** (retain reasoning over soft/fuzzy criteria — do not reduce to rules-only) and shall report **criterion-level outcomes**: **Pass / Fail / Unknown–Needs Verification / Inferred** (Inferred used where a value was reasoned rather than verified). Categories: **hard constraints** (nationality, degree level, GPA, mandatory requirements, deadlines, explicit eligibility), **exclusions** (attributes that disqualify), **soft/fuzzy criteria** (work-experience relevance, academic-field alignment, nuanced preference fit). **Product rule:** a hard eligibility failure must never be overridden merely because other factors are strong *(BP §18, §7.5)*.
 - **FR-MATCH-5** *(Product-behavior constraint)* Eligibility "facts" (hard constraints) shall be decided deterministically and shall not be overridable by model judgment *(BP §7.5 guardrails; architecture in Blueprint)*.
+- **FR-MATCH-7 (v1.1)** Country and nationality matching shall recognise **names and aliases** (e.g. "USA" / "US" / "United States", local-language names, demonyms such as "Pakistani"), deterministically and the same way for user input and stored records *(BP §30.3, features 004/005)*.
 
 ## 16. Scholarship-URL Matching Requirements  (`FR-URL`)
 
@@ -184,6 +188,8 @@ Grouped below in §12–§22. Each capability has **Input → Processing → Out
 - **FR-VERIFY-5** The product shall distinguish record lifecycle states: newly discovered, verified, unverified, updated, expired, closed, reopened, stale, source-unavailable *(BP §32)*.
 - **FR-VERIFY-6** A **failed source retrieval shall not** be interpreted as "no scholarship exists"; failures are logged and retried per policy *(BP §33)*.
 - **FR-VERIFY-7** When sources conflict, a defined **conflict-resolution rule** shall prefer the current official source (then more-recent, then higher-reliability); unresolved conflicts are surfaced, not silently chosen *(BP §32)*.
+- **FR-VERIFY-8 (v1.1, OD-11)** A record shall be labelled **`verified`** only when confirmed on the scholarship's **own official page** with a **deadline and eligibility** present. A record seen only on a listing page shall carry the weaker status **`listed`** and be shown as such; the lifecycle states in FR-VERIFY-5 remain *(BP §32, ADR-0013, feature 004)*.
+- **FR-VERIFY-9 (v1.1, OD-9)** A failure of the **AI/LLM provider** (quota exhausted, outage, unparseable response) shall be recorded distinctly, shall **not** mark the source as failing or change existing records, and shall **not** be shown as "no scholarship found" (extends FR-VERIFY-6) *(BP §33, ADR-0014)*.
 - **FR-COV-1** The product shall expose **measurable coverage**: registered/active/checked/failed sources, last-checked, countries/universities/providers covered, new candidates, verified opportunities, and coverage gaps *(BP §30.4)*.
 
 ## 23. Structured Output Requirements  (`FR-OUT`)
@@ -218,6 +224,9 @@ Grouped below in §12–§22. Each capability has **Input → Processing → Out
 - **NFR-REL-1** Freshness is first-class: records carry retrieved_at / last_verified_at / status; stale records are flagged. **Freshness windows are configurable per source characteristics** rather than one universal period (OD-4) *(BP §32)*.
 - **NFR-REL-2** Failure/retry handling for sources, APIs, extraction, and verification; failures surface as coverage gaps *(BP §33)*.
 - **NFR-REL-3 (Future)** Continuous monitoring of approved sources for new/changed scholarships, deadline changes, open/closed status, updated requirements *(BP §35, Phase 5)*. **(OD-8, approved)** Future monitoring shall support **in-app** and **email** notifications, and shall remain **extensible** to additional channels later — without expanding MVP scope to every possible channel now.
+- **NFR-REL-4 (v1.1, OD-9)** AI usage shall be **budgeted**: the product shall operate within the available LLM allowance, keep a share reserved for user-facing requests, defer background work instead of failing it, and when the allowance is spent shall tell the user **"temporarily unavailable, try again after <time>"** — never a server error, an empty answer, or a misleading "unknown"/"not eligible" result *(BP §21, §27 A16, ADR-0014, feature 003)*.
+- **NFR-REL-5 (v1.1, OD-9)** Monitoring shall be **cost-aware**: an unchanged page shall not trigger a new AI extraction, each source shall be checked about as often as it actually changes, and a periodic full re-check shall prevent a wrong "unchanged" signal from hiding a change *(BP §35)*.
+- **NFR-REL-6 (v1.1)** **Accuracy is not traded for cost**: saving quota shall never mean a lighter/less accurate model, skipped verification, or dropped findings *(BP §27 A14)*.
 
 ## 28. Success Metrics / KPIs
 
@@ -231,6 +240,8 @@ Derived from Blueprint-defined measurables. **(OD-4, approved)** The product goa
 - **KPI-7 Matching quality/accuracy:** verdict-correctness matrix pass rate; **zero** hard-constraint guardrail violations (build-breaking) *(BP §25, §7.5)*.
 - **KPI-8 Groundedness:** anti-hallucination pass rate; % answers with evidence; % unconfirmable correctly labeled Unknown *(BP §25, §34)*.
 - **KPI-9 System failure/retry rate:** source/API/extraction/verification failure and retry counts *(BP §33)*.
+- **KPI-10 AI quota use (v1.1):** LLM requests per day by priority class against the allowance; requests skipped as unchanged; requests deferred *(BP §35, feature 003)*.
+- **KPI-11 Verified share (v1.1):** % of stored scholarships that are `verified` under FR-VERIFY-8, versus `listed` *(feature 004)*.
 
 ## 29. Acceptance Criteria (product-level, from phase DoDs)
 
@@ -254,6 +265,7 @@ Derived from Blueprint-defined measurables. **(OD-4, approved)** The product goa
 - **Constraint C-3:** Human approval is mandatory before any future live submission *(BP §17, §37)*.
 - **Constraint C-4 (architecture, not a PRD requirement):** agents/workflows/services/tools split, PostgreSQL/Qdrant/file-storage boundaries, MCP/API connectors, LangGraph/LangChain/OpenAI Agents SDK — defined in the Blueprint *(BP §6–§15)*.
 - **Dependency D-1 (dev process):** Workstream-based, artifact-handoff development *(BP §39–§42)*.
+- **Constraint C-5 (v1.1, OD-9):** the AI provider runs on a **free tier** (observed about 20 generation requests/day per project); the paid-tier decision is deferred to feature 006 *(BP §21, ADR-0012)*.
 
 ## 32. Resolved Decisions (formerly Open) — all approved
 
@@ -269,6 +281,10 @@ All 8 decisions are **approved and incorporated**. None remain open at the produ
 | OD-6 | Funding classification (Fully/Substantially/Partially/Tuition-only/Stipend-only/Other/Unknown); no universal % threshold | §12 FR-INTEL-5 |
 | OD-7 | Primary MVP persona = individual applicant; consultants/agencies/institutions = Future, not silently in MVP | §5 |
 | OD-8 | Future monitoring notifications: in-app + email, extensible; no MVP over-expansion | §27 NFR-REL-3 |
+| OD-9 *(v1.1, 2026-10-25)* | Stay on the free AI tier until feature 006; govern AI usage with a central budget, a user-facing reserve, unchanged-page skip and cost-aware monitoring; provider failures are not source failures; accuracy is never traded for cost | §27 NFR-REL-4..6, §22 FR-VERIFY-9, §31 C-5 *(ADR-0012, ADR-0014)* |
+| OD-10 *(v1.1, 2026-10-25)* | Large-scale coverage (national, regional, university, any country) pulled forward from Phase 6; build order 003 → 004 → 006 → 005 → 007 → 008/009 | §9, §14 FR-DISC-9, §34 *(ADR-0012)* |
+| OD-11 *(v1.1, 2026-10-25)* | "Verified" = confirmed on the scholarship's own official page with deadline and eligibility; listing-only = `listed` | §22 FR-VERIFY-8, KPI-11 *(ADR-0013)* |
+| OD-12 *(v1.1, 2026-10-25)* | Source approval restricted to operators | §14 FR-DISC-8 *(ADR-0012)* |
 
 **Remaining operational (non-blocking) configuration** — not product Open Decisions: exact numeric KPI targets and per-source freshness windows (set during operations, per OD-4); the concrete initial seed source list (set under governance, per OD-5). These are intentionally deferred and do **not** block PRD lock.
 
@@ -299,6 +315,32 @@ All 8 decisions are **approved and incorporated**. None remain open at the produ
 | Security/privacy | §19 |
 | Phases / acceptance | §22, §25 |
 | Dev continuity (dependency) | §39–§42 |
+| AI quota governance, cost-aware monitoring *(v1.1)* | §21, §27 A14/A16, §33, §35; ADR-0014; feature 003 |
+| Verified vs listed *(v1.1)* | §14, §32, §27 A15; ADR-0013; feature 004 |
+| Operator-only source approval; coverage at every level *(v1.1)* | §29, §27 A17/A18, §22 roadmap; ADR-0012; features 004/006 |
+| Country names and aliases *(v1.1)* | §30.3; features 004/005 |
+| Post-Phase-5 roadmap 003–009 *(v1.1)* | §22 (roadmap table), §46 |
+
+## 34. Amendments — v1.1 *(2026-10-25)*
+
+v1.0 was locked on 2026-09-05. After Phase 5 shipped, a gap analysis (`docs/blueprint-gap-analysis.md`) compared this PRD and the Blueprint with the built system. Four product decisions followed (OD-9…OD-12). They are added here without changing or deleting any v1.0 requirement; existing IDs are unchanged and new IDs continue each series.
+
+| # | Change | Section | Decision | Why (one line) |
+|---|---|---|---|---|
+| 1 | Version, status, date, source of truth → Blueprint v1.7 | header | — | Records the amendment |
+| 2 | Large-scale expansion pulled forward | §9 | OD-10 | Product goal needs broad coverage before SaaS |
+| 3 | FR-DISC-8 operator-only approval; FR-DISC-9 coverage at every level, any country | §14 | OD-12, OD-10 | Any user could approve sources; coverage was 5 sources |
+| 4 | FR-MATCH-7 country names and aliases | §15 | — (gap analysis) | Exact-string matching missed common names |
+| 5 | FR-VERIFY-8 verified vs listed; FR-VERIFY-9 provider failures | §22 | OD-11, OD-9 | "Verified" overstated; a quota error looked like a site failure |
+| 6 | NFR-REL-4..6 AI budget, cost-aware monitoring, accuracy not traded for cost | §27 | OD-9 | Monitoring alone exceeded the free quota |
+| 7 | KPI-10 AI quota use; KPI-11 verified share | §28 | OD-9, OD-11 | Both must be measurable |
+| 8 | Constraint C-5 free tier | §31 | OD-9 | The constraint was not written down |
+| 9 | OD-9…OD-12 | §32 | — | Decision record |
+| 10 | Traceability rows | §33 | — | Each new item traces to the Blueprint |
+
+**Roadmap after Phase 5 (product view):** 003 AI quota governance → 004 trustworthy records → 006 coverage at scale → 005 matching for any profile → 007 application assistance → 008 frontend / 009 evals & KPIs *(BP §22 roadmap table)*.
+
+**v1.1 consistency audit:** no MVP requirement was removed or weakened; governance (FR-DISC-3/5, FR-VERIFY-2) is narrowed, not loosened; groundedness is stricter (FR-VERIFY-8); the no-100%-coverage rule (FR-DISC-7, OD-4) still holds alongside FR-DISC-9; the free-tier constraint does not override accuracy (NFR-REL-6). No contradiction found.
 
 ---
 
@@ -328,6 +370,6 @@ No contradictions. Audit checks performed and passed:
 **5. Readiness**
 The PRD is internally consistent, standalone, and requires no chat history to understand. All approved decisions are incorporated with preserved requirement IDs and traceability.
 
-**PRD STATUS: FINAL / LOCKED ✅** (Stage 1 complete — consistency audit passed.)
+**PRD STATUS: FINAL / LOCKED ✅** (Stage 1 complete — consistency audit passed.) **Amended to v1.1 on 2026-10-25** (OD-9…OD-12, §34; v1.1 consistency audit passed).
 
 *Scope note:* Excludes architecture, implementation specs, and code, per request. Ready to derive/confirm the Master Blueprint and subsequent Spec-Driven artifacts in a later stage.
