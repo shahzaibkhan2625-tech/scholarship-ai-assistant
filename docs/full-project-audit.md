@@ -33,7 +33,7 @@ For PRD requirement IDs (section 14) I use the three words you asked for: Met, P
 
 ## 1. Agents (Blueprint §7, §9, §21; PRD Part B)
 
-First, the headline fact: **none of the five "agents" is an agent loop.** There is no dependency on the OpenAI Agents SDK in `backend/pyproject.toml`. No file in `app/` imports `agents`, `openai`, `langchain`, or any MCP library (`grep` over `app/`: the only `langchain` and `openai` hits are none; the only `mcp` hits are an enum value and comments). The only LLM access is `app/core/llm.py:33` `generate_text` (one `generate_content` call, no tools, no loop, no retry, no budget) and `:48` `embed_texts`.
+First, the headline fact: **none of the five "agents" is an agent loop.** There is no dependency on the OpenAI Agents SDK in `backend/pyproject.toml`. No file in `app/` imports `agents`, `openai`, `langchain`, or any MCP library (`grep` over `app/`: no `langchain` or `openai` import at all; the only `mcp` hits are an enum value and comments). `langchain` and `langchain-google-genai` are declared in `pyproject.toml` but never imported, so they are unused dependencies. The only LLM access is `app/core/llm.py:33` `generate_text` (one `generate_content` call, no tools, no loop, no retry, no budget) and `:48` `embed_texts`.
 
 | ID | Blueprint / PRD says | What the code actually does | Proof | Mark |
 |---|---|---|---|---|
