@@ -1,5 +1,5 @@
 # Audit Part 2 helper (read-only, not application code): pytest plugin that keeps only the tests needing neither the DB nor the network.
-# Run from backend:  DATABASE_URL=postgresql+psycopg://nobody:nopass@127.0.0.1:1/none GEMINI_API_KEY=not-a-real-key QDRANT_URL=http://127.0.0.1:1 QDRANT_API_KEY=x \
+# Run from backend:  DATABASE_URL=postgresql+psycopg://nobody:nopass@127.0.0.1:1/none GEMINI_API_KEY=not-a-real-key QDRANT_URL=http://127.0.0.1:1 QDRANT_API_KEY=x \  # allow-secret
 #   PYTHONPATH=../docs/audit-part2-scripts python -m pytest -q -p no:cacheprovider -p nodb_plugin -m "not smoke"
 """pytest plugin: keep only tests that need neither the database nor the network,
 and hard-block sockets so any leak fails loudly instead of connecting."""
