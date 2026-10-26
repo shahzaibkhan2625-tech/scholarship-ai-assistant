@@ -5,7 +5,7 @@
 | Date | 2026-10-26 |
 | Branch | `docs/full-project-audit` (from `main` @ `4574ad4`) |
 | Compared against | `specs/scholarship-ai-assistant-master-blueprint-v1.md` (v1.7, "BP"), `specs/scholarship-ai-assistant-prd-v1.md` (v1.1, "PRD"), the Part B agent PRD inside the Blueprint, `specs/001-*/contracts/openapi.yaml`, `specs/002-*/contracts/openapi.yaml`, `docs/blueprint-gap-analysis.md` |
-| Type | Read-only audit. No application code changed. No Gemini calls. No network calls. No database connection. Part 1 ran no tests; Part 2 ran test collection and the 571 tests that need neither database nor network (section P2.6). |
+| Type | Read-only audit. No application code changed. No Gemini calls. No network calls. No database connection. Part 1 ran no tests; Part 2 ran test collection and the 571 tests that need neither database nor network (section P2.6); Part 3 ran no test suite, only a helper script that calls pure functions with the network blocked (P3.4). |
 
 ## 0. How this was produced, and what to trust
 
@@ -27,7 +27,7 @@
 
 For PRD requirement IDs (section 14) I use the three words you asked for: Met, Partly met, Not met.
 
-**Short pointer to the end.** The comparison with the gap analysis is section 15. **Part 2 (the areas Part 1 skipped) follows it.** The count of each mark for both parts is section 16, the 15 biggest problems are section 17, and where the audit stopped is section 18.
+**Short pointer to the end.** The comparison with the gap analysis is section 15. **Part 2 (the areas Part 1 skipped) follows it, then Part 3 (the 92 PRD IDs re-judged, eight files read line by line, every wrong task box).** The count of each mark for all three parts is section 16, the 15 biggest problems are section 17, and where the audit stopped is section 18.
 
 ---
 
@@ -340,10 +340,10 @@ Verdict words: **Met**, **Partly met**, **Not met**. Evidence cites the rows abo
 | FR-DOC-1 | Document intelligence | Partly met | D-01. |
 | FR-DOC-2 | Supported materials | Partly met | D-02. |
 | FR-DOC-3 | Requirements derived dynamically | Partly met | Only url-matched scholarships have requirement rows. |
-| FR-GEN-1 | Requirement-aware CV/SOP | Partly met | SOP questions yes; Europass is a label (W-03b). |
-| FR-GEN-2 | Never fabricate | Met | D-03, with the requirement-fact caveat. |
+| FR-GEN-1 | Requirement-aware CV/SOP | **Not met** | Part 3: Europass is a label; SOP questions are read from keys nothing in the app creates, so it works only for hand-inserted rows (SG-02). Was: Partly met. SOP questions yes; Europass is a label (W-03b). |
+| FR-GEN-2 | Never fabricate | **Partly met** | Part 3: the grounding gate accepts a made-up grade because the scholarship's requirement text is in the allowed-facts pool (CG-01, CG-04). Was: Met. D-03, with the requirement-fact caveat. |
 | FR-PLAN-1 | Plan without other capabilities | Met | W-05. |
-| FR-PLAN-2 | Six labels | Met | D-05. |
+| FR-PLAN-2 | Six labels | **Partly met** | Part 3: AI_CAN_GENERATE promised for four kinds nothing generates, the verified gate is passed by the AI's own label, due dates empty (RD-02, RD-05, RD-09, RD-10). Was: Met. D-05. |
 | FR-APP-1 | Guided journey | Partly met | The assistant reports but does not drive (A-04). |
 | FR-APP-2 | Guided plus buttons, same result | Met | A-04b. |
 | FR-APP-3 | Future submission safety rules | Met | Approval bound to scope and content; no send path. (Code also cites a "FR-APP-4"; the PRD defines FR-APP-1 to 3 only.) |
@@ -355,7 +355,7 @@ Verdict words: **Met**, **Partly met**, **Not met**. Evidence cites the rows abo
 | FR-VERIFY-2 | LLM does not decide authority | Met | V-03. |
 | FR-VERIFY-3 | Third parties are signals; official is final | Partly met | There is no step that checks the official page for discovered records. |
 | FR-VERIFY-4 | Record carries source, type, official status, dates, status, evidence | Partly met | Evidence snippet never written (section 6). |
-| FR-VERIFY-5 | Nine lifecycle states | Met | V-10. |
+| FR-VERIFY-5 | Nine lifecycle states | **Partly met** | Part 3: the monitor can never close or expire a stored record (SM-01, SM-02). Was: Met. V-10. |
 | FR-VERIFY-6 | Failed retrieval is not "none exists" | Met | V-11. |
 | FR-VERIFY-7 | Conflict-resolution rule | Partly met | S-09: policy real, mostly dormant. |
 | FR-VERIFY-8 | `verified` vs `listed` | Not met | Feature 004, not built. |
@@ -370,18 +370,18 @@ Verdict words: **Met**, **Partly met**, **Not met**. Evidence cites the rows abo
 | NFR-1 | Explainability | Partly met | Matching explains; evidence not validated. |
 | NFR-2 | Groundedness | Partly met | T-07, A-02c. |
 | NFR-3 | Modularity | Met | Layered modules, repositories, tool tier. |
-| NFR-4 | Buildable in units with handoffs | Met | Specs, tasks, ADRs, workstream artifacts exist. |
+| NFR-4 | Buildable in units with handoffs | **Partly met** | Part 3: hand-off artifacts do not exist (B-152 to B-154) and task boxes are unreliable (P3.3). Was: Met. Specs, tasks, ADRs, workstream artifacts exist. |
 | NFR-5 | Dedicated entry points; long ops do not block UI | Not met | No UI; long routes are synchronous. |
 | NFR-SEC-1 | AuthN, authZ, isolation | Partly met | No authorisation roles (X-04). |
 | NFR-SEC-2 | Documents, secrets, validation, access control, logging | Partly met | X-05, X-06. |
 | NFR-SEC-3 | One user's data never reaches another | Met | X-03. |
 | NFR-REL-1 | Freshness first-class, configurable per source | Partly met | `freshness_window_days` exists; monitoring ignores `update_frequency`. |
 | NFR-REL-2 | Failure and retry handling | Partly met | HTTP yes; ingestion no backoff; provider errors unhandled. |
-| NFR-REL-3 | Monitoring with in-app and email alerts | Met | V-14, V-15. |
+| NFR-REL-3 | Monitoring with in-app and email alerts | **Partly met** | Part 3: no closed detection, no requirement-change detection, new-match alert needs a deadline, alerts beyond 500 dropped (SM-01, AL-07, AL-13). Was: Met. V-14, V-15. |
 | NFR-REL-4 | Budgeted AI usage, "temporarily unavailable" message | Not met | No budget; quota errors are HTTP 500. |
 | NFR-REL-5 | Cost-aware monitoring | Not met | V-13. |
-| NFR-REL-6 | Accuracy not traded for cost | Met | Same model for everything; no skipped verification. |
-| KPI-1 | Source coverage | Met | `GET /coverage`. |
+| NFR-REL-6 | Accuracy not traded for cost | **Partly met** | Part 3: the alert re-match cap drops alerts permanently to save AI spend (AL-13). Was: Met. Same model for everything; no skipped verification. |
+| KPI-1 | Source coverage | **Partly met** | Part 3: a never-fetched source counts as covered, so countries and the gap count are overstated (CO-01). Was: Met. `GET /coverage`. |
 | KPI-2 | Geographic and entity coverage | Partly met | Countries only. |
 | KPI-3 | Extraction success rate | Not met | Not exposed. |
 | KPI-4 | Verification rate | Not met | Not exposed. |
@@ -394,11 +394,11 @@ Verdict words: **Met**, **Partly met**, **Not met**. Evidence cites the rows abo
 | KPI-11 | Verified share | Not met | Needs the `listed` status. |
 | AC-1 | URL match plus "does it require GRE?" grounded answer | Partly met | Works in code and mocked tests; Q&A needs Qdrant, reported unreachable on 2026-10-22. |
 | AC-2 | Discovery across 2+ source types, ranked, verified, with coverage | Partly met | Results are unranked and unverified; candidate flow works. |
-| AC-3 | Upload transcript satisfies a requirement; grounded CV/SOP | Met | Tested end to end with mocks. |
+| AC-3 | Upload transcript satisfies a requirement; grounded CV/SOP | **Partly met** | Part 3: live satisfied path never shown (T130), one requirement per document (DP-03), and CV/SOP are not grounded only in real data (CG-01). Was: Met. Tested end to end with mocks. |
 | AC-4 | Labelled plan, assistant, button-agent parity | Partly met | Parity yes; assistant does not ask for or obtain approval per step. |
 | AC-5 | Matching matrix passes, lock never overridden | Met | Ten-case matrix, 1.0 gate. |
 
-**PRD tally:** see section 16.
+**PRD tally after Part 3:** Met 26, Partly met 50, Not met 16 (before: 34 / 43 / 15). The nine rows that changed are marked "Part 3" and listed in P3.1. Section 16 has the totals.
 
 ---
 
@@ -505,7 +505,7 @@ Part 2 was done on 2026-10-26 on the same branch. It is still read-only: no appl
 | J-34 | User uploads documents → document workflow (parse / associate / check) | `POST /applications/{id}/documents`. PDF only; the declared type is trusted (W-02). | R | WEAKER |
 | J-35 | Missing items flagged (for example character certificate) | Labels `user_must_obtain` / `missing` exist. A character certificate appears only if the scholarship has a requirement keyed `character_certificate`. **Task due dates are never filled**: `ChecklistItemDraft.due_date` is never passed (`readiness.py:272-280`). | R | WEAKER |
 | J-36 | CV generation workflow | `POST /applications/{id}/generate/cv`. Output is a `.txt` file; no download route (W-03, W-03b). | R | WEAKER |
-| J-37 | SOP / motivation workflow | `POST /applications/{id}/generate/sop`. Real and grounded (W-04); no download route. | R | MATCHES |
+| J-37 | SOP / motivation workflow | `POST /applications/{id}/generate/sop`. Real and grounded (W-04); no download route. | R | WEAKER (Part 3: SG-01, SG-02, SG-04; was MATCHES) |
 | J-38 | Other written materials | No route or workflow exists for personal statement, study plan or research proposal. `GeneratedDocumentType.MOTIVATION` is never written by any code (only read in `readiness.py:116`). Yet the readiness table labels all of these `ai_can_generate` (`readiness.py:77-85,173-176`), a label that promises something the system cannot do. | R | MISSING |
 | J-39 | Case compiled → readiness assessment | `POST /applications/{id}/assistant/next-step` runs `app_plan` then `submit_prep`; the "case" is a staged list of document ids (W-06). | R | WEAKER |
 | J-40 | Review → [future] user approval → submit | Approval: `POST /applications/{id}/submission-approvals` (append-only). Submit: no code path, enforced by a static test (`tests/api/test_no_live_submission.py`). | R | MATCHES |
@@ -557,7 +557,7 @@ How to read the marks here: a row marked MATCHES means the code agrees with what
 | B-19 | Phase 5 scope: observability, rate limits, retries/backoff, security hardening, backups | JSON logs + Prometheus yes; per-IP rate limit yes (works behind Caddy on the VM); HTTP backoff yes but **none for ingestion**; security: open signup, no SSRF guard on URL match; backups are Neon's (not in the repo) | `core/logging.py`; `core/rate_limit.py`; `workflows/ingestion/graph.py:126`; Neon: U | R, U | WEAKER |
 | B-20 | Phase 5 scope: `source_monitor`, source health, semi-automated candidate validation | All three built and reachable | `workflows/source_monitor/graph.py:542-629`; `api/health.py`; `services/candidate_validation.py` | R | MATCHES |
 | B-21 | Phase 5 scope: "coverage analytics (dashboards over `source_fetch_log`)" | One JSON endpoint `GET /coverage`; no dashboard | `api/coverage.py` | R | WEAKER |
-| B-22 | Phase 5 DoD: approved sources re-checked on a schedule; new/changed/closed picked up; stale flagged | Yes, with the caveats of V-05 to V-13 | `scheduling/scheduler.py:53-77`; `source_monitor/graph.py` | R | MATCHES |
+| B-22 | Phase 5 DoD: approved sources re-checked on a schedule; new/changed/closed picked up; stale flagged | Yes, with the caveats of V-05 to V-13 | `scheduling/scheduler.py:53-77`; `source_monitor/graph.py` | R | WEAKER (Part 3: SM-01, closed is never detected; was MATCHES) |
 | B-23 | Phase 5 status: "deployed to the VM with HTTPS 2026-10-19; post-deploy checks passed; interval raised to **360** on 2026-10-25" | Repo default is still 60 (`config.py:48`). Deployment, checks and the VM value cannot be seen from the repo. | `app/core/config.py:48` | R, U | UNCHECKED |
 | B-24 | Phase 6 (SaaS, live submission) not built | Correct: no tenancy, billing, roles or submit path | repo-wide; `tests/api/test_no_live_submission.py` | R | MATCHES |
 | B-25 | Roadmap row 003: "spec, plan, tasks, ADR-0014 done; **not implemented**" | Correct. 76 of 76 tasks unchecked and none of its files or symbols exist (P2.3) | `specs/003-quota-governance/tasks.md`; no `llm_gate.py`, `llm_budget`, `cadence` in `app/` | R | MATCHES |
@@ -1148,11 +1148,297 @@ Not scriptable from here: Neon point-in-time restore (check the restore window i
 | N-9 | The Manager/Worker artifacts of §39-45 (`specs/handoffs/`, workstream briefs) do not exist; ADR-0009 and ADR-0008 carry no pointer to the ADRs that amend them. | B-152 to B-154, B-178, B-179 |
 | N-10 | The weekly live-service workflow has, by the task list's own account, never run on GitHub (secrets not added). | T138, VR-16 |
 
+
 ---
 
-## 16. Count of each mark (Part 1 and Part 2)
+## Part 3: PRD re-judged, eight files read line by line, every wrong task box
 
-Computed by script from the Mark column (the last cell) of every table row, not by hand. Row IDs with a letter suffix (for example A-02b) count as their own rows. Part 1 counts were made with `grep -o` on sections 1 to 13; Part 2 counts by reading each row's last cell, so a mark word inside another cell is never counted.
+Part 3 was done on 2026-10-26 on the same branch. It is still read-only: no application code changed, no real Gemini call, no network call, no database connection. One helper script was added: `docs/audit-part3-scripts/part3_run.py`. It calls only pure functions (lifecycle rules, coverage maths, grounding gate, SOP/CV graph nodes, URL checks), makes every socket use raise, and printed "No network attempt occurred" (output in P3.4).
+
+**Methods.** Same letters as Part 2: **R** read and traced, **M** ran the real function with nothing external (P3.4 has the output), **S** symbol or file scan, **T** test run. **Marks** are the same five (MATCHES, WEAKER, NAME ONLY, NOT REACHABLE, MISSING). A MATCHES row in P3.2 means I checked a claim the file makes and it holds.
+
+---
+
+### P3.1 The 92 PRD requirement IDs, re-judged
+
+I went through all 92 rows of section 14 again with the Part 1 and Part 2 findings and the P3.2 findings below. **Nine IDs changed. The other 83 stay as they were.** Section 14 now shows the new verdict (marked "Part 3").
+
+| ID | Was | Now | Why | Proof |
+|---|---|---|---|---|
+| FR-GEN-2 (never fabricate) | Met | **Partly met** | The grounding gate accepts a made-up grade. The list of "allowed facts" includes the scholarship's own requirement text, so "I have a GPA of 3.5." passes when the profile says 3.0 and only the requirement says 3.5. Document values are also labelled "verified" and the profile/document mismatch flags are never consulted. | CG-01, CG-04; observed in P3.4 (`cv_gen/graph.py:215-223,227`) |
+| FR-GEN-1 (requirement-aware CV/SOP) | Partly met | **Not met** (in practice) | Europass is only a heading word (known). The scholarship's own SOP questions are read only from requirement keys such as `sop_question`, and nothing in the app creates a key like that, so every generated SOP is the generic "Personal Statement". It works only for a row inserted by hand. | SG-02; observed: key `essay` gives no questions (`sop_gen/graph.py:74,133`) |
+| AC-3 (transcript satisfies a requirement; CV/SOP grounded only in real data) | Met | **Partly met** | "Grounded only in real data" is broken by the same gate hole. The live "satisfied" path was never shown live (task T130 says so). One document can satisfy only one requirement. | CG-01, DP-03, B-15 |
+| FR-PLAN-2 (six-label checklist) | Met | **Partly met** | The labels exist but three are produced wrongly on common paths: `AI_CAN_GENERATE` for four documents nothing can generate, `NEEDS_OFFICIAL_VERIFICATION` passed when the AI labelled itself "verified", and unmatched keys falling into the catch-all. Due dates are always empty. | RD-02, RD-05, RD-09, RD-10 |
+| FR-VERIFY-5 (nine lifecycle states) | Met | **Partly met** | Nine states exist, but the monitor can never move a stored record to `closed` (the flag that allows it is set nowhere and the extractor never says "closed") and never moves one to `expired` (nothing re-checks the deadline). Observed: a verified record with a deadline 30 days ago stays verified. | SM-01, SM-02; observed in P3.4 |
+| NFR-REL-3 (monitoring finds new/changed scholarships, deadline changes, open/closed status, requirement changes; in-app and email alerts) | Met | **Partly met** | Open/closed status cannot be detected (SM-01) and requirement changes cannot (the monitor's own docstring says so). A "new match" alert cannot fire without a known future deadline. Alerts beyond the cap of 500 are dropped for good. Email uses STARTTLS only. | SM-01, AL-07, AL-13, AL-03 |
+| NFR-REL-6 (accuracy is not traded for cost) | Met | **Partly met** | The alert re-match cap exists only to limit AI spend, and when it is reached the rest of the run's alerts are lost permanently with no visible sign. That is completeness traded for cost. | AL-13 (`alerts.py:322-330`, `config.py:44`) |
+| KPI-1 (active/checked sources; coverage-gap count) | Met | **Partly met** | A source that was never fetched counts as healthy coverage. Observed: one active source with zero checks gives `countries_covered=['DE']` and `gaps=[]`. Three of the five seeded sources are never fetched by discovery or monitoring, so Germany, Hungary and Saudi Arabia show as covered. The gap count is therefore too low. | CO-01; observed in P3.4 (`coverage.py:106-107,125-135`) |
+| NFR-4 (buildable in units with artifact hand-offs) | Met | **Partly met** | The hand-off artifacts the process sections describe (`specs/handoffs/`, workstream briefs, manager state) do not exist, and the task lists cannot be used as a progress record (P3.3). | B-152, B-153, B-154, N-5 |
+
+**Direction of the changes:** eight Met to Partly met, one Partly met to Not met. Nothing moved up.
+
+**New tally (92): Met 26, Partly met 50, Not met 16.** (Before: 34 / 43 / 15.)
+
+**Looked at again and left unchanged** (so you can see I did not skip them): FR-ROUTE-1/2/3 stay Partly (built, tested, no caller, the same call Part 1 made); FR-AUTH-1 stays Met (logout is a no-op, but the PRD asks for no token revocation); FR-URL-1 stays Met (a verdict is produced; the missing "gaps" is counted under FR-MATCH-2); KPI-11 and FR-VERIFY-8 stay Not met (CO-02 shows the "verified" count is only a re-sighting count); NFR-REL-1 stays Partly (a freshness window exists, no seeded source sets one, so all use 180 days); NFR-REL-2 stays Partly (IG-01 confirms there is no backoff in ingestion); AC-5 and KPI-7 stay Met (the matrix and its CI gate are real).
+
+---
+
+### P3.2 Eight files read line by line
+
+Each file was read from the first line to the last. Rows list what I found, plus a few MATCHES rows for claims the file makes that I checked and that hold. Line numbers are in the file named in the heading unless a path is given.
+
+#### `workflows/ingestion/graph.py` (708 lines)
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| IG-01 | The docstring says classify and dedup are "retried per T072's bounded retry policy". The retry is called with `sleep=lambda _delay: None`, so there is no wait between attempts. For classify the retry cannot even start: `classify_candidate` catches every AI error inside itself and carries on, so the graph never sees a failure. | `graph.py:19-22,126`; `tools/classify.py:136-141` | R | WEAKER |
+| IG-02 | `official_source_confirmed` is `False` at every call site, so the part of the workflow built for confirmed records never runs: the verify step can only return `newly_discovered`, `expired` (past deadline) or `closed` (only if the raw record says so), a new record is always stored `unverified`, and "official beats unofficial" conflict resolution never has an official side. | call sites `agents/discovery/agent.py:244`, `source_monitor/graph.py:215,286,305`; `graph.py:319-333,554`; `services/verification.py:44-49` | R | NOT REACHABLE |
+| IG-03 | The required-field gate "at least one official source" is met by the registry's own label (`official_status == "official"`), not by any check of the record. A listing item never confirmed on its own page still passes. | `graph.py:382-387` | R | WEAKER |
+| IG-04 | Storing a new record is two separate commits: the scholarship (via `scholarship_repo.create`, which commits) and then its source link. If the second fails, the stage logs an error but the scholarship stays with no source link. `list_for_source` finds records only through that link, so the next monitoring run sees the name as new and can store a duplicate. | `graph.py:616,629`; `scholarship_repo.py:30-34,62-72` | R | WEAKER |
+| IG-05 | The "merge with an existing duplicate" path keeps only provenance and conflict rows. The new record's other values, requirements and funding are thrown away, and a resolved conflict is written as a field row without changing the real column (for example `deadline`). Each re-ingest also adds another source link; there is no unique index, and `list_for_source` needs `distinct` because of it. | `graph.py:461-502` against `557-561`; `scholarship_repo.py:63-65`; `migrations/versions/d501fadbb3f1_*:90-91` | R | WEAKER |
+| IG-06 | Fuzzy duplicate search can only compare against rows with the same lower-cased name. `_db_backed_existing` loads exact-name rows only, and nobody passes `existing_candidates` (the discovery agent does not). So the similarity half of dedup has almost nothing to compare against in live use. | `graph.py:178-191,234-236`; `scholarship_repo.py:44-54`; `agents/discovery/agent.py:171-176` | R | WEAKER |
+| IG-07 | The index step swallows every error with a bare `pass`: no log line, no log row. The module promises "never drop silently". (It also never runs for discovered records, known.) | `graph.py:641-650` against `18-30` | R | WEAKER |
+| IG-08 | A nameless record is rejected only in the store step, after the classify step has already spent an AI call and dedup a database query. | `graph.py:167-175,358-362,451-453` | R | WEAKER |
+| IG-09 | Store writes an OK fetch-log row per record with `items_found=1` and no run id. The monitor's baseline reader ignores them (it filters by URL), but retention's floor (c) "latest OK row with items found" will now protect one of these rows instead of the real extraction row. No harm found today (floor (a) keeps the last runs), but floor (c) no longer does its job. | `graph.py:498-501,631-634`; `source_monitor/graph.py:171`; `services/retention.py:70-75` | R | WEAKER |
+| IG-10 | The monitoring update path keeps the old value as a `_prior:<field>` row before overwriting and writes nothing else. | `graph.py:407-440` | R | MATCHES |
+| IG-11 | Every stage failure writes a `source_fetch_log` row and returns `error` / `error_stage`; later nodes skip. The "never silently absent" claim holds for every stage except index (IG-07). | `graph.py:112-137` | R | MATCHES |
+
+#### `workflows/source_monitor/graph.py` (629 lines)
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| SM-01 | **The monitor can never close a record.** Closing by absence needs `extraction_rules.listing_complete = true`; that flag is read in one place and set nowhere (not in a seed, a route, code or a doc). The other route, an explicit `closing_status = "closed"`, is never produced because the extractor has no such field. Observed: an absent record gives no change. So "closed picked up" (Blueprint Phase 5 DoD, PRD NFR-REL-3) cannot happen. | `graph.py:176-191`; `seed_sources.yaml` (no `listing_complete`); a search for `listing_complete` finds only `graph.py:178,180`; observed in P3.4 | R, M | NOT REACHABLE |
+| SM-02 | **The monitor never expires a stored record.** `evaluate_fetch_outcome` and `evaluate_freshness` never return `expired`, and the monitor calls `compute_lifecycle_status` only to decide whether to lift an existing `expired`. A stored record whose deadline passes stays `verified`. Observed. Only a new record that arrives with an already-past deadline is stored as `expired`. | `lifecycle.py:7-11,109`; `graph.py:206-219,246-249`; `services/verification.py:42`; observed in P3.4 | R, M | MISSING |
+| SM-03 | **"Verified" is a re-sighting.** Every matched open listing item is marked `verified` on the same run (`mark_confirmed_by_monitoring`), so a record is `verified` on its second sighting, about an hour after it was found, with no visit to its own page. This is V-01 pinned to the exact lines. | `graph.py:315-320`; `scholarship_repo.py:91-105`; `lifecycle.py:113-115` | R | NAME ONLY |
+| SM-04 | The docstring says no AI call is made in the workflow except the listing extraction. Every new item also goes through `run_ingestion`, which calls classify (about one AI call per item, BR-02). The first run on a source with many items therefore costs one extraction plus one classify call per item; the docstring does not say so. | `graph.py:1-9,281-287`; `ingestion/graph.py:167-175` | R | WEAKER |
+| SM-05 | Each check reads the source's whole fetch log just to find the last item count. With 90-day retention and an hourly run that is thousands of rows per source per run, loaded to look at one. | `graph.py:166-173`; `source_repo.py:423-431` (no limit); `config.py:49` | R | WEAKER |
+| SM-06 | A run in which every source failed is still stored as `completed`. `failed` is used only when an unhandled exception escapes; per-source failure shows only in `sources_failed`. | `graph.py:604-612` against `613-624` | R | WEAKER |
+| SM-07 | A source whose lock is held is skipped with an info log only: no counter, no fetch-log row. | `graph.py:432-435,583-584` | R | WEAKER |
+| SM-08 | A merged duplicate is reported as a new record: any scholarship returned by ingestion is added as a `"new"` event, but ingestion can return an existing row when it merges. Rare (needs a deterministic dedup hit), but it would send a false "new match" alert. | `graph.py:288-294`; `ingestion/graph.py:461-502` | R | WEAKER |
+| SM-09 | One failed fetch (retries exhausted) moves every stored record of the source to `source_unavailable` at once, while the source itself stays `active` until 5 failed runs. Matches Blueprint §33 for records and ADR-0008 for health, but the two views disagree for several runs. | `graph.py:371-374`; `lifecycle.py:96-101`; `config.py:50` | R | MATCHES |
+| SM-10 | A crash inside one source is caught, rolled back and recorded as a failed check; changes already stored still reach the alert step. | `graph.py:397-416,573-585` | R | MATCHES |
+| SM-11 | Which sources are checked: all with `discovery_role=true` and `access_method=web`, every run. `update_frequency` is not read. (Known; now line-exact.) | `graph.py:569-570` | R | WEAKER |
+
+#### `workflows/doc_pipeline/graph.py` (266 lines)
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| DP-01 | Two of the seven nodes do not do what their names say. `receive` returns an empty dict; `identify_type` only checks that the file name ends in `.pdf`. The document type is whatever the caller declared. | `graph.py:106-117` | R | NAME ONLY |
+| DP-02 | When the AI returns unusable JSON for the document, the error is swallowed with no log and no flag. The row ends with no extracted data and no reason, the same as "the document had nothing in it". The module's own text says every outcome is recorded. | `graph.py:136-142` against `10-32` | R | WEAKER |
+| DP-03 | A document can satisfy only one requirement. The loop stops at the first satisfied outcome and the column holds one id. A transcript that fits both a GPA and an academic requirement marks whichever comes first in an unordered relationship; the other stays "needs human review". | `graph.py:168,206-210` | R | WEAKER |
+| DP-04 | When the AI provider is down or over quota, the upload is kept and an `extraction_unavailable` flag is written (the only route that does this). But there is no way to run the reading again; the message tells the user to upload the file again. | `graph.py:143-151,82-86`; no reprocess route in `api/documents.py` | R | WEAKER |
+| DP-05 | A corrupt or non-PDF upload never loses the file; the failure reason is written on the row. Satisfaction is checked with no AI call. | `graph.py:192-193,212-219,172-179` | R | MATCHES |
+
+#### `workflows/cv_gen/graph.py` (377 lines)
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| CG-01 | **The grounding gate can pass a made-up grade.** The pool of "allowed facts" includes the scholarship's requirements. A requirement "min_gpa = 3.5" becomes a fact the draft may repeat as the applicant's own. Observed: with the profile saying GPA 3.0, the claim "I have a GPA of 3.5." is accepted (matched to the requirement fact); the long form "BS in Physics from MIT with GPA 3.5/4.0" is rejected. The SOP prompt forces claims into the short "I have ..." form, so the SOP is exposed in the same way (it imports the same helpers). | `cv_gen/graph.py:215-223,227`; `sop_gen/graph.py:48-53,83-90,211`; `tools/ground_check.py:74-93`; observed in P3.4 | M | WEAKER |
+| CG-02 | The docstring says "verified requirements". The filter is `value_status == "known"`, which the URL-match AI sets for itself (T-07). | `cv_gen/graph.py:8,219-222` | R | WEAKER |
+| CG-03 | **An empty draft passes the gate.** Zero claims means zero gaps, so the run is not blocked, an empty "CV (standard)" or "SOP" file is stored with an empty source trace, and the API reports success. The docstrings call an empty trace "a bug". Same in SOP. Observed. | `cv_gen/graph.py:281-306,28-31`; `sop_gen/graph.py:242-270`; observed in P3.4 | M | WEAKER |
+| CG-04 | Facts taken from uploaded documents are labelled "Document-verified" although they are AI-read values, and `inconsistency_flags` is never read. If the document GPA disagrees with the profile GPA, both facts go into the pool and either may be stated. | `cv_gen/graph.py:191-212` | R | WEAKER |
+| CG-05 | Two facts with identical wording overwrite each other in the source map, so the trace names the later source; an unmatched claim is recorded as source `"unknown"` instead of failing. | `cv_gen/graph.py:288,302`; `sop_gen/graph.py:249,265` | R | WEAKER |
+| CG-06 | One bad claim blocks the whole run (a gate, not a filter), and the draft is retried once on bad JSON. | `cv_gen/graph.py:98-118,304-306` | R | MATCHES |
+| CG-07 | The number fix is real: whole GPAs print as `4.0` so a formatting difference cannot cause a false rejection. Observed `4 -> 4.0`. | `cv_gen/graph.py:137-149` | M | MATCHES |
+
+#### `workflows/sop_gen/graph.py` (375 lines)
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| SG-01 | The scholarship's SOP questions are not enforced. Nothing checks that each question is answered, or that a claim's `question` is one of the questions asked; the heading printed is the model's own text. Observed: a claim under "A question nobody asked" is accepted while "Why us?" is unanswered. | `sop_gen/graph.py:242-270,319`; observed in P3.4 | M | WEAKER |
+| SG-02 | The question source is never produced. Questions are read from requirement or field keys containing `sop_question`, `motivation_question`, `essay_question` or `personal_statement_question`. No extractor, seed or route in the app creates such a key. Observed: the key `essay` gives no question. So the "scholarship-specific SOP" behaviour is reachable only by a hand-inserted row. | `sop_gen/graph.py:74,122-143`; a search of `app/` finds the markers only in `sop_gen`; observed in P3.4 | R, M | NOT REACHABLE |
+| SG-03 | The polish step contradicts itself. The instruction tells the model to join neighbouring claims into one paragraph, and also to "return exactly one claim per input claim". The code keeps the reply only when the count is unchanged, so a joined reply is discarded after up to two extra AI calls and the unpolished text is used. | `sop_gen/graph.py:103-117,181-191` | R | WEAKER |
+| SG-04 | The output is a list of "I have ..." sentences by design (the prompt allows only that wording). It cannot hold a reason, a goal or a motivation, so the "SOP / motivation" document is a fact list. | `sop_gen/graph.py:83-90` | R | WEAKER |
+| SG-05 | The polished text is re-checked by the same gate before it is rendered, and a polish that adds something ungrounded blocks the run. | `sop_gen/graph.py:288-307` | R | MATCHES |
+
+#### `services/lifecycle.py` (129 lines)
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| LF-01 | Pure and deterministic: no database, no clock, no AI. It never returns `updated` or `newly_discovered`, as it says. | `lifecycle.py:1-12,127-129` | R | MATCHES |
+| LF-02 | Only `stale` and `source_unavailable` can come from this module for a record that is not re-sighted. `closed` needs a signal that does not exist (SM-01), `expired` is never returned (SM-02). So of nine states, `closed` and `reopened` (which needs `closed`) cannot occur through monitoring, `expired` occurs only when a record arrives with a past deadline, and the other six can. | `lifecycle.py:93-124`; observed in P3.4 | M | WEAKER |
+| LF-03 | A record that was never re-confirmed (`last_verified_at` empty) or is `newly_discovered` can never go stale. The per-source freshness window is honoured, but no seeded source sets one, so all use 180 days. | `lifecycle.py:36,79-90`; `seed_sources.yaml` (no `freshness_window_days`) | R | WEAKER |
+| LF-04 | A record the source stops listing is never closed (SM-01), so it leaves `verified` only after 180 days of not being seen, by going `stale`. Until then it stays "verified". | `lifecycle.py:83-90`; `source_monitor/graph.py:176-184` | R | WEAKER |
+
+#### `services/coverage.py` (190 lines)
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| CO-01 | **A source that was never fetched counts as healthy coverage.** Sources with no fetch rows are skipped (`continue`), so they are never in the failing set, and "healthy" means only "active and not failing". Observed: one active source with no logs gives `countries_covered=['DE']`, `sources_checked=0`, `gaps=[]`. DAAD, Stipendium Hungaricum and KAUST are `discovery_role=false`, so neither discovery nor monitoring ever fetches them, yet DE, HU and SA are reported as covered. `sources_checked` is honest; `countries_covered` and `gaps` are not. | `coverage.py:101-135`; `seed_sources.yaml:20,78,136`; observed in P3.4 | M | WEAKER |
+| CO-02 | `verified_opportunities_count` counts rows with `verification_status = verified`, which is the re-sighting label (SM-03). The number looks like confirmed scholarships; it is "scholarships listed twice". | `coverage.py:189`; `scholarship_repo.py:109-119` | R | NAME ONLY |
+| CO-03 | `claims_complete_coverage` stays `Literal[False]`; the failed rule follows the latest run; the read is bounded (latest row and latest run only). | `coverage.py:6-10,67-76,151-157` | R | MATCHES |
+
+#### `services/candidate_validation.py` (215 lines)
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| CA-01 | The only protection against fetching internal addresses (`unsafe_url_reason`) is used here and nowhere else. `fetch_url` in `tools/web_fetch.py`, which URL match, discovery and monitoring use, has none. The fix for X-05 is already written in the repo; it is just not applied to the route that needs it. Observed: it blocks `127.0.0.1` and `169.254.169.254`. | `candidate_validation.py:83-108,148,159`; a search of `app/` finds `unsafe_url_reason` only in this file; `tools/web_fetch.py:26-33` | R, M | WEAKER |
+| CA-02 | The host is looked up once for the check and again by the HTTP client at connect time (a rebinding gap), and redirects are followed before the final address is checked. The module admits the second point. | `candidate_validation.py:20-23,69` | R | WEAKER |
+| CA-03 | The "looks official" hints know only `.gov`, `.edu` and `<gov/edu/ac>.<cc>`, and English affiliation words. Observed: `.gouv.fr`, `.go.jp`, `.gob.mx` and `bund.de` give no pattern, and German text with "Universitaet" and "Ministerium" gives no term, although three seeded sources are German, Hungarian and Saudi. | `candidate_validation.py:51-58,114-136`; observed in P3.4 | M | WEAKER |
+| CA-04 | The docstring says the monitor trigger (T244) is "deferred". It is wired and runs every monitoring run. The text is out of date. | `candidate_validation.py:10-13`; `source_monitor/graph.py:497-521,603` | R | WEAKER |
+| CA-05 | Advisory only: its single write is the validation row, the candidate is read and the transaction ended before any network or AI call, and failures are recorded in the row. | `candidate_validation.py:193-215` | R | MATCHES |
+
+---
+
+### P3.3 Task boxes that are ticked wrongly or left unticked wrongly
+
+`tasks.md` was not edited. "Box" is what the file shows now; "Should be" is what the code supports. Part 2 (P2.3) gave the grouped count; this lists every ID.
+
+**Totals: 83 wrong boxes of 326.** 13 ticked boxes overstate the work (A below), 67 unticked boxes are done (B), and 3 unticked boxes are partly done (C). The other 243 are right: 166 ticked boxes and 77 unticked ones (the 76 of feature 003 plus T065, which is not built).
+
+#### A. Ticked, but the work is not as the box says (13)
+
+| Task | Box | Should be | Why | Proof |
+|---|---|---|---|---|
+| T162 | [x] | not done | Says DAAD, Stipendium Hungaricum and KAUST seed with `discovery_role: true`. All three are `false`, on purpose. | `seed_sources.yaml:20,78,136`; `tests/services/test_source_registry_seed_002.py:38-43` |
+| T168 | [x] | not done | Says flip `discovery_role` to true for the same three. Same proof; the tick records a change that was reversed. | same |
+| T137 | [x] | decided against | Task text says "INVESTIGATED, REJECTED: not built". The tick records the decision, not an eval. | no such file in `backend/evals/cases/` |
+| T075 | [x] | partly | `search` tool: the domain filter is real, the backend raises `NotImplementedError`, nothing calls it. | `tools/search.py:40` |
+| T076 | [x] | partly | `api_connector` tool: wrapper only, placeholder transport, no provider onboarded. | `sources/connectors/api_connector.py:58` |
+| T087 | [x] | partly | "extract → normalize → dedup → verify → classify": real order is normalize, classify, dedup; there is no extract step; verify never sees a confirmed source, so it cannot verify (IG-02). | `ingestion/graph.py:653-673`; IG-02 |
+| T109 | [x] | partly | "format-specific (Europass)": Europass is a heading word and the file is `.txt`; the gate can pass a made-up grade (CG-01); an empty draft passes (CG-03). | `cv_gen/graph.py:321,215-223,290-306` |
+| T110 | [x] | partly | "answers scholarship-specific questions": the questions are never created by the app (SG-02) and are not enforced (SG-01). | `sop_gen/graph.py:74,122-143,242-270` |
+| T130 | [x] | partly | "Verified live end-to-end", while the task text lists three scenarios still not shown live. | `specs/001-scholarship-mvp/tasks.md:263` |
+| T135 | [x] | partly | "Resolves US4 Scenario 1 (ranked results)": extraction is real, results are not ranked. | `api/discovery.py:37-60` |
+| T138 | [x] | partly | Smoke tests and `deep-ci.yml` exist; per the task text the repo secrets were never added, so the workflow has never run. | `.github/workflows/deep-ci.yml`; `tests/smoke/*` |
+| T178 | [x] | partly | "no LLM, no agent imports" is true of the module only: the extraction and every new item's classify call the AI. | `source_monitor/graph.py:442-453,281-287` (SM-04) |
+| T179 | [x] | partly | Says changed "deadline/requirement/funding" are detected. Requirement changes cannot be (the extractor emits none; the module says so). | `source_monitor/graph.py:53-56`; `services/listing_diff.py:26` |
+
+Boxes that are correctly ticked but have no live caller (not wrong; listed so nobody reads the tick as "usable"): T061 (orchestrator), T085 (`rerank`), T086 (`source_validate`).
+
+#### B. Unticked, but the code is there (67)
+
+For every row the box is `[ ]`, the code exists and does what the task says, so it should be `[x]`. "Named file" is the file the task itself names, checked to exist (T025 and T041 name a `{rev}` placeholder; the real files are `6e1035fe0cc6_create_profile_tables.py` and `603848a52d5b_*`; T140's proof is `official_fetch.py:93-109`). T020 is built but nothing calls it. T126 to T129 are built, but the orchestrator that T128 extends has no caller.
+
+| Task | What the task says | Named file | Exists |
+|---|---|---|---|
+| T012 | [P] Shared `ValueStatus`/`Confidence`/`FieldValue` schema types (const | `backend/app/schemas/common.py` | exists |
+| T013 | [P] Qdrant Cloud client wrapper | `backend/app/data/vectors/qdrant_client.py` | exists |
+| T014 | [P] RAG document loaders | `backend/app/rag/loaders.py` | exists |
+| T015 | [P] RAG chunking | `backend/app/rag/chunk.py` | exists |
+| T016 | [P] Embedding tool wrapper | `backend/app/tools/embed.py` | exists |
+| T017 | RAG embedding pipeline (ingests via T014/T015, embeds via T016) | `backend/app/rag/embed.py` | exists |
+| T018 | RAG retrieval over Qdrant | `backend/app/rag/retrieve.py` | exists |
+| T019 | [P] `ground_check` tool (used by Q&A now; reused by CV/SOP generation  | `backend/app/tools/ground_check.py` | exists |
+| T020 | RAG grounding-check node | `backend/app/rag/grounding.py` | exists |
+| T021 | [P] [US1] Contract test: `GET/PUT /profile`, `POST /profile/criteria`, | `backend/tests/api/test_profile_api.py` | exists |
+| T022 | [P] [US1] Integration test covering spec.md US1 Acceptance Scenarios 1 | `backend/tests/integration/test_profile_flow.py` | exists |
+| T023 | [P] [US1] Unit test: `missing_info` tracking + `profile_criteria.kind` | `backend/tests/services/test_profile_service.py` | exists |
+| T024 | [US1] SQLAlchemy + Pydantic models for `profiles`, `education_records` | `backend/app/models/profile.py` | exists |
+| T025 | [US1] Alembic migration for profile tables | `backend/migrations/versions/6e1035fe0cc6_create_profile_tables.py` | exists |
+| T026 | [US1] Profile repository, `user_id`-scoped | `backend/app/data/repositories/profile_repo.py` | exists |
+| T027 | [US1] Profile service — CRUD, criteria classify/reclassify, missing-in | `backend/app/services/profile.py` | exists |
+| T028 | [US1] Profile request/response schemas | `backend/app/schemas/profile.py` | exists |
+| T029 | [P] [US1] `extract_profile` tool — CV-import field suggestions, not au | `backend/app/tools/extract_profile.py` | exists |
+| T030 | [US1] Profile API endpoints: `GET/PUT /profile`, `POST /profile/criter | `backend/app/api/profile.py` | exists |
+| T031 | [US1] Wire profile router into the app | `backend/app/main.py` | exists |
+| T032 | [P] [US2] Contract test: `POST /scholarships/match-url`, `POST /schola | `backend/tests/api/test_matching_api.py` | exists |
+| T033 | [P] [US2] Integration test covering US2 Acceptance Scenarios 1–4 (full | `backend/tests/integration/test_url_match_flow.py` | exists |
+| T034 | [US2] **Hard-constraint verdict-correctness test matrix** — fixed set  | `backend/tests/services/test_hard_constraints_matrix.py` | exists |
+| T035 | [P] [US2] Guardrail-violation tests: Matching-agent output contradicti | `backend/tests/agents/test_matching_guardrails.py` | exists |
+| T036 | [P] [US2] Unit test: ranking never reorders past a hard-constraint fai | `backend/tests/services/test_ranking.py` | exists |
+| T037 | [P] [US2] SQLAlchemy + Pydantic models: `scholarships`, `universities` | `backend/app/models/scholarship.py` | exists |
+| T038 | [P] [US2] SQLAlchemy + Pydantic models: `requirements` | `backend/app/models/requirement.py` | exists |
+| T039 | [P] [US2] SQLAlchemy + Pydantic models: `funding_details` | `backend/app/models/funding.py` | exists |
+| T040 | [P] [US2] SQLAlchemy + Pydantic models: `matches` | `backend/app/models/match.py` | exists |
+| T041 | [US2] Alembic migration for scholarship/requirement/funding/match tables | `backend/migrations/versions/603848a52d5b_*` | exists |
+| T042 | [P] [US2] Scholarship repository | `backend/app/data/repositories/scholarship_repo.py` | exists |
+| T043 | [P] [US2] Match repository, immutable append-only writes | `backend/app/data/repositories/match_repo.py` | exists |
+| T044 | [P] [US2] `web_fetch` tool — official-page fetch with explicit failure | `backend/app/tools/web_fetch.py` | exists |
+| T045 | [P] [US2] `extract_requirements` tool — LLM-assisted extraction of req | `backend/app/tools/extract_requirements.py` | exists |
+| T046 | [US2] `hard_constraints` service — deterministic GPA/degree/nationalit | `backend/app/services/hard_constraints.py` | exists |
+| T047 | [US2] `ranking` service — deterministic ranking formula, agent supplie | `backend/app/services/ranking.py` | exists |
+| T048 | [US2] `MatchVerdict`/`CriterionOutcome` schemas — fixed, schema-locked | `backend/app/schemas/match.py` | exists |
+| T050 | [US2] Matching agent — guardrailed: schema-locked output, evidence-req | `backend/app/agents/matching/agent.py` | exists |
+| T051 | [US2] URL-match API endpoint: `POST /scholarships/match-url` | `backend/app/api/url_match.py` | exists |
+| T052 | [US2] Matching API endpoints: `POST /scholarships/{id}/match`, `GET /m | `backend/app/api/matching.py` | exists |
+| T053 | [US2] Wire `url_match` + `matching` routers into the app | `backend/app/main.py` | exists |
+| T054 | [P] [US3] Contract test: `POST /scholarships/{scholarship_id}/qa` | `backend/tests/api/test_qa_api.py` | exists |
+| T055 | [P] [US3] Integration test covering US3 Acceptance Scenarios 1–4 (veri | `backend/tests/integration/test_qa_flow.py` | exists |
+| T057 | [US3] `QaAnswer` schema (no persisted table — data-model.md §5) | `backend/app/schemas/qa.py` | exists |
+| T059 | [US3] Q&A API endpoint: `POST /scholarships/{scholarship_id}/qa` | `backend/app/api/qa.py` | exists |
+| T060 | [US3] Wire `qa` router into the app | `backend/app/main.py` | exists |
+| T064 | [P] [US4] Contract test: `POST /discovery` | `backend/tests/api/test_discovery_api.py` | exists |
+| T067 | [P] [US4] Unit test: `conflict_resolution` policy (official > recent > | `backend/tests/services/test_conflict_resolution.py` | exists |
+| T068 | [P] [US4] Unit test: `coverage` counts/gaps computation, `claims_compl | `backend/tests/services/test_coverage.py` | exists |
+| T077 | [P] [US4] `classify` tool — rules + LLM fallback for fuzzy classificat | `backend/app/tools/classify.py` | exists |
+| T078 | [US4] `source_registry` service — registry CRUD, active-only gating | `backend/app/services/source_registry.py` | exists |
+| T079 | [P] [US4] `normalize` service | `backend/app/services/normalize.py` | exists |
+| T080 | [US4] `classify` service — dispatches to T077 | `backend/app/services/classify.py` | exists |
+| T081 | [P] [US4] `dedup` service | `backend/app/services/dedup.py` | exists |
+| T082 | [P] [US4] `verification` service — freshness window, `lifecycle_status | `backend/app/services/verification.py` | exists |
+| T083 | [P] [US4] `conflict_resolution` service — official > recent > reliable | `backend/app/services/conflict_resolution.py` | exists |
+| T114 | [P] [US6] Contract test: `POST /applications/{id}/assistant/next-step` | `backend/tests/api/test_application_assistant_api.py` | exists |
+| T115 | [P] [US6] Integration test covering US6 Acceptance Scenarios 1–5 (ever | `backend/tests/integration/test_application_planning_flow.py` | exists |
+| T116 | [P] [US6] Submission-approval scoping test: an approval for one `submi | `backend/tests/services/test_submission_approval_scope.py` | exists |
+| T121 | [US6] `readiness` service — recomputes `readiness_label` from document | `backend/app/services/readiness.py` | exists |
+| T122 | [US6] `app_plan` workflow — verified requirements → six-label checklis | `backend/app/workflows/app_plan/graph.py` | exists |
+| T123 | [US6] `submit_prep` workflow — stops at `[APPROVAL GATE]`/`[FINAL APPR | `backend/app/workflows/submit_prep/graph.py` | exists |
+| T126 | [US6] `GET /applications` (tracker) + `POST /applications/{id}/plan` e | `backend/app/api/application.py` | exists |
+| T127 | [US6] Assistant + submission-approval endpoints: `POST /applications/{ | `backend/app/api/application.py` | exists |
+| T128 | [US6] Extend orchestrator to route application-planning/assistant inte | `backend/app/orchestration/main_agent.py` | exists |
+| T129 | [US6] Wire the remaining `application` endpoints into the app — minima | `backend/app/main.py` | exists |
+| T140 | Stop fetching the homepage when a listing URL is set (fixed by 002 T164-T166) | `backend/app/sources/connectors/official_fetch.py:93-109` | exists |
+
+#### C. Unticked, and only partly done (3)
+
+| Task | Box | Should be | Why | Proof |
+|---|---|---|---|---|
+| T049 | [ ] | partly (leave unticked) | The workflow has no `verify` node: `fetch → extract → persist → ingest_rag → hard_constraints → matching → persist_match`. | `workflows/url_match/graph.py` |
+| T058 | [ ] | partly (leave unticked) | Q&A uses retrieve and `ground_check`, not the T020 node, and cannot escalate to a live fetch. | `agents/research_qa/agent.py:8,11,52-54` |
+| T124 | [ ] | partly (leave unticked) | The Application agent reports the next step; it does not draft, assemble or stage materials. | `agents/application/agent.py:1-5,63-108` |
+
+(T065 is also unticked and is correctly unticked: its test file does not exist.)
+
+---
+
+### P3.4 What the helper script printed
+
+`cd backend && PYTHONPATH=. .venv/Scripts/python ../docs/audit-part3-scripts/part3_run.py` with a dead loopback `DATABASE_URL` and dummy keys. Every socket use raises; none occurred.
+
+```
+=== LC: can the monitor ever close or expire a stored record? ===
+absence may close (default source, 10 of 10 items, baseline 10): False
+explicit closed signal from the extractor's field set ({}): False
+  listed open: -> None
+  absent, may_close False: -> None
+  fetch failed, retries exhausted: -> source_unavailable
+freshness on a record with a deadline 30 days in the past: None
+=== CV: coverage counts a never-fetched source as healthy ===
+countries_covered: ['DE'] sources_checked: 0 gaps: []
+=== CVN: official-source signals for non-English official domains ===
+  https://www.bmbf.gouv.fr/x []
+  https://www.mext.go.jp/x []
+  https://www.bund.de/x []
+  https://www.ucl.ac.uk/x ['.ac.uk']
+  https://www.sep.gob.mx/x []
+affiliation terms matched on German text: []
+unsafe_url_reason 127.0.0.1: host resolves to non-public address 127.0.0.1 | 169.254.169.254: host resolves to non-public address 169.254.169.254
+=== GEN: empty drafts and invented SOP question headings pass the gate ===
+cv ground_check, draft with zero claims: {'blocked': False, 'source_trace': []}
+sop ground_check, draft with zero claims: {'blocked': False, 'source_trace': []}
+sop ground_check, claim under an invented question while 'Why us?' is unanswered: False [{'claim': 'My Name is Ada Lovelace.', 'question': 'A question nobody asked', 'grounded_in': 'profile.name'}]
+sop question derived from key 'sop_question': ['Why this programme?']
+sop question derived from key 'essay': []
+cv _fmt_decimal(4): 4.0
+No network attempt occurred.
+```
+
+One more check for CG-01, run inline (not saved as a script): the same pure function `verify_claim_grounded`, evidence = one requirement fact plus one profile fact saying GPA 3.0:
+
+```
+'I have a GPA of 3.5.'                                  grounded=True   matched: Scholarship requirement (gpa): min_gpa = 3.5.
+'I have a min_gpa of 3.5.'                              grounded=True   matched: Scholarship requirement (gpa): min_gpa = 3.5.
+'I have a BS in Physics from MIT with GPA 3.5/4.0.'     grounded=False
+```
+
+**What Part 3 changes in Parts 1 and 2.** (1) Nine PRD verdicts move (P3.1). (2) B-22 ("closed picked up", Part 2: MATCHES) is wrong on "closed": SM-01 shows it cannot happen; it should read WEAKER. (3) J-37 (SOP workflow, Part 2: MATCHES) should read WEAKER (SG-01, SG-02, SG-04). (4) B-20 and B-117 stand. (5) X-05 now has a known fix already in the repo (CA-01). (6) Four task boxes move from "done as claimed" to "partly" (T087, T110, T178, T179).
+
+---
+
+## 16. Count of each mark (Part 1, Part 2 and Part 3)
+
+Computed by script from the Mark column (the last cell) of every table row, not by hand. Row IDs with a letter suffix (for example A-02b) count as their own rows. Part 1 counts were made with `grep -o` on sections 1 to 13; Parts 2 and 3 by reading each row's last cell, so a mark word inside another cell is never counted. Part 3 moved two Part 2 rows (B-22 and J-37, MATCHES to WEAKER) and the Part 2 counts below include that.
 
 **Part 1, sections 1 to 13** (unchanged):
 
@@ -1173,92 +1459,102 @@ Computed by script from the Mark column (the last cell) of every table row, not 
 | 13. Frontend (Blueprint §5) | 0 | 0 | 0 | 0 | 3 | 3 |
 | **Part 1 total** | **47** | **69** | **10** | **8** | **27** | **161** |
 
-**Part 2**, new (UNCHECKED = could not be judged from the repo; counted on its own, see section P2.7):
+**Part 2** (UNCHECKED = could not be judged from the repo; counted on its own, see section P2.7):
 
 | Part 2 section | MATCHES | WEAKER | NAME ONLY | NOT REACHABLE | MISSING | UNCHECKED | Total |
 |---|---|---|---|---|---|---|---|
-| P2.1 Journeys 3.1, 3.2, 3.3 and the narrative sentences | 10 | 23 | 1 | 2 | 10 | 0 | 46 |
-| P2.2 Blueprint §22-24, §26-28, §36-46 | 49 | 62 | 10 | 1 | 22 | 4 | 148 |
+| P2.1 Journeys 3.1, 3.2, 3.3 and the narrative sentences | 9 | 24 | 1 | 2 | 10 | 0 | 46 |
+| P2.2 Blueprint §22-24, §26-28, §36-46 | 48 | 63 | 10 | 1 | 22 | 4 | 148 |
 | P2.4 `readiness`, `alerts`, `retention`, every branch | 27 | 12 | 0 | 0 | 0 | 0 | 39 |
-| **Part 2 total** | **86** | **97** | **11** | **3** | **32** | **4** | **233** |
+| **Part 2 total** | **84** | **99** | **11** | **3** | **32** | **4** | **233** |
 
-**Both parts together: 394 rows.**
+**Part 3** (P3.2, the eight files read line by line):
 
-| Mark | Part 1 | Part 2 | Together | Share |
-|---|---|---|---|---|
-| MATCHES | 47 | 86 | **133** | 34% |
-| WEAKER | 69 | 97 | **166** | 42% |
-| NAME ONLY | 10 | 11 | **21** | 5% |
-| NOT REACHABLE | 8 | 3 | **11** | 3% |
-| MISSING | 27 | 32 | **59** | 15% |
-| UNCHECKED | 0 | 4 | **4** | 1% |
-| **Total** | **161** | **233** | **394** | 100% |
+| File | MATCHES | WEAKER | NAME ONLY | NOT REACHABLE | MISSING | Total |
+|---|---|---|---|---|---|---|
+| `workflows/ingestion/graph.py` | 2 | 8 | 0 | 1 | 0 | 11 |
+| `workflows/source_monitor/graph.py` | 2 | 6 | 1 | 1 | 1 | 11 |
+| `workflows/doc_pipeline/graph.py` | 1 | 3 | 1 | 0 | 0 | 5 |
+| `workflows/cv_gen/graph.py` | 2 | 5 | 0 | 0 | 0 | 7 |
+| `workflows/sop_gen/graph.py` | 1 | 3 | 0 | 1 | 0 | 5 |
+| `services/lifecycle.py` | 1 | 3 | 0 | 0 | 0 | 4 |
+| `services/coverage.py` | 1 | 1 | 1 | 0 | 0 | 3 |
+| `services/candidate_validation.py` | 1 | 4 | 0 | 0 | 0 | 5 |
+| **Part 3 total** | **11** | **33** | **3** | **3** | **1** | **51** |
 
-Part 2 is kinder than Part 1 (37% MATCHES against 29%) because the planning and retention code it read line by line is solid, and because many scope labels correctly say "not yet". Where Part 2 looked at what the Blueprint *promises*, the picture is the same as Part 1: about four rows in ten are weaker than written and about one in seven is missing.
+**All three parts together: 445 rows.**
 
-**Task lists (P2.3), 326 tasks:** done as claimed 237, partly done 9, decided against and not built 1, not done 79 (76 of them are feature 003, which is not started by design; 2 are 002 tasks reversed by a later decision; 1 is the missing 001 test T065). 71 of 001's 140 boxes are unticked, and 67 of those are in fact done.
+| Mark | Part 1 | Part 2 | Part 3 | Together | Share |
+|---|---|---|---|---|---|
+| MATCHES | 47 | 84 | 11 | **142** | 32% |
+| WEAKER | 69 | 99 | 33 | **201** | 45% |
+| NAME ONLY | 10 | 11 | 3 | **24** | 5% |
+| NOT REACHABLE | 8 | 3 | 3 | **14** | 3% |
+| MISSING | 27 | 32 | 1 | **60** | 13% |
+| UNCHECKED | 0 | 4 | 0 | **4** | 1% |
+| **Total** | **161** | **233** | **51** | **445** | 99% (rounded) |
 
-**Tests (P2.6):** 1,031 collected (not 761); 571 need neither database nor network and all 571 pass now; 455 need the database; 5 need live services. Not run: the 455 and the 5.
+Part 2 is kinder than Part 1 (36% MATCHES against 29%) because the planning and retention code it read line by line is solid, and because many scope labels correctly say "not yet". Part 3 read the code that carries the monitoring, ingestion and generation claims, and found the most gaps per row of any part (about one row in five is MATCHES, four in five are WEAKER or worse), which is what you would expect from reading the inside of the busiest files. Where the audit looked at what the Blueprint *promises*, the picture is the same in all three parts: about four to five rows in ten are weaker than written and about one in eight is missing.
 
-**PRD requirement IDs (section 14), 92 IDs:** Met 34, Partly met 43, Not met 15. Part 2 did not re-judge them; its corrections (P2.8) do not move any ID between those three groups.
+**Task lists (P2.3 and P3.3), 326 tasks:** done as claimed 233, partly done 13, decided against and not built 1, not done 79 (76 of them are feature 003, which is not started by design; 2 are 002 tasks reversed by a later decision; 1 is the missing 001 test T065). **83 boxes are wrong** (13 ticked but overstated, 67 unticked but done, 3 unticked and partly done). 71 of 001's 140 boxes are unticked, and 67 of those are in fact done.
+
+**Tests (P2.6):** 1,031 collected (not 761); 571 need neither database nor network and all 571 pass now; 455 need the database; 5 need live services. Not run: the 455 and the 5. Part 3 ran no test suite.
+
+**PRD requirement IDs (section 14), 92 IDs, after the Part 3 re-judge:** Met 26, Partly met 50, Not met 16. (Parts 1 and 2 gave 34 / 43 / 15; P3.1 lists the nine that changed.)
 
 ---
 
 ## 17. The 15 biggest problems, in simple words
 
-Part 2 changed the list. Two Part 1 items were merged into others (workflows into "agents"; duplicates into discovery) to make room for two new ones, and every item says where Part 2 changed it.
+Part 3 changed the list again. Two items were merged (the tests and the project papers; the alerts and the new monitoring gaps) to make room for one new item, now number 2. Every item says where a later part changed it.
 
 1. **None of the "agents" is really an agent, and nothing can pause for a human.** The system promises five AI agents that plan, use tools and loop. In the code, two make one AI call each and three are ordinary functions. The OpenAI Agents SDK, LangChain and MCP are never used. Workflows are straight pipes with no saved progress and no real "stop and wait": the "approval gates" are a database lookup. The candidate-validation workflow and the orchestrator are built but nothing calls them. *(Part 2: the Phase 4 goal, "the agent walks the steps, asks for missing documents and gets approvals", is not met at all.)*
 
-2. **Matching can say "Likely eligible" while checking very little, and never says what is left to do.** It only checks the rules the user typed in as hard constraints, and only four kinds (GPA, nationality, degree, tests) plus the deadline. With no rules and a known future deadline it still says "Likely"; with no deadline it says "Unknown" (Part 2 corrected Part 1 here). A text value like "3.0 or equivalent" crashes it (now reproduced). *(Part 2 added:)* the result's list of required documents and remaining actions is always empty.
+2. **The CV and SOP writer can put a grade in a document that the user never had. *(New in Part 3.)*** The checker that is meant to stop made-up facts also treats the scholarship's own requirements as facts about the student. Shown by running it: the profile says GPA 3.0, the requirement says 3.5, and "I have a GPA of 3.5." is accepted. An empty draft is also accepted and saved as a finished document. Values read by the AI from uploaded documents are called "verified", and a mismatch with the profile is ignored. The SOP's "scholarship-specific questions" are never created by anything in the app, so every SOP is a generic list of "I have ..." sentences.
 
-3. **"I don't want this" rules do nothing.** If a student says "exclude anything that needs GRE", the program collects the answer and then ignores it when deciding the verdict (now reproduced: the exclusion is echoed and the verdict stays "likely").
+3. **Matching can say "Likely eligible" while checking very little, and never says what is left to do.** It only checks the rules the user typed in as hard constraints, and only four kinds (GPA, nationality, degree, tests) plus the deadline. With no rules and a known future deadline it still says "Likely"; with no deadline it says "Unknown" (Part 2 corrected Part 1 here). A text value like "3.0 or equivalent" crashes it (reproduced). The result's list of required documents and remaining actions is always empty.
 
-4. **The word "Verified" is hollow.** No code ever opens a scholarship's own page to confirm it. A record becomes "verified" because the same list page showed it twice. Discovered records carry the source's homepage as their "official URL" and no deadline.
+4. **"I don't want this" rules do nothing.** If a student says "exclude anything that needs GRE", the program collects the answer and then ignores it when deciding the verdict (reproduced: the exclusion is echoed and the verdict stays "likely").
 
-5. **The AI marks its own homework on requirements.** When a user pastes a URL, the AI reads the page, writes down the requirements, and also labels each one "known" and "verified". Nothing checks that against the page. A wrong GPA or deadline can then produce a hard "Not eligible". *(Part 2:)* the application checklist's own "needs official verification" check is passed by that same label, so it protects nothing for these records.
+5. **The word "Verified" is hollow.** No code ever opens a scholarship's own page to confirm it. A record becomes "verified" because the same list page showed it a second time, about an hour after it was found *(Part 3 pinned this to the lines)*, and the "verified opportunities" number on the coverage page is that same count. Every call that could confirm a record on its own page passes "not confirmed", so the confirmed-record code never runs. Discovered records carry the source's homepage as their "official URL" and no deadline.
 
-6. **Any signed-up user has operator powers, and the server can be turned against itself.** Anyone can approve new sources, start monitoring runs that spend the AI quota, and make the server fetch any web address, including internal ones on the VM, through the URL-match feature. Signup is open and there are no roles.
+6. **The AI marks its own homework on requirements.** When a user pastes a URL, the AI reads the page, writes down the requirements, and also labels each one "known" and "verified". Nothing checks that against the page. A wrong GPA or deadline can then produce a hard "Not eligible". *(Part 2:)* the application checklist's own "needs official verification" check is passed by that same label. *(Part 3:)* the CV and SOP writers use the same label as their test for a "verified requirement".
 
-7. **The free AI allowance (about 20 calls a day) is unprotected.** There is no budget; every user action spends it; sorting each new scholarship costs about one call (now measured under mocks: one per candidate); every alert re-check can spend one too; and when Gemini says "quota used up" almost every endpoint returns a raw server error instead of "try again later". Feature 003 would fix this and has not been started (76 of 76 tasks open).
+7. **Any signed-up user has operator powers, and the server can be turned against itself.** Anyone can approve new sources, start monitoring runs that spend the AI quota, and make the server fetch any web address, including internal ones on the VM, through the URL-match feature. Signup is open and there are no roles. *(Part 3: a check that blocks internal addresses is already written in the repo, but only candidate validation uses it.)*
 
-8. **The tests give more comfort than they should.** There are 1,031 tests, not 761. 455 of them need the database, and locally that is the real shared Neon database; when it is unreachable they skip silently instead of failing. The AI is mocked everywhere in the normal run, the scored checks cover three narrow cases and compare to fixed thresholds, there are no extraction, verification or discovery evals, and the RAG folder has no tests. Only the 571 offline tests were verified to pass during this audit. *(Part 2 rewrote this item.)*
+8. **The free AI allowance (about 20 calls a day) is unprotected.** There is no budget; every user action spends it; sorting each new scholarship costs about one call (measured under mocks: one per candidate); every alert re-check can spend one too; and when Gemini says "quota used up" almost every endpoint returns a raw server error instead of "try again later". Feature 003 would fix this and has not been started (76 of 76 tasks open).
 
-9. **Q&A is fragile.** It cannot go and check the official page when it is unsure. It only works for scholarships added by URL (discovered ones are never indexed), it depends on Qdrant, which the repo's own notes say was unreachable on 2026-10-22, and its "Verified" label uses a check the code itself says can miss number errors. Re-submitting a stored URL also piles up duplicate chunks (reproduced).
+9. **The tests and the project's own papers give more comfort than they should.** There are 1,031 tests, not 761. 455 of them need the database, and locally that is the real shared Neon database; when it is unreachable they skip silently instead of failing. The AI is mocked everywhere in the normal run, the scored checks cover three narrow cases and compare to fixed thresholds, there are no extraction, verification or discovery evals, and the RAG folder has no tests. Only the 571 offline tests were verified to pass. *(Merged from the old item 15:)* 83 of the 326 task boxes are wrong, including two ticked tasks that say the opposite of the code; the Blueprint's self-audit gives itself 31 ticks and the code agrees with 11; the hand-off folders the process sections describe do not exist; `.env.example` leaves out the AI key.
 
-10. **Discovery does not really use the profile, repeats itself, and does not catch duplicates.** The profile only picks which of the five sources to visit. Results are unranked, not matched, and repeat: the same 4 scholarships came back as 16 rows in the mocked run. Duplicate detection needs name, university and intake all known, which listings never give, and a suspected duplicate is flagged and then ignored. *(Part 2 confirmed the repetition by running it.)*
+10. **Q&A is fragile.** It cannot go and check the official page when it is unsure. It only works for scholarships added by URL (discovered ones are never indexed), it depends on Qdrant, which the repo's own notes say was unreachable on 2026-10-22, and its "Verified" label uses a check the code itself says can miss number errors. Re-submitting a stored URL also piles up duplicate chunks (reproduced).
 
-11. **Source rules are written down but not obeyed.** The registry stores robots status, delays, allowed paths and a bot name, and the governance notes say not to fetch until robots are checked. No code reads any of those, and two sources are fetched on every run.
+11. **Discovery does not really use the profile, repeats itself, and does not catch duplicates.** The profile only picks which of the five sources to visit. Results are unranked, not matched, and repeat: the same 4 scholarships came back as 16 rows in the mocked run. Duplicate detection needs name, university and intake all known, which listings never give, a suspected duplicate is flagged and then ignored, and *(Part 3)* the "similar name" search can only look at rows with exactly the same name. When a duplicate is merged, its new values and requirements are thrown away.
 
-12. **The application helper stops short and sometimes promises what it cannot do.** It tells you the next step but does not ask for documents or show drafts for approval. The "Europass CV" is a text file with the word Europass in its heading, with no download route. Only a CV and an SOP can be generated, yet the checklist labels four other kinds of document "AI can generate". Task due dates are never filled in. *(Part 2 added the last two sentences.)*
+12. **Source rules are written down but not obeyed.** The registry stores robots status, delays, allowed paths and a bot name, and the governance notes say not to fetch until robots are checked. No code reads any of those, and two sources are fetched on every run.
 
-13. **No frontend, and long jobs block the request.** There is no UI at all. Only the monitoring run can be started and polled; discovery, generation, URL match and uploads make the caller wait.
+13. **The application helper stops short and sometimes promises what it cannot do.** It tells you the next step but does not ask for documents or show drafts for approval. The "Europass CV" is a text file with the word Europass in its heading, with no download route. Only a CV and an SOP can be generated, yet the checklist labels four other kinds of document "AI can generate". Task due dates are never filled in.
 
-14. **Alerts miss their main case. *(New in Part 2.)*** A "new scholarship matches you" alert can only fire if the scholarship has a known future deadline, and the discovered records have none, so the "monitoring finds it and tells me" loop works only for records that already carry a deadline. If more than 500 owner-and-change pairs come up in one run, the rest are dropped for good. Every re-check also writes a database row and may spend an AI call.
+14. **No frontend, and long jobs block the request.** There is no UI at all. Only the monitoring run can be started and polled; discovery, generation, URL match and uploads make the caller wait.
 
-15. **The project's own papers cannot be used as a status record. *(New in Part 2.)*** 71 of the 140 boxes in the first feature's task list are unticked although 67 of those tasks are done; two ticked tasks in the second feature say the opposite of the code (three sources "enabled" that are in fact disabled). The Blueprint's own self-audit gives itself 31 ticks and the code agrees with 11. Its first table still says monitoring is "excluded". The hand-off folders the process sections describe do not exist, and `.env.example` leaves out the AI key.
+15. **Monitoring and alerts miss their main cases. *(Merged and widened in Part 3.)*** The monitor can never mark a scholarship closed (the switch that allows it is set nowhere, and the page reader never reports "closed") and never marks one expired, so a scholarship whose deadline has passed stays "verified". A "new scholarship matches you" alert fires only if the scholarship has a known future deadline, and discovered records have none. If more than 500 owner-and-change pairs come up in one run, the rest are dropped for good. Every re-check writes a database row and may spend an AI call. The coverage page counts a source that was never fetched as covered: Germany, Hungary and Saudi Arabia show as covered although their three sources are never visited.
 
 ---
 
 ## 18. Where this audit stopped, and what it did not cover
 
-**Part 2 finished all seven items you listed; I did not run out of context.** Its depth differs by item, and you should know which is which:
+**Part 3 finished all three items you listed; I did not run out of context.** Its depth differs by item:
 
 | Item | What was done | How deep |
 |---|---|---|
-| 1. Blueprint §1-3 journeys | Every step of 3.1, 3.2, 3.3 and the narrative sentences mapped to a route or to "none" (46 rows) | Read and traced; the discovery and URL-match steps were also run under mocks |
-| 2. §22-24, §26-28, §36-46 | 148 promises, labels and "done" claims checked (P2.2) | Read; each row names the code or file it rests on |
-| 3. Task lists | All 326 tasks accounted for in P2.3 | Every named file checked to exist and every named identifier searched for by script; behaviour read for the tasks whose claim is about behaviour (marked R); **no task's own test was run against a database** |
-| 4. `readiness`, `alerts`, `retention` | All three files read line by line; 39 branch rows | Read; the SQL in `retention.py` was not executed on PostgreSQL |
-| 5. Part 1 "(by reading)" items | All of them re-done (P2.5) | Run under mocks, with the network blocked |
-| 6. Test count | Collection run; every test classified; 571 offline tests run and pass | Collection and the offline subset only |
-| 7. Things outside the repo | 16 read-only commands (P2.7) | Written, **not run** (they need the VM, the database or GitHub) |
+| 1. Re-judge the 92 PRD IDs | All 92 re-read against the Part 1, 2 and 3 findings; 9 changed, 83 kept (P3.1) | Judged from the findings and code lines; no new test run |
+| 2. Eight files line by line | `ingestion/graph.py`, `source_monitor/graph.py`, `doc_pipeline/graph.py`, `cv_gen/graph.py`, `sop_gen/graph.py`, `lifecycle.py`, `coverage.py`, `candidate_validation.py` read from first line to last; 51 rows (P3.2) | Read; 11 rows also shown by running the real pure functions with the network blocked (P3.4) |
+| 3. Wrong task boxes | All 326 boxes accounted for; 83 wrong, each listed (P3.3) | Each named file checked to exist by script; behaviour read |
 
 **Still not covered or not judged:**
 
-- **The 92 PRD requirement IDs (section 14) were not re-judged.** Part 2 corrections do not move any of them, but I did not re-read each one against the new findings.
-- **Not read line by line:** the interiors of `workflows/ingestion/graph.py`, `source_monitor/graph.py`, `doc_pipeline`, `cv_gen` and `sop_gen`, and the other services (`lifecycle`, `coverage`, `candidate_validation`). Part 1 and Part 2 read the parts that carry the claims; bugs inside the rest could remain.
+- **Only those eight files were read line by line in Part 3.** The other files in the same workflows and services (`dedup`, `classify`, `normalize`, `conflict_resolution`, `verification`, `listing_diff`, `requirement_satisfaction`, `url_match`, `app_plan`, `submit_prep`, the extraction tools) were read only where a claim passed through them. Bugs inside them could remain.
 - **Blueprint §4-§21 and §29-§35** were judged in Part 1 only, and §5 (frontend) is just "missing".
 - **Facts that need the VM, the database or GitHub** (commands VR-01 to VR-16): the real `.env` (mode, owner, which keys exist), the interval actually running (Blueprint says 360, the repo default is 60), database role privileges and the live counts quoted by the gap analysis, whether alert email is configured, whether Neon backups restore, whether the full suite passes, whether CI is green on `main`, and whether `deep-ci.yml` has ever run. Four rows are marked UNCHECKED for this reason (B-23, B-38, B-172, B-182).
-- **Limits of the mocked runs:** the classify measurement used three hand-made candidates, not real pages; the HTTP 500 for a text GPA was traced, not sent through the app; the "no network attempt" guarantee covers Python sockets, not the operating system.
+- **Limits of the Part 3 runs.** The eleven rows marked M ran pure code only. Anything that depends on a database (IG-04, IG-05, SM-05, the SQL in retention) or on a real AI reply (IG-01's classify behaviour, SG-03) was read, not run. The "thousands of rows" in SM-05 is arithmetic from the config defaults (90 days, hourly runs, 2-3 rows per check), not a count from a database. The claim that no code sets `listing_complete` or creates an SOP-question key rests on a search of `backend/app` and the seed file; a row inserted by hand in the live database would not show there.
+- **Limits of the mocked runs (Part 2):** the classify measurement used three hand-made candidates, not real pages; the HTTP 500 for a text GPA was traced, not sent through the app; the "no network attempt" guarantee covers Python sockets, not the operating system.
 - **Test results:** the 455 database tests and 5 live tests were not run. "1,015 passed" is the recorded log of an earlier run, not something observed in this audit.
