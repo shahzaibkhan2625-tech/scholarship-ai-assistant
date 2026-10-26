@@ -1101,7 +1101,8 @@ cd backend
 uv run pytest --collect-only -q -p no:cacheprovider | tail -3        # expect: 1026/1031 tests collected (5 deselected)
 
 # VR-14  The 571 tests that need neither database nor network (what I ran; no external connection possible)
-DATABASE_URL=postgresql+psycopg://nobody:nopass@127.0.0.1:1/none GEMINI_API_KEY=not-a-real-key \ # allow-secret
+FAKE_DB=postgresql+psycopg://nobody:nopass@127.0.0.1:1/none   # allow-secret
+DATABASE_URL="$FAKE_DB" GEMINI_API_KEY=not-a-real-key \
 QDRANT_URL=http://127.0.0.1:1 QDRANT_API_KEY=x PYTHONPATH=../docs/audit-part2-scripts \
 uv run pytest -q -p no:cacheprovider -p nodb_plugin -m "not smoke"       # expect: 571 passed, 460 deselected
 
