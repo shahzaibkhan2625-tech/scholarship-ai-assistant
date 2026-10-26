@@ -5,7 +5,7 @@
 | Date | 2026-10-26 |
 | Branch | `docs/full-project-audit` (from `main` @ `4574ad4`) |
 | Compared against | `specs/scholarship-ai-assistant-master-blueprint-v1.md` (v1.7, "BP"), `specs/scholarship-ai-assistant-prd-v1.md` (v1.1, "PRD"), the Part B agent PRD inside the Blueprint, `specs/001-*/contracts/openapi.yaml`, `specs/002-*/contracts/openapi.yaml`, `docs/blueprint-gap-analysis.md` |
-| Type | Read-only audit. No application code changed. No Gemini calls. No network calls. No database connection. Part 1 ran no tests; Part 2 ran test collection and the 571 tests that need neither database nor network (section P2.6); Part 3 ran no test suite, only a helper script that calls pure functions with the network blocked (P3.4). |
+| Type | Read-only audit. No application code changed. No Gemini calls. No network calls. No database connection. Part 1 ran no tests; Part 2 ran test collection and the 571 tests that need neither database nor network (section P2.6); Part 3 ran no test suite, only a helper script that calls pure functions with the network blocked (P3.4). Part 4 ran only a helper script of pure functions and fakes (P4.3). |
 
 ## 0. How this was produced, and what to trust
 
@@ -27,7 +27,7 @@
 
 For PRD requirement IDs (section 14) I use the three words you asked for: Met, Partly met, Not met.
 
-**Short pointer to the end.** The comparison with the gap analysis is section 15. **Part 2 (the areas Part 1 skipped) follows it, then Part 3 (the 92 PRD IDs re-judged, eight files read line by line, every wrong task box).** The count of each mark for all three parts is section 16, the 15 biggest problems are section 17, and where the audit stopped is section 18.
+**Short pointer to the end.** **Part 4 (every remaining file under `backend/app`, read line by line) is placed just before section 16.** The comparison with the gap analysis is section 15. **Part 2 (the areas Part 1 skipped) follows it, then Part 3 (the 92 PRD IDs re-judged, eight files read line by line, every wrong task box).** The count of each mark for all three parts is section 16, the 15 biggest problems are section 17, and where the audit stopped is section 18.
 
 ---
 
@@ -1436,7 +1436,254 @@ One more check for CG-01, run inline (not saved as a script): the same pure func
 
 ---
 
-## 16. Count of each mark (Part 1, Part 2 and Part 3)
+## Part 4: every remaining file under `backend/app`, read line by line
+
+Part 4 was done on 2026-10-26 on the same branch. It is still read-only: no application code changed, no real Gemini call, no network call, no database connection. One helper script was added: `docs/audit-part4-scripts/part4_run.py` (output saved as `part4_output.txt`). It calls only pure functions and in-memory fakes. Every non-loopback socket use raises; the last line of the output reads "Non-loopback network attempts: 0". Two loopback connects are Python's own event-loop socket pair, used only by check RQ.
+
+**What was read.** Every file the earlier Section 18 listed as "read only where a claim passed through" (`dedup`, `classify`, `normalize`, `conflict_resolution`, `verification`, `listing_diff`, `requirement_satisfaction`, the `url_match`, `app_plan` and `submit_prep` workflows, the extraction tools), then every other file under `backend/app` that Parts 1 to 3 had not read line by line. That is **113 files, about 10,300 lines**. With the 12 files Parts 2 and 3 read line by line, that makes 125 non-empty files (14,111 lines). The other 30 files are empty `__init__.py` files. Nothing under `backend/app` is unread.
+
+**Methods and marks.** Same as Parts 2 and 3: **R** read, **M** ran the real code with nothing external (the helper script), **S** symbol or file scan (`grep`). Marks: MATCHES, WEAKER, NAME ONLY, NOT REACHABLE, MISSING. A MATCHES row means I checked a claim the file makes and it holds. IDs start with `P4-`. "Known" means an earlier part already reported it; the row then adds the exact lines.
+
+**Not run.** Anything that needs a database (rollback behaviour, duplicate-domain approval, concurrent submits) was read, not run. Rows say so.
+
+---
+
+### P4.1 The files Section 18 named
+
+#### `services/dedup.py`, `services/classify.py`, `services/normalize.py`
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| P4-DD-1 | The exact-match half needs name, university and intake all non-empty. The listing extractor emits none of university or intake, so for discovered records it cannot fire (other side of IG-06). | `dedup.py:48-53,73`; `extract_listing.py:47-65` | R | WEAKER |
+| P4-DD-2 | The similarity half embeds the candidate and every existing row on every call, with no cache. Observed: 5 existing rows give 6 embedding calls for one candidate. | `dedup.py:86-90`; script DD | R, M | WEAKER |
+| P4-DD-3 | The decision rule (exact match gives merge decision, vector near-match gives flag, never auto-merge) is as the docstring says. | `dedup.py:73-101` | R | MATCHES |
+| P4-CS-1 | The classify service is a one-to-one reshaping of the tool's output; it does what it says. | `classify.py:33-50` | R | MATCHES |
+| P4-NZ-1 | **`normalize_record` throws away `funding_status`.** It skips every key ending in `_status` or `_confidence` as a "sidecar", so the real field `funding_status` is never normalized. The store step then finds no normalized value and falls back to the classifier's guess (or UNKNOWN), so the funding the page stated is never stored for a new record. The monitor later compares the extractor's value to the stored one, so the two disagree and a "funding changed" event is possible with no real change. Observed: keys out of the sample record are `name, degree_level, country`. | `normalize.py:36-38`; `ingestion/graph.py:162,505-512,516`; `listing_diff.py:26`; script NZ | R, M | WEAKER |
+| P4-NZ-2 | An explicit sidecar is honoured even when it contradicts the value (value empty with status `known`; value set with status `unknown`), against the module's own "absent is always unknown" promise. No live caller passes sidecars. Observed. | `normalize.py:4-5,52,62`; script NZ | R, M | WEAKER |
+
+#### `services/conflict_resolution.py`, `services/verification.py`, `services/listing_diff.py`
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| P4-CR-1 | Order official, then recency, then reliability; a tie gives `conflicting` with all values kept. Matches the docstring. | `conflict_resolution.py:47-94` | R | MATCHES |
+| P4-CR-2 | Values are compared by `repr`, so `"3.5"` and `3.5` count as a conflict. In live use `is_official` is true only for stored rows already marked verified, and a new record is never official (IG-02), so "official wins" decides little. | `conflict_resolution.py:40`; `ingestion/graph.py:202,275` | R | WEAKER |
+| P4-VF-1 | The rule "never `verified` without an official confirmation" holds inside this function. | `verification.py:44-48` | R | MATCHES |
+| P4-VF-2 | Lines 50 to 63 (REOPENED, STALE, UPDATED, VERIFIED) run only when `official_source_confirmed` is true, which no live call passes (IG-02). The 180-day number is hard-coded there, separate from the per-source `freshness_window_days`. | `verification.py:17,50-63`; call sites in IG-02 | R | NOT REACHABLE |
+| P4-VF-3 | The "Verified" a user sees is `verification_status`, set by `mark_confirmed_by_monitoring` on a re-sighting. It does not pass through this function's rule. | `scholarship_repo.py:91-106` | R | WEAKER |
+| P4-LD-1 | The docstring honestly says requirement changes cannot be detected. | `listing_diff.py:8-11` | R | MATCHES |
+| P4-LD-2 | Deadline parsing accepts only `YYYY-MM-DD`. A datetime-shaped reply is treated as "not stated", so a real deadline change is silently missed. Observed. | `listing_diff.py:35-43`; script LD | R, M | WEAKER |
+| P4-LD-3 | The monitor diffs `deadline`, `funding_status`, `degree_level` taken from the listing, where only the name is checked against the page (P4-EL-1). An invented deadline on a real name becomes a "deadline changed" event and an alert. | `listing_diff.py:26,67-74`; `extract_listing.py:141` | R | WEAKER |
+
+#### `services/requirement_satisfaction.py`
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| P4-RS-1 | Only the document's GPA is converted to a 4.0 scale; the requirement is assumed to be 4-point although the comment says otherwise. Observed: document 8.5/10 against a requirement of 8.0 (10-point) gives `not_satisfied`. | `requirement_satisfaction.py:70-80`; script RS | R, M | WEAKER |
+| P4-RS-2 | A text requirement ("3.0 or equivalent") raises `ValueError`. Nothing in this module or in `doc_pipeline._satisfy_check_node` catches it, so the upload endpoint returns 500. Observed. | `requirement_satisfaction.py:70`; `doc_pipeline/graph.py:179` | R, M | WEAKER |
+| P4-RS-3 | The degree check is a two-way substring test and a miss is a hard `not_satisfied`, against the module's own "unknown must not collapse into not_satisfied". Observed: "Master's" against "Masters" is `not_satisfied`. A higher degree also fails a lower requirement. | `requirement_satisfaction.py:8-12,131-145`; script RS | R, M | WEAKER |
+| P4-RS-4 | A test requirement matches only if its `key` equals the test name. The extraction prompt allows any key (P4-ER-2). Observed: key `min_ielts` gives `unknown`. A requirement with no minimum also gives `unknown` even when the document shows IELTS 7.0, because line 94 returns before the "no minimum" branch at 104-110, which is dead code. | `requirement_satisfaction.py:94-110`; script RS | R, M | WEAKER |
+| P4-RS-5 | The `language` category, where the extraction prompt puts IELTS and TOEFL, has no evaluator and always gives `unknown`. Observed. | `requirement_satisfaction.py:148-152`; `extract_requirements.py:26` | R, M | WEAKER |
+| P4-RS-6 | The profile-inconsistency check ignores the document's `gpa_scale`, compares institution by exact string ("MIT" against its full name is flagged), and flags a test retake as a mismatch. | `requirement_satisfaction.py:181-217` | R | WEAKER |
+| P4-RS-7 | "No LLM anywhere in this module" holds; it imports only types. | `requirement_satisfaction.py:19-25` | R | MATCHES |
+
+#### `workflows/url_match`, `workflows/app_plan`, `workflows/submit_prep`, `workflows/source_validate`
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| P4-UM-1 | The extraction (an AI call) runs before the "already stored?" check, so a URL the system already holds still costs one AI call whose result is thrown away. | `url_match/graph.py:72,80-82` | R | WEAKER |
+| P4-UM-2 | The user's pasted URL is stored as `official_scholarship_url` and returned as `official_source`, with no check that it is an official or registered domain. | `url_match/graph.py:92,202` | R | WEAKER |
+| P4-UM-3 | A stored URL is never refreshed; a second submission returns the old row. A date that is not `YYYY-MM-DD` silently becomes "no deadline". | `url_match/graph.py:52-58,80-82` | R | WEAKER |
+| P4-UM-4 | No error handling between fetch and persist except the fetch failure. An AI error, a bad JSON reply, or `name: null` reaches the endpoint as a bare 500 (no exception handler exists in the app, P4-MN-1). | `url_match/graph.py:61-73`; `api/url_match.py:31-36` | R, S | WEAKER |
+| P4-UM-5 | The fetch-failure short-circuit, reported as a failure and never as "not eligible", holds. | `url_match/graph.py:61-65,197-198` | R | MATCHES |
+| P4-AP-1 | "No LLM call", one entry point, and an atomic full replace of the tasks all hold. | `app_plan/graph.py:129-141`; `application_repo.py:93-108` | R | MATCHES |
+| P4-AP-2 | The docstring says items sort by `(not mandatory, category, key, id)`; the code sorts by `description`, and the draft has no `key`. Still deterministic. | `app_plan/graph.py:17-20,71`; `readiness.py:189-200` | R | WEAKER |
+| P4-SP-1 | The two gates and "no outbound send in this module" hold as written. | `submit_prep/graph.py:160-197` | R | MATCHES |
+| P4-SP-2 | The fingerprint covers only document ids, types and checksums. Nothing about the scholarship, its requirements or deadline is included, so an approval stays valid after those change. Failed-parse upload rows are part of it and cannot be deleted (P4-DOC-3). | `submit_prep/graph.py:94-113` | R | WEAKER |
+| P4-SP-3 | An empty package can be approved: the approval route checks nothing is attached, and an empty checklist skips "action required". Observed: the empty fingerprint is authorized and staging returns empty lists. | `api/application.py:139-149`; `agents/application/agent.py:67-85`; script SP | R, M | WEAKER |
+| P4-SP-4 | The "staged, human-reviewable" output is ids and type names only; no file name, checksum or text, and no route serves a file (P4-DOC-4). | `submit_prep/graph.py:178-196` | R | WEAKER |
+| P4-SP-5 | Approvals never expire and cannot be revoked; any past row for the same scope and fingerprint authorizes forever. | `application_repo.py:114-150`; `submission_approval.py:27-31` | R | WEAKER |
+| P4-SV-1 | `source_validate` has no caller anywhere in `backend/app`. | grep `run_source_validate` | S | NOT REACHABLE |
+| P4-SV-2 | The docstring says `approve_candidate_source` is reached only through the gate edge. The API route calls it directly, so the gate protects nothing live. The "gate" is an `approved` flag passed in; nothing pauses. | `source_validate/graph.py:14-16,60-63`; `api/sources.py:66` | R | NAME ONLY |
+| P4-SV-3 | The "heuristics" are two booleans. Observed: none of the five seeded official sources counts as `trusted_tld`, while `https://evil.example@good.org/x` does (host is cut at the first `/` without removing user-info). The module says "type/reliability heuristics" but infers neither. | `source_validate/graph.py:2,50-57`; script SV | R, M | WEAKER |
+
+#### Extraction tools
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| P4-JU-1 | `extract_json_object` is annotated `-> dict` but returns whatever `json.loads` gives. A JSON list reaches callers that call `.get`. Observed (listing extraction). | `_json_utils.py:16-30`; script EL | R, M | WEAKER |
+| P4-ER-1 | The model class and the `funding_details` table have three fields (`tuition_amount_or_pct`, `family_dependent_benefits`, `dependent_policy`) that the prompt's JSON shape never asks for, so the extractor can never fill them. | `extract_requirements.py:35-45,60-72`; `models/funding.py:18,24,26` | R | WEAKER |
+| P4-ER-2 | `confidence: "verified"` is offered with no rule for when to use it and nothing checks the reply; `key` is an unconstrained string, so every key-matching check downstream depends on the model's naming. The status and confidence columns are plain strings with no constraint. | `extract_requirements.py:28,32,53-57`; `models/requirement.py:37-38` | R | WEAKER |
+| P4-ER-3 | Page text is cut to 20,000 characters with no signal; the text starts with menus (`load_html` keeps all visible text). | `extract_requirements.py:91`; `rag/loaders.py:16-22` | R | WEAKER |
+| P4-ER-4 | No retry or repair on a bad reply (unlike document extraction), and the reply is validated only by pydantic, so `name: null` raises. | `extract_requirements.py:93-94` | R | WEAKER |
+| P4-EL-1 | Only the `name` is checked against the page. Observed: a real name with an invented deadline (2099-01-01), `fully_funded` and an invented URL are all accepted. | `extract_listing.py:141`; script EL | R, M | WEAKER |
+| P4-EL-2 | `detail_url` cannot be read from the page: tag stripping removes every `href`. The repo says so itself. Observed: an anchor reduces to its text. Any URL returned is invented or visible text. | `extract_listing.py:105`; `detect_candidate_links.py:5-8`; script EL | R, M | WEAKER |
+| P4-EL-3 | The model sees 20,000 characters but names are checked against the full text; entries past the cut are never seen and nothing says so. | `extract_listing.py:112,124,141` | R | WEAKER |
+| P4-EL-4 | The name check is real: every word of 3 or more letters must appear (threshold 1.0). It is a bag of words, not a phrase. | `extract_listing.py:141`; `ground_check.py:20-22` | R | MATCHES |
+| P4-DF-1 | Reject-and-retry for invalid JSON, with a typed error, works as the docstring says. | `extract_document_fields.py:61-80` | R | MATCHES |
+| P4-DF-2 | The document text is cut to 20,000 characters, so the last page of a long transcript (often where the cumulative GPA is) can be dropped silently. | `extract_document_fields.py:66` | R | WEAKER |
+| P4-DF-3 | Extracted values are never checked against the document text, unlike listing names. An invented GPA becomes the evidence behind a `satisfied`. One `gpa` and one `gpa_scale` per document; no range check. | `extract_document_fields.py:45-53,66-76` | R | WEAKER |
+| P4-EP-1 | CV import returns suggestions only and never saves. | `api/profile.py:88-89`; `extract_profile.py:23` | R | MATCHES |
+| P4-EP-2 | The whole CV is sent with no length cap, and a bad value (for example degree level "Master") raises a validation error as a bare 500. | `extract_profile.py:21-23` | R | WEAKER |
+
+#### Other tools
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| P4-CT-1 | Rules first, one AI call only for the unresolved dimensions, never `verified`. As documented. | `tools/classify.py:122-147` | R | MATCHES |
+| P4-CT-2 | Country and field are plain substring matches. Observed: "Thousands" gives `usa`, "Duke" gives `uk`, "starts" gives field `arts`. First hit in list order wins. The result is used only when the listing left the field empty, but then it is stored as lower-case `usa`/`uk`. | `classify.py:66-79,91-95`; `ingestion/graph.py:505-512`; script CL | R, M | WEAKER |
+| P4-CT-3 | No negation: "not a fully funded scholarship" gives `fully_funded`. Combined with P4-NZ-1, this guess is the stored funding for a new record. | `classify.py:47-53`; script CL | R, M | WEAKER |
+| P4-CT-4 | Degree takes the first of PhD, MS, BS in list order. Observed: "bachelor's, master's and PhD" and "master's ... supervisor ... PhD" both give PhD. | `classify.py:41-45`; script CL | R, M | WEAKER |
+| P4-CT-5 | AI fallback values are stored as `str(value)` with no check against the allowed lists. | `classify.py:143-145` | R | WEAKER |
+| P4-GC-1 | The grounding check is word overlap: no negation, no order, words under 3 letters ignored. Observed in Q&A: "No.", "Yes", "3.0" can never be grounded. | `ground_check.py:20-22,49-68`; script QA | R, M | WEAKER |
+| P4-GC-2 | `verify_claim_grounded` does what it says (every number must appear in the matched text), though in any context. | `ground_check.py:74-93` | R | MATCHES |
+| P4-DL-1 | The link filters (own domain, known domains, denylist, keyword, 5 per fetch) work as documented. | `detect_candidate_links.py:109-161` | R | MATCHES |
+| P4-DL-2 | The returned `domain` has `www.` removed but `url` keeps it, which breaks de-duplication downstream (P4-SR-4). A sub-domain of the page's own domain counts as a different site. | `detect_candidate_links.py:94-98,144,159` | R | WEAKER |
+| P4-TW-1 | `api_connector`, `listing_fetch`, `official_fetch`, `embed` tool files are shape-only wrappers and match their docstrings. | the four files | R | MATCHES |
+| P4-TW-2 | `tools/official_fetch.py` (`official_fetch_tool`) has no caller. | grep | S | NOT REACHABLE |
+| P4-PD-1 | `parse_pdf` gives typed errors and flags an image-only PDF without erroring. Observed: an owner-password-only PDF parses; a user-password PDF raises `PdfParseError`. | `pdf_parse.py:29-53`; script PP | R, M | MATCHES |
+| P4-RR-1 | `rerank` has no caller and is off by default. | grep | S | NOT REACHABLE |
+| P4-SE-1 | `search_tool` has no caller; its default backend raises `NotImplementedError`; the domain match is an exact `netloc` compare. | `search.py:39-43,56`; grep | R, S | NOT REACHABLE |
+| P4-WF-1 | Failure is always reported as a fetch failure, never as "not eligible". | `web_fetch.py:33-45` | R | MATCHES |
+| P4-WF-2 | The whole response body is read into memory with no size cap and no content-type check; the 15 s limit is per step, not a total deadline. | `web_fetch.py:27-52` | R | WEAKER |
+| P4-WF-3 | Redirects are followed with no re-check of where they land, so any address guard on the first URL would be bypassed. | `web_fetch.py:30` | R | WEAKER |
+| P4-WF-4 | The User-Agent is a placeholder (`example.invalid`). The seeded user-agent text (contact `...local`) is read by no code. | `web_fetch.py:10`; `seed_sources.yaml:34` | R, S | WEAKER |
+
+#### Connectors, retry policy, source repository
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| P4-RT-1 | Capped exponential backoff (2 s, 4 s, max 8 s), as Blueprint §33 describes. | `retry_policy.py:40-69` | R | MATCHES |
+| P4-RT-2 | Every error is retried, including a permanent 404, because no connector passes `is_retryable`. Observed: 3 attempts and sleeps of 2.0 and 4.0 seconds, then failure. | `official_fetch.py:171-174`; `api_connector.py:173-176`; script RP | R, M | WEAKER |
+| P4-AC-1 | The default API client is a placeholder (`GET https://{domain}?q=`, no user agent, no redirects, one fixed shape). No seeded source uses it. A failure always marks the source failing. | `api_connector.py:126-151,214` | R | WEAKER |
+| P4-OF-1 | The active-only gate runs before any network call. | `official_fetch.py:161-163,337-339` | R | MATCHES |
+| P4-OF-2 | **An AI failure during discovery is invisible.** The fetch writes an OK row, then the extraction call is unguarded. If it fails (quota, missing key, bad reply) the exception leaves with no log row and no failing mark. Discovery catches it into `fetch_errors`, and the API drops `fetch_errors`. Coverage still sees the OK row. The agent docstring says every failure becomes a measured gap. | `official_fetch.py:178-189,420`; `discovery/agent.py:22-27,285-298`; `api/discovery.py:57` | R | WEAKER |
+| P4-OF-3 | **The cross-run extraction cache is defeated by ingestion's own rows.** The cache looks at the newest OK row with `items_found` set. Ingestion writes such a row per record with `fetched_url` empty, after the extraction row, and the resolved path then discards a row whose URL does not match. Observed: control (extraction row only) gives `cached`, 0 fetches; with one ingestion row after it, 1 fetch and a fresh extraction. So each `POST /discovery` re-fetches and re-extracts every discovery source (one AI call each), though sources say weekly or annual. Only the in-run cache works. | `official_fetch.py:252-261,357-358`; `ingestion/graph.py:498-501,631-634`; script OF | R, M | WEAKER |
+| P4-OF-4 | Candidate detection swallows every exception with no rollback, so a database error inside leaves the session unusable for the next log write. The "never affects extraction" claim holds only for non-database errors. | `official_fetch.py:308-309` | R | WEAKER |
+| P4-OF-5 | The cache hit returns every provenance row ever linked to the source (duplicates, closed records, no limit). | `official_fetch.py:362-365`; `source_repo.py:435-444` | R | WEAKER |
+| P4-OF-6 | The off-domain and redirect-to-homepage checks work as documented. | `official_fetch.py:396-416` | R | MATCHES |
+| P4-SR-1 | Active-only reads for fetching and active-plus-failing for monitoring, as documented; the health streak logic matches its docstring. | `source_repo.py:47-155,323-382` | R | MATCHES |
+| P4-SR-2 | `approve_candidate_source` takes every registry field from the caller and checks none against the candidate. The domain rule accepts `169.254.169.254`, `10.0.0.5` and `internal.corp`. Observed. A duplicate domain is a unique violation the route does not map (409 covers only review status), so it would be a 500 (read, not run). | `source_repo.py:216-248`; `schemas/source.py:24-36`; `api/sources.py:65-70`; script SC | R, M | WEAKER |
+| P4-SR-3 | `get_active_sources(country=...)` is exact equality. Seeded countries are codes (DE, EU, HU, PK, SA); a profile's countries are free text. See P4-DA-2. | `source_repo.py:58-59`; `seed_sources.yaml`; `schemas/profile.py:136` | R | WEAKER |
+| P4-SR-4 | **Candidate de-duplication fails for any link with `www.`.** The detector's `domain` has no `www.`, the stored `url` does, and the comparison uses the URL's host. Observed: a `www.` link creates a new pending row on each sighting (1, 1, 1 created); a link without `www.` is bumped (1, then 0). It runs on every fetch, including hourly monitoring. | `source_repo.py:447-451,490-498`; `detect_candidate_links.py:94-98,159`; script SR | R, M | WEAKER |
+| P4-SR-5 | `mark_source_failing` sets FAILING unconditionally although its docstring says it only tightens; a source an operator disabled in the meantime becomes failing, and `reactivate_source` then makes failing active. Race window only. | `source_repo.py:272-284,305-316` | R | WEAKER |
+| P4-SR-6 | Review times use naive local `datetime.now()` while everything else is UTC-aware. | `source_repo.py:244,264,493` | R | WEAKER |
+| P4-SR-7 | `get_fetch_logs_for_source` has no limit and two callers load a source's whole history to find one row; `get_all_fetch_logs` has no caller. | `source_repo.py:76-79,423-432`; `official_fetch.py:258` | R, S | WEAKER |
+| P4-SR-8 | Re-running the seed command overwrites every field of an existing seeded source including `status` (it is a field of the create schema), so a source the monitor marked failing or an operator disabled returns to active. I did not find the seed run on deploy. | `source_repo.py:178-186`; `schemas/source.py:52`; `source_registry_seed.py:34-42` | R, S | WEAKER |
+
+#### Agents and orchestration
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| P4-DA-1 | The guardrail (agent calls only `get_active_sources` and `get_source_by_id`) holds. | `discovery/agent.py:141,260` | R | MATCHES |
+| P4-DA-2 | The country dimension finds nothing for natural input. Observed with the five seeded sources: "Germany" gives no step; "DE" gives none (DAAD has `discovery_role: false`); "PK" gives HEC. A nationality-only profile gets EACEA and HEC. | `discovery/agent.py:139-143`; `seed_sources.yaml`; script DA | R, M | WEAKER |
+| P4-DA-3 | Repeats: a source reached by N plan steps returns the same cached list each time and `results.extend` adds it N times; no de-dup by scholarship id (the 4 to 16 rows). | `discovery/agent.py:214-215,300` | R | WEAKER |
+| P4-DA-4 | The docstring says a per-step failure never raises. The broad catch leaves a failed database session unusable, and the closing `get_coverage_summary(db)` would then fail. Only monitoring code calls `rollback()` (grep); discovery, ingestion, url-match and the API routes never do. Read, not run. | `discovery/agent.py:285,311-313,337` | R, S | WEAKER |
+| P4-DA-5 | Results are ids only (`scholarship_id`, `source_id`, `source_type`, `verification_status`) and `GET /scholarships/{id}` returns six fields. No route shows a scholarship's provider, country, funding, degree, requirements or official URL. | `schemas/discovery.py:49-55`; `schemas/scholarship.py:15-23`; `main.py:65-81` | R, S | MISSING |
+| P4-QA-1 | The pipeline shape (retrieve, answer only from excerpts, deterministic label) is as documented. | `research_qa/agent.py:28-54` | R | MATCHES |
+| P4-QA-2 | The labels rest on word overlap with one chunk. Observed: "No.", "Yes", "3.0" are always `unknown`; "minimum GPA required is 3.5" against a chunk saying 3.0 is `verified`. `Inferred` (30% overlap) still shows a source and `last_verified_at` (the ingest time). | `research_qa/agent.py:13,44-50,63`; script QA | R, M | WEAKER |
+| P4-QA-3 | A missing Qdrant or Gemini key raises to the endpoint, although `llm.py` says callers must surface "unknown". The question has no length limit. Retrieval has no minimum score. | `core/llm.py:18-22`; `api/qa.py:14-24`; `rag/retrieve.py:17-28` | R | WEAKER |
+| P4-MA-1 | Schema-locked output, evidence-required validators, hard-over-soft name guard, no HTTP import: as documented. | `matching/agent.py:98-99`; `schemas/match.py:66-85` | R | MATCHES |
+| P4-MA-2 | Exclusions never reach the verdict; the two rule functions do not take them. Observed: an exclusion `needs GRE` leaves "eligible" unchanged. | `matching/agent.py:115-132`; script MA | R, M | WEAKER |
+| P4-MA-3 | `POSSIBLY` can never be returned. Observed over 20 hard/soft combinations: only eligible, likely, not, unknown. PRD FR-MATCH-4 names five verdicts. | `matching/agent.py:130-132`; script MA | R, M | WEAKER |
+| P4-MA-4 | "Eligible" depends on soft preferences. Observed: only the deadline checked plus one soft "met" is `eligible`; every hard check passed with no soft preferences is `likely`. | `matching/agent.py:115-132`; script MA | R, M | WEAKER |
+| P4-MA-5 | The model's reply is not validated: `null` or non-object items raise; no retry. | `matching/agent.py:93-96` | R | WEAKER |
+| P4-AG-1 | The assistant is rule-based, calls only `run_app_plan` and `run_submit_prep`, as stated. | `application/agent.py:63,85` | R | MATCHES |
+| P4-AG-2 | It blocks on `AI_CAN_GENERATE`, a label given to documents nothing can generate (RD-02), so those users get "action required" for good. | `application/agent.py:47-49,67-83` | R | WEAKER |
+| P4-OR-1 | The orchestrator has no caller outside its own file. | grep | S | NOT REACHABLE |
+| P4-OR-2 | It refuses "write/draft/generate ... SOP/CV" as "not available yet", although generation routes exist. Observed. | `main_agent.py:166-168`; `api/generation.py`; script OR | R, M | WEAKER |
+| P4-OR-3 | A question that contains a link gets the generic "I'm not sure" reply, with or without an active scholarship. Observed. | `main_agent.py:281,296`; script OR | R, M | WEAKER |
+| P4-OR-4 | Routing is substring keywords ("match", "?", "can i"); one failing action aborts the whole reply. | `main_agent.py:170-174,364-399` | R | NAME ONLY |
+
+#### Remaining services
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| P4-HC-1 | GPA ignores scale. Observed: 3.4/4.0 against a need of 8.0 gives `fail`; 8.5/10 against 3.0 gives `pass`. Only the first GPA requirement is used. A fail forces "Not eligible". | `hard_constraints.py:53-73`; script HC | R, M | WEAKER |
+| P4-HC-2 | Nationality is exact text. Observed: "Pakistan" against `["Pakistani"]` gives `fail`. | `hard_constraints.py:82-97`; script HC | R, M | WEAKER |
+| P4-HC-3 | A scholarship level of `other` fails every target degree instead of `unknown`. Observed. | `hard_constraints.py:100-117`; script HC | R, M | WEAKER |
+| P4-HC-4 | Tests: the requirement key must equal the test name. Observed: key `min_ielts_score` fails a student with IELTS 7.0; a student with no scores entered fails (not unknown); only the first mandatory test is checked, so an IELTS-or-TOEFL scholarship fails a TOEFL-only student. | `hard_constraints.py:120-164`; script HC | R, M | WEAKER |
+| P4-HC-5 | The student's own criterion `operator` and `value` are never read. Observed: value 99 and value 1 give identical outcomes. A hard constraint only switches a dimension check on. | `hard_constraints.py:53,76,100,120`; script HC | R, M | WEAKER |
+| P4-HC-6 | `_DIMENSION_TO_REQUIREMENT_CATEGORY` and `any_hard_constraint_failed` are unused; `language` has no evaluator (`unknown`, observed). | `hard_constraints.py:18-24,201`; grep | R, S, M | WEAKER |
+| P4-HC-7 | The universal deadline check works as written. | `hard_constraints.py:31-50` | R | MATCHES |
+| P4-MS-1 | The matching service repeats the url-match matching step (it says so) and appends a new `matches` row on every call. | `services/matching.py:1-6,29-46` | R | WEAKER |
+| P4-MR-1 | **`GET /matches` lists every historical match, not the latest per scholarship.** The repo returns all rows and `rank_matches` only sorts. Observed: two rows for one scholarship (older eligible, newer not) list as eligible then not. The orchestrator list does the same. | `match_repo.py:20-22`; `api/matching.py:37-56`; `ranking.py:29-30`; script MA | R, M | WEAKER |
+| P4-PS-1 | A new profile has no missing-information rows until the first `PUT /profile`; they are not computed at creation, after criteria changes, or after CV import. url-match and match read them, so a new user's first verdict lists nothing missing (FR-PROFILE-3). | `services/profile.py:53`; `profile_repo.py:24-29`; `url_match/graph.py:140` | R | WEAKER |
+| P4-PS-2 | Scalar profile fields can be set but not cleared (`None` is skipped); a criterion update with a stale `id` silently creates a new criterion. | `profile_repo.py:43-45,71-75` | R | WEAKER |
+| P4-RK-1 | Ranking sorts on two enum ranks and puts "not" last, as the docstring says; it has no deadline, funding or preference weight. | `ranking.py:10-30` | R | MATCHES |
+| P4-SG-1 | `services/source_registry.py` is imported by nothing, although its docstring says dedup, verification, conflict resolution and ingestion use it. | grep | S | NOT REACHABLE |
+| P4-SD-1 | All five seeded rows have `robots_checked: false`. EACEA and HEC have `discovery_role: true` and no note, while the other three carry the note "discovery stays false until the robots review". No code reads `robots_checked`, `allowed_path_prefixes`, `min_request_delay_seconds`, `max_pages_per_run` or the seeded `user_agent`. | `seed_sources.yaml`; grep over `backend/app` | R, S | WEAKER |
+| P4-SA-1 | The approval check is an exact match on scope and fingerprint. | `submission_approval.py:27-31` | R | MATCHES |
+
+---
+
+### P4.2 API, core and the rest
+
+| ID | Finding | Proof | Method | Mark |
+|---|---|---|---|---|
+| P4-AU-1 | Signup accepts any password including an empty one; a password over 72 bytes is silently cut (observed: a different tail still verifies); email case is not normalised (observed: `Ada@x.com` and `ada@x.com` differ). | `schemas/auth.py:7-9`; `core/security.py:14-19`; script AU | R, M | WEAKER |
+| P4-AU-2 | Signup is check-then-insert (a race is a 500) and a 409 reveals which emails exist. | `api/auth.py:19-26` | R | WEAKER |
+| P4-AU-3 | Tokens are HS256, fixed 60 minutes, no refresh or revocation; logout does nothing (its comment says so). `JWT_SECRET_KEY` has no strength check. | `core/security.py:8-9`; `api/auth.py:49-54`; `core/config.py:18` | R | WEAKER |
+| P4-AU-4 | `get_current_user` does what it says. | `api/deps.py:14-36` | R | MATCHES |
+| P4-PR-1 | `import_cv` is `async def` but runs a blocking PDF parse and a blocking Gemini call on the event loop. The repo's notes say one worker, so one import stalls every request for the model's latency. The upload is read whole with no size limit and a bad PDF is a 500. | `api/profile.py:20-24,82-89`; `core/metrics.py:12-13` | R | WEAKER |
+| P4-DOC-1 | Upload reads the whole file into memory, takes the extension from the client's file name, allows any type and size, and stores before validating. A storage-then-database failure leaves an orphan file. | `api/documents.py:57-70`; `storage.py:49` | R | WEAKER |
+| P4-DOC-2 | Path traversal in storage is guarded as documented. | `storage.py:70-83` | R | MATCHES |
+| P4-DOC-3 | A failed-parse upload keeps its row (as intended) but there is no list, delete or replace route: the repo's delete function has no caller and no route uses `DELETE` anywhere. The failed row stays in the package fingerprint. | `api/documents.py:12-16`; `document_repo.py:76-81`; grep | R, S | WEAKER |
+| P4-DOC-4 | No route serves any stored file (no file response anywhere). Uploads and generated CV/SOP cannot be downloaded; the response carries the internal `file_ref` and the claim list. Widens the Europass note in item 13. | `schemas/document.py:45-51`; grep | R, S | MISSING |
+| P4-GEN-1 | The 409 "gaps" mapping for a blocked generation is as documented. | `api/generation.py:66-67,90-91` | R | MATCHES |
+| P4-APP-1 | The same scholarship can be applied to many times (no uniqueness); `Application.status` is never written after creation, so it stays `in_progress`; tasks have no status or done flag, so the tracker (FR-TRACK-1) can show only recomputed labels; the list is N+1 queries with no `ORDER BY`. | `application_repo.py:21-39`; `models/application.py:59,79-96`; `api/application.py:65-66`; grep | R, S | MISSING |
+| P4-APP-2 | The approval scope and notes have no length limit; only `final-submission` is ever consulted. | `schemas/plan.py:69-70`; `application/agent.py:39` | R | WEAKER |
+| P4-SRC-1 | There is no `POST /sources`, as promised. | `api/sources.py:1-7` | R | MATCHES |
+| P4-SRC-2 | Approve and reject are open to any signed-up user and the user table has no role column, so the operator-only rule (FR-DISC-8) cannot be applied without a migration. | `api/sources.py:59-94`; `models/user.py:11-18` | R | MISSING |
+| P4-MON-1 | A manual run is guarded by an advisory lock, as documented. A run stuck as `running` in a live process blocks all later runs (no age limit) until a restart. | `monitoring_repo.py:31-40`; `main.py:43-48` | R | WEAKER |
+| P4-MET-1 | `RETENTION_ROWS_DELETED_TOTAL` is defined and exported but incremented nowhere, so it is always 0. | `core/metrics.py:45-49`; grep | R, S | WEAKER |
+| P4-MN-1 | The app has no exception handler, so every uncaught error is a bare 500. Interactive docs and `openapi.json` are on by default. | `main.py:57`; grep | R, S | WEAKER |
+| P4-RQ-1 | The 500 from an unhandled error has no `X-Request-ID` (the outer error handler builds it outside this middleware), though the docstring says the id is echoed on the response. The access line is still logged. Observed. | `core/request_id.py:8,53-66`; script RQ | R, M | WEAKER |
+| P4-RL-1 | The rate limiter matches its docstring (token bucket per client, bounded buckets, `/health` exempt) and the podman compose passes `--proxy-headers`. The limit is one flat 120 per minute for every route. | `core/rate_limit.py`; `docker-compose.podman.yml:43-44` | R | MATCHES |
+| P4-LG-1 | Structured one-line JSON logging with context ids works as documented. | `core/logging.py` | R | MATCHES |
+| P4-CFG-1 | Missing required settings fail fast with names. The default interval is 60 (known). | `core/config.py:83-91` | R | MATCHES |
+| P4-LLM-1 | `generate_text` has no timeout, retry, quota handling or token cap; an empty reply returns `""` silently; the model id is hard-coded; embeddings go in one call with no batching. | `core/llm.py:11,33-57` | R | WEAKER |
+| P4-DB-1 | Repositories scope user-owned data by `user_id` as documented. | `application_repo.py`, `document_repo.py`, `match_repo.py`, `alert_repo.py` | R | MATCHES |
+| P4-SCR-1 | `get_by_official_url` uses `scalar_one_or_none` on a column with no unique constraint; two rows with one URL would break every later call for it. Not triggered today (the stored homepage differs from the normalised URL string). | `scholarship_repo.py:21-27`; `models/scholarship.py:96` | R | WEAKER |
+| P4-QD-1 | Qdrant timeouts, auto-created collection and index: as documented. | `qdrant_client.py:29-74` | R | MATCHES |
+| P4-QD-2 | Chunk ids are random and there is no delete or replace-by-scholarship function, so re-ingesting a page keeps old versions retrievable as "Verified" evidence (known, now line-exact). | `qdrant_client.py:76-91` | R | WEAKER |
+| P4-RAG-1 | The chunker and loader are deterministic and as documented. | `rag/chunk.py`; `rag/loaders.py` | R | MATCHES |
+| P4-RAG-2 | `check_grounding` and `load_plain_text` have no callers; Q&A does its own retrieve plus `ground_check`. | grep | S | NOT REACHABLE |
+| P4-SCH-1 | The per-source advisory lock is as documented but only the monitor takes it; discovery and url-match ingestion do not. | `scheduling/locks.py`; grep | R, S | WEAKER |
+| P4-MD-1 | `CoverageSummary.claims_complete_coverage` is pinned `Literal[False]`, and the verdict validators force "not" on a hard fail and require evidence. | `schemas/discovery.py:46`; `schemas/match.py:66-85` | R | MATCHES |
+| P4-MD-2 | Profile numbers have no range check and `target_countries` is free text. | `schemas/profile.py:95-102,136` | R | WEAKER |
+
+**Checked and found fine** (so you can see they were read): `api/alerts.py`, `api/coverage.py`, `api/health.py`, `api/scholarships.py`, the model files, `candidate_validation_repo.py`, `alert_repo.py`, `db.py`.
+
+---
+
+### P4.3 What the helper script printed
+
+`cd backend && DATABASE_URL=postgresql://x:x@127.0.0.1:1/x JWT_SECRET_KEY=dummy GEMINI_API_KEY= QDRANT_URL= QDRANT_API_KEY= PYTHONPATH=. .venv/Scripts/python ../docs/audit-part4-scripts/part4_run.py`. The full output is in `docs/audit-part4-scripts/part4_output.txt`. Key lines:
+
+```
+classify: "not a fully funded scholarship" -> fully_funded | "Thousands..." -> country usa | "Duke..." -> uk | "starts" -> field arts
+listing: invented deadline 2099-01-01, fully_funded and detail_url all kept | model list reply -> AttributeError
+normalize keys out of {name, funding_status, degree_level, country, closing_status}: ['name','degree_level','country']
+requirements: doc 8.5/10 vs 8.0 -> not_satisfied | "3.0 or equivalent" -> ValueError | "Master's" vs "Masters" -> not_satisfied | key min_ielts -> unknown
+hard: 3.4/4.0 vs 8.0 -> fail | 8.5/10 vs 3.0 -> pass | Pakistan vs [Pakistani] -> fail | level other vs MS -> fail | key min_ielts_score -> fail
+verdicts reachable: ['eligible','likely','not','unknown_requires_verification']   exclusion changes nothing   GET /matches order: eligible, not
+Q&A: "No." / "Yes" / "3.0" -> unknown ; "required GPA is 3.5" (chunk says 3.0) -> verified
+plan: Germany -> [] | DE -> [] | PK -> HEC | nationality only -> EACEA, HEC
+cache: extraction row only -> ('cached', 0) | ingestion row after it -> ('ok', 1)
+404 retry: 3 attempts, sleeps [2.0, 4.0]
+www link: rows created 1, 1, 1 | link without www: 1, 0
+domain 169.254.169.254, 10.0.0.5, internal.corp accepted; localhost rejected
+signup: empty password accepted; 100-char password verifies on first 72 bytes; Ada@x.com != ada@x.com
+PDF: owner-password-only parses; user-password raises PdfParseError
+unhandled-error 500 has X-Request-ID: False (a normal 200 has it: True)
+Non-loopback network attempts: 0.
+```
+
+**What Part 4 changes in Parts 1 to 3.** (1) Item 8's budget burn gets a mechanism: the discovery cache never hits once ingestion has run (P4-OF-3), and the classify AI call decides funding for every new record (P4-NZ-1). (2) Item 3's "Likely" and item 4's "exclusions ignored" are now line-exact (P4-MA-2, P4-MA-4), and `Possibly` is unreachable (P4-MA-3). (3) Item 7 gains a second route to fetching internal addresses: source approval accepts them (P4-SR-2). (4) Part 1's "Discovery: failure surfaces as a coverage gap" is wrong for an AI failure (P4-OF-2). (5) FR-MATCH-4 (five verdicts) stays Partly met; FR-DISC-8 and FR-TRACK-1 stay as they were (Not met and Partly met). No PRD verdict moved.
+
+---
+
+## 16. Count of each mark (Part 1, Part 2, Part 3 and Part 4)
 
 Computed by script from the Mark column (the last cell) of every table row, not by hand. Row IDs with a letter suffix (for example A-02b) count as their own rows. Part 1 counts were made with `grep -o` on sections 1 to 13; Parts 2 and 3 by reading each row's last cell, so a mark word inside another cell is never counted. Part 3 moved two Part 2 rows (B-22 and J-37, MATCHES to WEAKER) and the Part 2 counts below include that.
 
@@ -1482,21 +1729,34 @@ Computed by script from the Mark column (the last cell) of every table row, not 
 | `services/candidate_validation.py` | 1 | 4 | 0 | 0 | 0 | 5 |
 | **Part 3 total** | **11** | **33** | **3** | **3** | **1** | **51** |
 
-**All three parts together: 445 rows.**
+**Part 4** (P4.1 and P4.2, 150 rows; the table is the Mark column of every `P4-` row):
 
-| Mark | Part 1 | Part 2 | Part 3 | Together | Share |
-|---|---|---|---|---|---|
-| MATCHES | 47 | 84 | 11 | **142** | 32% |
-| WEAKER | 69 | 99 | 33 | **201** | 45% |
-| NAME ONLY | 10 | 11 | 3 | **24** | 5% |
-| NOT REACHABLE | 8 | 3 | 3 | **14** | 3% |
-| MISSING | 27 | 32 | 1 | **60** | 13% |
-| UNCHECKED | 0 | 4 | 0 | **4** | 1% |
-| **Total** | **161** | **233** | **51** | **445** | 99% (rounded) |
+| Mark | Rows |
+|---|---|
+| MATCHES | 40 |
+| WEAKER | 96 |
+| NAME ONLY | 2 |
+| NOT REACHABLE | 8 |
+| MISSING | 4 |
+| **Part 4 total** | **150** |
 
-Part 2 is kinder than Part 1 (36% MATCHES against 29%) because the planning and retention code it read line by line is solid, and because many scope labels correctly say "not yet". Part 3 read the code that carries the monitoring, ingestion and generation claims, and found the most gaps per row of any part (about one row in five is MATCHES, four in five are WEAKER or worse), which is what you would expect from reading the inside of the busiest files. Where the audit looked at what the Blueprint *promises*, the picture is the same in all three parts: about four to five rows in ten are weaker than written and about one in eight is missing.
+**All four parts together: 595 rows.**
+
+| Mark | Part 1 | Part 2 | Part 3 | Part 4 | Together | Share |
+|---|---|---|---|---|---|---|
+| MATCHES | 47 | 84 | 11 | 40 | **182** | 31% |
+| WEAKER | 69 | 99 | 33 | 96 | **297** | 50% |
+| NAME ONLY | 10 | 11 | 3 | 2 | **26** | 4% |
+| NOT REACHABLE | 8 | 3 | 3 | 8 | **22** | 4% |
+| MISSING | 27 | 32 | 1 | 4 | **64** | 11% |
+| UNCHECKED | 0 | 4 | 0 | 0 | **4** | 1% |
+| **Total** | **161** | **233** | **51** | **150** | **595** | 101% (rounded) |
+
+Part 4 is the widest part (113 files) and about two rows in five are MATCHES, because many small files do what they say; the WEAKER rows cluster in the extraction tools, the hard-constraint rules, the connectors and the API edges. Part 2 is kinder than Part 1 (36% MATCHES against 29%) because the planning and retention code it read line by line is solid, and because many scope labels correctly say "not yet". Part 3 read the code that carries the monitoring, ingestion and generation claims, and found the most gaps per row of any part (about one row in five is MATCHES, four in five are WEAKER or worse), which is what you would expect from reading the inside of the busiest files. Where the audit looked at what the Blueprint *promises*, the picture is the same in all three parts: about four to five rows in ten are weaker than written and about one in eight is missing.
 
 **Task lists (P2.3 and P3.3), 326 tasks:** done as claimed 233, partly done 13, decided against and not built 1, not done 79 (76 of them are feature 003, which is not started by design; 2 are 002 tasks reversed by a later decision; 1 is the missing 001 test T065). **83 boxes are wrong** (13 ticked but overstated, 67 unticked but done, 3 unticked and partly done). 71 of 001's 140 boxes are unticked, and 67 of those are in fact done.
+
+**Part 4 ran no test suite**, only the helper script (P4.3).
 
 **Tests (P2.6):** 1,031 collected (not 761); 571 need neither database nor network and all 571 pass now; 455 need the database; 5 need live services. Not run: the 455 and the 5. Part 3 ran no test suite.
 
@@ -1506,29 +1766,29 @@ Part 2 is kinder than Part 1 (36% MATCHES against 29%) because the planning and 
 
 ## 17. The 15 biggest problems, in simple words
 
-Part 3 changed the list again. Two items were merged (the tests and the project papers; the alerts and the new monitoring gaps) to make room for one new item, now number 2. Every item says where a later part changed it.
+Part 4 changed the list again (see the Part 4 notes inside items 3, 4, 5, 7, 8, 10 and 11); the 15 items are unchanged in number. Part 3 changed the list before that. Two items were merged (the tests and the project papers; the alerts and the new monitoring gaps) to make room for one new item, now number 2. Every item says where a later part changed it.
 
 1. **None of the "agents" is really an agent, and nothing can pause for a human.** The system promises five AI agents that plan, use tools and loop. In the code, two make one AI call each and three are ordinary functions. The OpenAI Agents SDK, LangChain and MCP are never used. Workflows are straight pipes with no saved progress and no real "stop and wait": the "approval gates" are a database lookup. The candidate-validation workflow and the orchestrator are built but nothing calls them. *(Part 2: the Phase 4 goal, "the agent walks the steps, asks for missing documents and gets approvals", is not met at all.)*
 
 2. **The CV and SOP writer can put a grade in a document that the user never had. *(New in Part 3.)*** The checker that is meant to stop made-up facts also treats the scholarship's own requirements as facts about the student. Shown by running it: the profile says GPA 3.0, the requirement says 3.5, and "I have a GPA of 3.5." is accepted. An empty draft is also accepted and saved as a finished document. Values read by the AI from uploaded documents are called "verified", and a mismatch with the profile is ignored. The SOP's "scholarship-specific questions" are never created by anything in the app, so every SOP is a generic list of "I have ..." sentences.
 
-3. **Matching can say "Likely eligible" while checking very little, and never says what is left to do.** It only checks the rules the user typed in as hard constraints, and only four kinds (GPA, nationality, degree, tests) plus the deadline. With no rules and a known future deadline it still says "Likely"; with no deadline it says "Unknown" (Part 2 corrected Part 1 here). A text value like "3.0 or equivalent" crashes it (reproduced). The result's list of required documents and remaining actions is always empty.
+3. **Matching can say "Likely eligible" while checking very little, and never says what is left to do.** It only checks the rules the user typed in as hard constraints, and only four kinds (GPA, nationality, degree, tests) plus the deadline. With no rules and a known future deadline it still says "Likely"; with no deadline it says "Unknown" (Part 2 corrected Part 1 here). A text value like "3.0 or equivalent" crashes it (reproduced). The result's list of required documents and remaining actions is always empty. *(Part 4:)* the checks themselves misfire: GPA scale is ignored, nationality is exact text ("Pakistan" fails "Pakistani"), a test requirement fails unless the model happened to name its key exactly "IELTS", and a student who has not entered test scores gets "fail". The verdict "Possibly" can never be returned, and "Eligible" is decided by soft preferences. `GET /matches` also lists every past match, not the latest. (P4-HC-1 to 5, P4-MA-3, P4-MA-4, P4-MR-1)
 
-4. **"I don't want this" rules do nothing.** If a student says "exclude anything that needs GRE", the program collects the answer and then ignores it when deciding the verdict (reproduced: the exclusion is echoed and the verdict stays "likely").
+4. **"I don't want this" rules do nothing.** If a student says "exclude anything that needs GRE", the program collects the answer and then ignores it when deciding the verdict (reproduced: the exclusion is echoed and the verdict stays "likely"). *(Part 4:)* line-exact: the rule functions do not take exclusions at all (P4-MA-2). The student's own hard-constraint value is also never read (P4-HC-5).
 
-5. **The word "Verified" is hollow.** No code ever opens a scholarship's own page to confirm it. A record becomes "verified" because the same list page showed it a second time, about an hour after it was found *(Part 3 pinned this to the lines)*, and the "verified opportunities" number on the coverage page is that same count. Every call that could confirm a record on its own page passes "not confirmed", so the confirmed-record code never runs. Discovered records carry the source's homepage as their "official URL" and no deadline.
+5. **The word "Verified" is hollow.** No code ever opens a scholarship's own page to confirm it. A record becomes "verified" because the same list page showed it a second time, about an hour after it was found *(Part 3 pinned this to the lines)*, and the "verified opportunities" number on the coverage page is that same count. Every call that could confirm a record on its own page passes "not confirmed", so the confirmed-record code never runs. Discovered records carry the source's homepage as their "official URL" and no deadline. *(Part 4:)* the funding a page states is thrown away for new records because the normalizer drops any key ending `_status`; the classifier's guess is stored instead (P4-NZ-1).
 
 6. **The AI marks its own homework on requirements.** When a user pastes a URL, the AI reads the page, writes down the requirements, and also labels each one "known" and "verified". Nothing checks that against the page. A wrong GPA or deadline can then produce a hard "Not eligible". *(Part 2:)* the application checklist's own "needs official verification" check is passed by that same label. *(Part 3:)* the CV and SOP writers use the same label as their test for a "verified requirement".
 
-7. **Any signed-up user has operator powers, and the server can be turned against itself.** Anyone can approve new sources, start monitoring runs that spend the AI quota, and make the server fetch any web address, including internal ones on the VM, through the URL-match feature. Signup is open and there are no roles. *(Part 3: a check that blocks internal addresses is already written in the repo, but only candidate validation uses it.)*
+7. **Any signed-up user has operator powers, and the server can be turned against itself.** Anyone can approve new sources, start monitoring runs that spend the AI quota, and make the server fetch any web address, including internal ones on the VM, through the URL-match feature. Signup is open and there are no roles. *(Part 3: a check that blocks internal addresses is already written in the repo, but only candidate validation uses it.)* *(Part 4:)* source approval also accepts internal addresses such as 169.254.169.254 as a hostname and takes every trust field from the caller (P4-SR-2).
 
-8. **The free AI allowance (about 20 calls a day) is unprotected.** There is no budget; every user action spends it; sorting each new scholarship costs about one call (measured under mocks: one per candidate); every alert re-check can spend one too; and when Gemini says "quota used up" almost every endpoint returns a raw server error instead of "try again later". Feature 003 would fix this and has not been started (76 of 76 tasks open).
+8. **The free AI allowance (about 20 calls a day) is unprotected.** There is no budget; every user action spends it; sorting each new scholarship costs about one call (measured under mocks: one per candidate); every alert re-check can spend one too; and when Gemini says "quota used up" almost every endpoint returns a raw server error instead of "try again later". Feature 003 would fix this and has not been started (76 of 76 tasks open). *(Part 4:)* the discovery cache meant to protect the quota never hits once ingestion has run, so each discovery click re-fetches and re-extracts every source (P4-OF-3); an AI failure during discovery leaves no trace (P4-OF-2).
 
 9. **The tests and the project's own papers give more comfort than they should.** There are 1,031 tests, not 761. 455 of them need the database, and locally that is the real shared Neon database; when it is unreachable they skip silently instead of failing. The AI is mocked everywhere in the normal run, the scored checks cover three narrow cases and compare to fixed thresholds, there are no extraction, verification or discovery evals, and the RAG folder has no tests. Only the 571 offline tests were verified to pass. *(Merged from the old item 15:)* 83 of the 326 task boxes are wrong, including two ticked tasks that say the opposite of the code; the Blueprint's self-audit gives itself 31 ticks and the code agrees with 11; the hand-off folders the process sections describe do not exist; `.env.example` leaves out the AI key.
 
 10. **Q&A is fragile.** It cannot go and check the official page when it is unsure. It only works for scholarships added by URL (discovered ones are never indexed), it depends on Qdrant, which the repo's own notes say was unreachable on 2026-10-22, and its "Verified" label uses a check the code itself says can miss number errors. Re-submitting a stored URL also piles up duplicate chunks (reproduced).
 
-11. **Discovery does not really use the profile, repeats itself, and does not catch duplicates.** The profile only picks which of the five sources to visit. Results are unranked, not matched, and repeat: the same 4 scholarships came back as 16 rows in the mocked run. Duplicate detection needs name, university and intake all known, which listings never give, a suspected duplicate is flagged and then ignored, and *(Part 3)* the "similar name" search can only look at rows with exactly the same name. When a duplicate is merged, its new values and requirements are thrown away.
+11. **Discovery does not really use the profile, repeats itself, and does not catch duplicates.** The profile only picks which of the five sources to visit. Results are unranked, not matched, and repeat: the same 4 scholarships came back as 16 rows in the mocked run. Duplicate detection needs name, university and intake all known, which listings never give, a suspected duplicate is flagged and then ignored, and *(Part 3)* the "similar name" search can only look at rows with exactly the same name. When a duplicate is merged, its new values and requirements are thrown away. *(Part 4:)* a country like "Germany" or "DE" produces no search step at all with the seeded sources (P4-DA-2); results are bare ids and no route shows a scholarship's details (P4-DA-5); a link with `www.` creates a new candidate-source row on every sighting (P4-SR-4).
 
 12. **Source rules are written down but not obeyed.** The registry stores robots status, delays, allowed paths and a bot name, and the governance notes say not to fetch until robots are checked. No code reads any of those, and two sources are fetched on every run.
 
@@ -1542,19 +1802,18 @@ Part 3 changed the list again. Two items were merged (the tests and the project 
 
 ## 18. Where this audit stopped, and what it did not cover
 
-**Part 3 finished all three items you listed; I did not run out of context.** Its depth differs by item:
+**Part 4 finished everything you listed; I did not run out of context.**
 
 | Item | What was done | How deep |
 |---|---|---|
-| 1. Re-judge the 92 PRD IDs | All 92 re-read against the Part 1, 2 and 3 findings; 9 changed, 83 kept (P3.1) | Judged from the findings and code lines; no new test run |
-| 2. Eight files line by line | `ingestion/graph.py`, `source_monitor/graph.py`, `doc_pipeline/graph.py`, `cv_gen/graph.py`, `sop_gen/graph.py`, `lifecycle.py`, `coverage.py`, `candidate_validation.py` read from first line to last; 51 rows (P3.2) | Read; 11 rows also shown by running the real pure functions with the network blocked (P3.4) |
-| 3. Wrong task boxes | All 326 boxes accounted for; 83 wrong, each listed (P3.3) | Each named file checked to exist by script; behaviour read |
+| 1. The files Section 18 named | `dedup`, `classify`, `normalize`, `conflict_resolution`, `verification`, `listing_diff`, `requirement_satisfaction`, the `url_match`, `app_plan`, `submit_prep` workflows and all extraction tools read from first line to last (P4.1) | Read; 30+ behaviours also shown by running the real pure code (P4.3) |
+| 2. Every remaining file under `backend/app` | 113 files, about 10,300 lines, read from first line to last (P4.1, P4.2) | Read; 150 rows |
+
+**Is any file under `backend/app` still unread? No.** Counting `.py` files and the one seed `.yaml`, there are 125 non-empty files (14,111 lines). 12 were read line by line in Parts 2 and 3 and the other 113 in Part 4. The only files not opened are the 30 empty `__init__.py` files (zero bytes). Files outside `backend/app` (tests, migrations, specs, Dockerfile, Caddyfile) are not part of that statement; tests and migrations were looked at only where a claim passed through them.
 
 **Still not covered or not judged:**
 
-- **Only those eight files were read line by line in Part 3.** The other files in the same workflows and services (`dedup`, `classify`, `normalize`, `conflict_resolution`, `verification`, `listing_diff`, `requirement_satisfaction`, `url_match`, `app_plan`, `submit_prep`, the extraction tools) were read only where a claim passed through them. Bugs inside them could remain.
-- **Blueprint §4-§21 and §29-§35** were judged in Part 1 only, and §5 (frontend) is just "missing".
-- **Facts that need the VM, the database or GitHub** (commands VR-01 to VR-16): the real `.env` (mode, owner, which keys exist), the interval actually running (Blueprint says 360, the repo default is 60), database role privileges and the live counts quoted by the gap analysis, whether alert email is configured, whether Neon backups restore, whether the full suite passes, whether CI is green on `main`, and whether `deep-ci.yml` has ever run. Four rows are marked UNCHECKED for this reason (B-23, B-38, B-172, B-182).
-- **Limits of the Part 3 runs.** The eleven rows marked M ran pure code only. Anything that depends on a database (IG-04, IG-05, SM-05, the SQL in retention) or on a real AI reply (IG-01's classify behaviour, SG-03) was read, not run. The "thousands of rows" in SM-05 is arithmetic from the config defaults (90 days, hourly runs, 2-3 rows per check), not a count from a database. The claim that no code sets `listing_complete` or creates an SOP-question key rests on a search of `backend/app` and the seed file; a row inserted by hand in the live database would not show there.
-- **Limits of the mocked runs (Part 2):** the classify measurement used three hand-made candidates, not real pages; the HTTP 500 for a text GPA was traced, not sent through the app; the "no network attempt" guarantee covers Python sockets, not the operating system.
-- **Test results:** the 455 database tests and 5 live tests were not run. "1,015 passed" is the recorded log of an earlier run, not something observed in this audit.
+- **Read, not run.** Anything that needs a database or a real AI reply: the missing `rollback()` after a database error (P4-DA-4), the unmapped duplicate-domain error on source approval (P4-SR-2), the concurrent-submit failure in P4-SCR-1, and the effect of the profile and match rows on a live database. These follow from the code but were not observed.
+- **Not checked externally.** The AI library's limits on embedding batch size and the real per-day quota were not looked up, so P4-LLM-1 says only that nothing handles them.
+- **Part 1 to 3 limits still stand:** Blueprint §4 to §21 and §29 to §35 were judged in Part 1 only; facts that need the VM, the database or GitHub (commands VR-01 to VR-16) and the four UNCHECKED rows; test results for the 455 database tests and 5 live tests.
+- **The helper scripts** (Parts 2 to 4) use fakes. A fake can show what a function returns for an input, not what the live system holds; for example the discovery-cache result (P4-OF-3) shows the logic with one hand-made ingestion row, not a count from the real log.
