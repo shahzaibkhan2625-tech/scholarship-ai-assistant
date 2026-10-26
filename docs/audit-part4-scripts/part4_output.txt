@@ -1,0 +1,106 @@
+=== CL: rules-based classify (the AI fallback is made to fail, so only the rules speak) ===
+  'This is not a fully funded scholarship; tuition is not covered.'
+    funding=fully_funded country=None field=None degree=None
+  'Thousands of students apply every year.'
+    funding=None country=usa field=None degree=None
+  'Hosted by Duke Kunshan in a joint programme.'
+    funding=None country=uk field=None degree=None
+  'The programme starts in September.'
+    funding=None country=None field=arts degree=None
+  "Open to bachelor's, master's and PhD students."
+    funding=None country=None field=None degree=PhD
+  "A master's scholarship; your supervisor should hold a PhD."
+    funding=None country=None field=None degree=PhD
+=== EL: listing extraction ===
+  anchor href survives clean_html_to_text: 'Chevening'
+  accepted: 1 | deadline kept: 2099-01-01 | funding kept: fully_funded | detail_url kept: https://invented.example/apply
+  model returns a JSON list -> AttributeError 'list' object has no attribute 'get'
+=== NZ: normalize_record ===
+  keys that come out of normalize_record( {'name': 'X', 'funding_status': 'fully_funded', 'degree_level': 'MS', 'country': None, 'closing_status': 'open'} ): ['name', 'degree_level', 'country']
+  sidecar says known, value empty : NormalizedField(key='x', value=None, value_status='known', confidence='unknown')
+  sidecar says unknown, value set : NormalizedField(key='x', value='v', value_status='unknown', confidence='inferred')
+=== LD: listing_diff with a datetime-shaped deadline ===
+  {'deadline': '2026-12-01'} -> {'deadline': datetime.date(2026, 12, 1)}
+  {'deadline': '2026-12-01T23:59:00Z'} -> {}
+=== RS: requirement_satisfaction ===
+  GPA doc 8.5/10 vs requirement 8.0 (10-point): not_satisfied
+  GPA requirement '3.0 or equivalent' -> ValueError could not convert string to float: '3.0 or equivalent'
+  degree: requirement "Master's" vs document 'Masters': not_satisfied
+  test: key 'IELTS', value 6.5, doc IELTS 7.0: satisfied
+  test: key 'min_ielts', value 6.5, doc IELTS 7.0: unknown
+  test: key 'IELTS', no minimum (value None), doc IELTS 7.0: unknown
+  language category (where the prompt puts IELTS): unknown
+=== HC: hard_constraints ===
+  student 3.4/4.0, scholarship needs 8.0 (a 10-point scale): [('gpa', 'fail')]
+  student 8.5/10, scholarship needs 3.0 (a 4-point scale): [('gpa', 'pass')]
+  nationality 'Pakistan' vs requirement ['Pakistani']: [('nationality', 'fail')]
+  scholarship degree_level 'other', student target MS: [('degree', 'fail')]
+  test requirement key 'min_ielts_score'=6.5, student has IELTS 7.0: [('test', 'fail')]
+  test requirement key 'IELTS'=6.5, student entered no test scores at all: [('test', 'fail')]
+  scholarship takes IELTS or TOEFL (two mandatory rows), student has TOEFL only: [('test', 'fail')]
+  criterion value 99 vs 1 gives the same outcome: True
+  'language' hard criterion: [('language', 'unknown')]
+=== MA: verdict rules (agents/matching/agent.py build_verdict) ===
+  only the deadline checked, one soft 'met': eligible
+  every hard check passed, no soft preferences: likely
+  every hard check passed, 1 of 3 soft met: likely
+  exclusion triggered ['needs GRE'] changes nothing: eligible
+  verdicts reachable over 20 hard/soft combinations: ['eligible', 'likely', 'not', 'unknown_requires_verification']
+  GET /matches order for two rows of the same scholarship (old eligible, newer not): ['eligible', 'not']
+=== QA: answer labels ===
+  model says 'No.' -> unknown
+  model says 'Yes' -> unknown
+  model says '3.0' -> unknown
+  model says 'The minimum GPA required is 3.5' -> verified
+  model says 'There is no application fee for this scholarship.' -> verified
+=== DA: build_query_plan against the five seeded sources ===
+  target_countries=['Germany']: []
+  target_countries=['DE']: []
+  target_countries=['PK']: [('country', 'PK', 'HEC')]
+  nationality='Pakistani' only: [('nationality', 'Pakistani', 'EACEA'), ('nationality', 'Pakistani', 'HEC')]
+  fields=['physics'], countries=['Germany']: [('field', 'physics', 'EACEA'), ('field', 'physics', 'HEC')]
+=== OF: the cross-run listing cache (T135/A9) when ingestion rows exist ===
+  only the extraction row (control)      -> status, fetches: ('cached', 0)
+  ingestion row written after extraction -> status, fetches: ('ok', 1)
+=== RP: retry policy on a permanent 404 ===
+  HTTP 404 -> attempts made: 3 | sleeps between them: [2.0, 4.0] | success: False
+=== SR: candidate-source de-duplication for a 'www.' link ===
+  detector output: domain = fundme.org | url = https://www.fundme.org/scholarships
+  rows created on 1st sighting: 1 | on 2nd sighting (same link): 1 | on 3rd: 1
+  control, link without 'www.': 1st: 1 | 2nd: 0
+=== SC: SourceRegistryCreate accepts internal addresses as a 'bare hostname' ===
+  domain '169.254.169.254': accepted
+  domain '10.0.0.5': accepted
+  domain 'localhost': rejected (ValidationError)
+  domain 'internal.corp': accepted
+=== SV: source_validate heuristics ===
+  https://www2.daad.de/x -> {'https': True, 'trusted_tld': False}
+  https://www.eacea.ec.europa.eu/x -> {'https': True, 'trusted_tld': False}
+  https://stipendiumhungaricum.hu/apply/ -> {'https': True, 'trusted_tld': False}
+  https://www.hec.gov.pk/x -> {'https': True, 'trusted_tld': False}
+  https://www.kaust.edu.sa/x -> {'https': True, 'trusted_tld': False}
+  https://evil.example@good.org/x -> {'https': True, 'trusted_tld': True}
+  https://anyone.org/ -> {'https': True, 'trusted_tld': True}
+=== OR: orchestrator routing ===
+  'Please write my SOP for this scholarship'  -> clarification=True actions=[]
+  'What is the deadline for https://x.org/s?'  -> clarification=True actions=[]
+  'What is the deadline for https://x.org/s?' (with active scholarship) -> clarification=True actions=[]
+=== SP: submit_prep fingerprint and staging with nothing attached ===
+  fingerprint of an empty package: 191508af667760e9...
+  an approval of it authorizes the same empty package: True
+  staged output for the empty package: {'application_id': '610bd224-f24a-4cd3-a6f3-58fe6234ede4', 'submission_scope': 'final-submission', 'content_fingerprint': '191508af667760e91e6087281c9e4c17cac58613e3260a34d53162d9dc3ca2ea', 'application_documents': [], 'generated_documents': []}
+=== DD: dedup embedding calls for one candidate ===
+  existing rows with text: 5 -> embed calls: 6
+=== AU: password handling ===
+  SignupRequest with an empty password accepted: True
+  100-char password hashed; the first 72 bytes decide: True
+  'Ada@x.com' vs 'ada@x.com' normalised to the same address: False
+=== PP: owner-password-only PDF through parse_pdf ===
+  pymupdf says: needs_pass = 0 | is_encrypted = False | text readable = True
+  file really is encrypted (/Encrypt in the bytes): True
+Consider using the pymupdf_layout package for a greatly improved page layout analysis.
+  parse_pdf (owner password only) -> Cumulative GPA 3.60 / 4.00
+  parse_pdf (user password set) -> PdfParseError: PDF is encrypted/password-protected and cannot be parsed
+=== RQ: X-Request-ID on an unhandled error ===
+  200 response has X-Request-ID: True | unhandled-error 500 has X-Request-ID: False (status 500 )
+Non-loopback network attempts: 0. Loopback connects (asyncio socket pair, section RQ only): 2.
