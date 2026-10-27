@@ -2,10 +2,10 @@
 
 | Field | Value |
 |---|---|
-| PRD version | v1.1 (FINAL, amended) |
-| Status | **FINAL / LOCKED** — all 8 Open Decisions approved & incorporated (Stage 1 complete); **amended 2026-10-25 (v1.1)** with 4 post-Phase-5 decisions OD-9…OD-12, see §34 |
-| Last updated | 2026-10-25 (v1.1); v1.0 locked 2026-09-05 |
-| Source of truth | Master Blueprint v1.7 (architecture; v1.0 was written against v1.5) — this PRD does not redesign it |
+| PRD version | v1.2 (FINAL, amended) |
+| Status | **FINAL / LOCKED** — all 8 Open Decisions approved & incorporated (Stage 1 complete); **amended 2026-10-25 (v1.1)** with 4 post-Phase-5 decisions OD-9…OD-12, see §34; **amended 2026-10-27 (v1.2)** after the full-project audit with 3 decisions OD-13…OD-15, see §35 |
+| Last updated | 2026-10-27 (v1.2); 2026-10-25 (v1.1); v1.0 locked 2026-09-05 |
+| Source of truth | Master Blueprint v1.8 (architecture; v1.0 was written against v1.5) — this PRD does not redesign it |
 | Document type | Product requirements (WHAT / WHY). Architecture (HOW) stays in the Blueprint. |
 
 **Truth hierarchy.** Blueprint > PRD for structural/architecture decisions; PRD defines product behavior and scope. Section references like *(BP §n)* point to the Master Blueprint for traceability. Requirement IDs (`FR-*`, `NFR-*`) are for downstream Spec-Driven Development.
@@ -78,6 +78,7 @@ Per Blueprint capability labels *(BP §36)*, the MVP includes:
 - Scheduled source monitoring + notifications, coverage analytics, source-health, semi-automated candidate-source validation — Production *(Phase 5)*.
 - Large-scale source/country expansion, **live approval-gated submission**, SaaS multi-tenancy/billing/quotas — Future/Advanced *(Phase 6)*.
   - *Amended 2026-10-25 (v1.1, OD-10):* large-scale source/country expansion is **pulled forward** to feature 006, built after quota governance (003) and trustworthy records (004). Live submission and SaaS multi-tenancy/billing/quotas stay Future *(BP §22, ADR-0012)*.
+  - *Amended 2026-10-27 (v1.2, OD-13, OD-14):* after the full-project audit two features are added: **010 security hardening** (closes the NFR-SEC gaps; runs first) and **011 agent layer** (re-implements as genuine agents the behaviour already required by FR-ROUTE, FR-AGENTIC and FR-APP; runs after 005). Build order: **010 → 003 → 004 → 006 → 005 → 011 → 007 → 008/009** *(BP §22 amended order, ADR-0015)*.
 
 ## 10. Core User Journeys
 
@@ -121,7 +122,7 @@ Grouped below in §12–§22. Each capability has **Input → Processing → Out
 - **FR-DISC-5** Newly discovered sources become **candidates** requiring governed approval; they are never treated as authoritative automatically *(BP §29)*.
 - **FR-DISC-6** Discovery shall support systematic query dimensions (country, university, degree level, field, nationality, funding type, intake, requirements, deadlines) rather than a single generic query *(BP §30.3)*.
 - **FR-DISC-7** The product shall **not** claim 100% global coverage; it shall target maximum practical coverage with measurable metrics (§21) *(BP §30.4)*.
-- **FR-DISC-8 (v1.1, OD-12)** Approving or rejecting a candidate source shall be restricted to **operators**; an ordinary signed-up user shall not be able to change source authority *(BP §29, ADR-0012)*.
+- **FR-DISC-8 (v1.1, OD-12)** Approving or rejecting a candidate source shall be restricted to **operators**; an ordinary signed-up user shall not be able to change source authority *(BP §29, ADR-0012)*. *Amended 2026-10-27 (v1.2, OD-13):* the minimal operator restriction is delivered in feature 010 (moved from 004); fuller roles and a review queue remain in feature 006.
 - **FR-DISC-9 (v1.1, OD-10)** Coverage shall extend to **national, regional/state and individual-university** scholarship sources in **any country**, for any user's profile, not a fixed country list; new sources still enter only as governed candidates (FR-DISC-5) *(BP §29, §22 roadmap, feature 006)*.
 
 ## 15. Matching Requirements  (`FR-MATCH`)
@@ -218,6 +219,10 @@ Grouped below in §12–§22. Each capability has **Input → Processing → Out
 - **NFR-SEC-1** Authentication, authorization, and **per-user data isolation** *(BP §19)*.
 - **NFR-SEC-2** Secure handling of sensitive academic/personal documents; secrets/API keys via env/secret management; input validation; access control; logging *(BP §19)*.
 - **NFR-SEC-3** One user's information shall never be accessible to another (isolation enforced at the data layer) *(BP §19)*.
+- **NFR-SEC-4 (v1.2, OD-13)** When the product fetches a URL supplied by a user or found on a third-party page, it shall not reach private, loopback, link-local or cloud-metadata addresses *(BP §19 input validation; ADR-0010)*.
+- **NFR-SEC-5 (v1.2, OD-13)** The running application shall use database credentials with only the privileges it needs; schema changes (migrations) use separate owner credentials *(BP §19 least-privilege DB)*.
+- **NFR-SEC-6 (v1.2, OD-13)** Credentials and uploads shall be validated: a minimum password strength, a minimum strength for the secret that signs sessions, and size/type limits on uploaded files *(BP §19 secure file handling, input validation)*.
+- **NFR-SEC-7 (v1.2, OD-13)** Security-relevant actions (sign-up, source approval/rejection, manually started monitoring runs, submission approvals) shall be recorded in an audit log *(BP §14 `audit_log`, §19 logging)*.
 
 ## 27. Reliability / Freshness Requirements  (`NFR-REL`)
 
@@ -250,6 +255,7 @@ Derived from Blueprint-defined measurables. **(OD-4, approved)** The product goa
 - **AC-3 (Docs/Gen):** upload transcript → associated + satisfies a requirement; CV/SOP generated grounded only in real data *(BP §22 Phase 3)*.
 - **AC-4 (Planning/Assistant):** "create the application plan" → labeled checklist + readiness; assistant requests missing items and obtains approvals; button-vs-agent parity *(BP §22 Phase 4)*.
 - **AC-5 (Integrity):** matching verdict-correctness matrix passes and hard-constraint lock is never overridden (build-breaking) *(BP §25)*.
+- **AC-6 (Reachability) (v1.2, OD-15):** every user-facing capability is reachable from an entry point (an API route, the scheduler, or an operator command) and is proven by a test that starts from that entry point; a capability that exists only as internal code does not count as delivered *(BP §23, amended v1.8)*.
 
 ## 30. Out of Scope (for MVP)
 
@@ -285,6 +291,9 @@ All 8 decisions are **approved and incorporated**. None remain open at the produ
 | OD-10 *(v1.1, 2026-10-25)* | Large-scale coverage (national, regional, university, any country) pulled forward from Phase 6; build order 003 → 004 → 006 → 005 → 007 → 008/009 | §9, §14 FR-DISC-9, §34 *(ADR-0012)* |
 | OD-11 *(v1.1, 2026-10-25)* | "Verified" = confirmed on the scholarship's own official page with deadline and eligibility; listing-only = `listed` | §22 FR-VERIFY-8, KPI-11 *(ADR-0013)* |
 | OD-12 *(v1.1, 2026-10-25)* | Source approval restricted to operators | §14 FR-DISC-8 *(ADR-0012)* |
+| OD-13 *(v1.2, 2026-10-27)* | Security gaps found by the full-project audit are closed first (feature 010, before 003); the minimal operator restriction moves from 004 to 010 | §9, §14 FR-DISC-8, §26 NFR-SEC-4…7, §35 *(ADR-0015)* |
+| OD-14 *(v1.2, 2026-10-27)* | The agent behaviour required by FR-ROUTE, FR-AGENTIC and FR-APP is re-implemented as genuine agents in feature 011, after 005 (framework per Blueprint §21) | §9, §35 *(ADR-0015)* |
+| OD-15 *(v1.2, 2026-10-27)* | A capability counts as delivered only when it is reachable from an entry point and tested from it | §29 AC-6 |
 
 **Remaining operational (non-blocking) configuration** — not product Open Decisions: exact numeric KPI targets and per-source freshness windows (set during operations, per OD-4); the concrete initial seed source list (set under governance, per OD-5). These are intentionally deferred and do **not** block PRD lock.
 
@@ -320,6 +329,10 @@ All 8 decisions are **approved and incorporated**. None remain open at the produ
 | Operator-only source approval; coverage at every level *(v1.1)* | §29, §27 A17/A18, §22 roadmap; ADR-0012; features 004/006 |
 | Country names and aliases *(v1.1)* | §30.3; features 004/005 |
 | Post-Phase-5 roadmap 003–009 *(v1.1)* | §22 (roadmap table), §46 |
+| Security hardening; NFR-SEC-4…7 *(v1.2)* | §19, §14 `audit_log`; ADR-0010, ADR-0015; feature 010 |
+| Agent layer re-implementation *(v1.2)* | §7, §7.0, §10, §15, §21, Part B; ADR-0015; feature 011 |
+| Reachability acceptance AC-6 *(v1.2)* | §23 (amended v1.8) |
+| Amended roadmap 010 → … → 008/009 *(v1.2)* | §22 (amended build order), §47 |
 
 ## 34. Amendments — v1.1 *(2026-10-25)*
 
@@ -341,6 +354,24 @@ v1.0 was locked on 2026-09-05. After Phase 5 shipped, a gap analysis (`docs/blue
 **Roadmap after Phase 5 (product view):** 003 AI quota governance → 004 trustworthy records → 006 coverage at scale → 005 matching for any profile → 007 application assistance → 008 frontend / 009 evals & KPIs *(BP §22 roadmap table)*.
 
 **v1.1 consistency audit:** no MVP requirement was removed or weakened; governance (FR-DISC-3/5, FR-VERIFY-2) is narrowed, not loosened; groundedness is stricter (FR-VERIFY-8); the no-100%-coverage rule (FR-DISC-7, OD-4) still holds alongside FR-DISC-9; the free-tier constraint does not override accuracy (NFR-REL-6). No contradiction found.
+
+## 35. Amendments — v1.2 *(2026-10-27)*
+
+A full-project audit (`docs/full-project-audit.md`, merged 2026-10-26) compared every requirement in this PRD with the code: of 92 IDs judged, **26 met, 50 partly met, 16 not met**. Three product decisions followed (OD-13…OD-15). They are added without changing or deleting any v1.0 or v1.1 requirement; existing IDs are unchanged and new IDs continue each series.
+
+| # | Change | Section | Decision | Why (one line) |
+|---|---|---|---|---|
+| 1 | Version, status, date, source of truth → Blueprint v1.8 | header | — | Records the amendment |
+| 2 | Features 010 and 011; amended build order | §9 | OD-13, OD-14 | Security first; genuine agents after correct tools |
+| 3 | FR-DISC-8 delivered in 010 | §14 | OD-13 | Any signed-up user can still approve sources |
+| 4 | NFR-SEC-4…7 | §26 | OD-13 | Make the Blueprint §19 controls testable product requirements |
+| 5 | AC-6 reachability | §29 | OD-15 | A capability passed its tests while no route reached it |
+| 6 | OD-13…OD-15 | §32 | — | Decision record |
+| 7 | Traceability rows | §33 | — | Each new item traces to the Blueprint |
+
+**Roadmap after the audit (product view):** 010 security hardening → 003 AI quota governance → 004 trustworthy records → 006 coverage at scale → 005 matching for any profile → 011 agent layer → 007 application assistance → 008 frontend / 009 evals & KPIs *(BP §22 amended build order)*.
+
+**v1.2 consistency audit:** no requirement was removed or weakened; NFR-SEC-4…7 make the intent of NFR-SEC-2 explicit and testable; FR-ROUTE, FR-AGENTIC and FR-APP are unchanged — feature 011 is how they get met; the free-tier constraint (C-5) still holds until 006, which runs before 011; architecture choices (C-4) stay in the Blueprint. No contradiction found.
 
 ---
 
@@ -370,6 +401,6 @@ No contradictions. Audit checks performed and passed:
 **5. Readiness**
 The PRD is internally consistent, standalone, and requires no chat history to understand. All approved decisions are incorporated with preserved requirement IDs and traceability.
 
-**PRD STATUS: FINAL / LOCKED ✅** (Stage 1 complete — consistency audit passed.) **Amended to v1.1 on 2026-10-25** (OD-9…OD-12, §34; v1.1 consistency audit passed).
+**PRD STATUS: FINAL / LOCKED ✅** (Stage 1 complete — consistency audit passed.) **Amended to v1.1 on 2026-10-25** (OD-9…OD-12, §34; v1.1 consistency audit passed). **Amended to v1.2 on 2026-10-27** (OD-13…OD-15, §35; v1.2 consistency audit passed).
 
 *Scope note:* Excludes architecture, implementation specs, and code, per request. Ready to derive/confirm the Master Blueprint and subsequent Spec-Driven artifacts in a later stage.

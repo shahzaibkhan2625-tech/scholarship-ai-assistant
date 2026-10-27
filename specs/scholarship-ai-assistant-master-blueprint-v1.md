@@ -1,4 +1,4 @@
-# Scholarship AI Assistant — Master Blueprint v1.7
+# Scholarship AI Assistant — Master Blueprint v1.8
 
 **Status:** Implementation-ready · **Audience:** Claude Code sessions + human developers · **Build method:** Spec-Driven, phase- and session-independent
 
@@ -13,6 +13,8 @@
 **v1.5 change theme:** closes the **Manager → new-Manager-session** continuity gap. Defines a third, distinct handoff artifact — the **Manager Handoff Packet** (planning state carried between Chat UI Manager sessions) — kept separate from the Worker's Completion Summary and the Worker's Workstream Brief. See §42 and §44 (v1.5 changelog).
 
 **v1.7 change theme (2026-10-25):** records the decisions taken **after Phase 5 shipped** that the v1.6 text did not cover, without redesigning the architecture or adding any agent. A **gap analysis** (`docs/blueprint-gap-analysis.md`) compared this blueprint and the PRD with the built system and found the main gaps: stored records carry little matchable data, monitoring alone exceeds the free LLM quota, source coverage is thin, and "verified" claimed more than was known. Decisions: stay on the **free LLM tier** until feature 006 (ADR-0012); **pull large-scale source expansion forward** from Phase 6 and build in the order **003 → 004 → 006 → 005 → 007 → 008/009** (ADR-0012); **restrict source approval to operators** (ADR-0012); **"verified" means confirmed on the scholarship's own official page** with deadline and eligibility, and listing-only records get a weaker **`listed`** status (ADR-0013); a **central LLM budget** with priority classes, unchanged-page skip, per-source cadence, and provider failures kept out of source health (ADR-0014, feature 003); **country names and aliases** in matching (feature 005); a temporary **360-minute monitoring interval** until feature 003 ships. See §22 (post-Phase-5 roadmap) and §46 (v1.7 changelog).
+
+**v1.8 change theme (2026-10-27):** records the outcome of a **full-project audit** (`docs/full-project-audit.md`, merged 2026-10-26) that compared every section of this blueprint and the PRD with the code, and the owner decisions taken on it. The audit found that the **five agents were built as plain functions without the OpenAI Agents SDK**, that **MCP** and **LangGraph checkpoints / human-in-the-loop pauses** were never built, and that several **§19 security controls** are missing. v1.8 adds two feature folders — **010 security hardening (runs first)** and **011 agent layer (all five agents on the OpenAI Agents SDK, after 005)** — amends the build order (**ADR-0015**), adds three process rules (entry-point rule, deviation stop rule, pre-flight; §23), and records how session handoff actually works (§42). **No agent is added or removed (still 5); no requirement is removed; nothing is deleted.** See §47.
 
 **v1.6 change theme:** integrates 5 production-grade concepts **without adding any new agent**. *Consolidations:* names the **Agent Loop & Human Gates** pattern (§7.0) and the **Harness** model+constraints+verification frame (§9.1). *New:* **Evals & the Checker** — scored grading with a CI score-regression gate, established early (§25.1, §22 Phase 0/1). *Timing:* a **minimal deployable cloud runtime** lands at end of Phase 2, not Phase 5 (§22, §21). *Excluded:* the **FDE (Forward Deployed Engineer)** positioning material is **positioning, not architecture** — it lives in a separate README/positioning doc, not this blueprint. See §45 (v1.6 changelog).
 
@@ -249,6 +251,8 @@ backend/
 
 Five agents. No sub-agents in MVP (see §8 for when one would be justified). Agents exist only where autonomous reasoning is genuine; everything else stays workflow/service/tool. One agent — Matching (§7.5) — is **guardrailed** because it underpins a fact.
 
+> **Implementation status (Amended 2026-10-27, v1.8, ADR-0015):** the full-project audit (`docs/full-project-audit.md` §1) found that none of the five agents is an agent loop. Research/Q&A and Matching make one LLM call each; Discovery and Application/Submission are plain functions; the Main Agent (§7.1) was built in Phase 1 (task T061) as a **deterministic keyword router** — justified at the time by FR-ROUTE-1 ("do not guess") — which is the rule-based router §7.1 rejects, and no API route reaches it. The OpenAI Agents SDK named in §21 and in `specs/001-scholarship-mvp/research.md` (decision D1) was never installed. **Feature 011** rebuilds all five agents on the OpenAI Agents SDK (Gemini through its OpenAI-compatible endpoint), exposes the Main Agent through a chat route, and keeps every behaviour contract in this section and in Part B: FR-ROUTE clarification (the keyword router's clarification tests become acceptance tests), the Matching guardrails a–f, dual-mode parity (agent and buttons share one implementation) and the approval gates. Existing tools, services and LangGraph workflows are reused as the agents' tools.
+
 ### 7.0 Agent Loop & Human Gates *(consolidation — v1.6; not a new capability)*
 
 The system already runs a **Loop Engineering** pattern; this subsection names it and points to where it lives — it adds nothing new.
@@ -441,6 +445,8 @@ Each node has typed input/output state; failures retry with backoff; `ground_che
 
 **Dual-mode reuse:** these workflows are the shared primitives. In **deterministic mode** a button invokes one workflow directly. In **agentic mode** the Application/Submission Agent (§7.4) decides *which* workflow to invoke next and inserts the approval gates. `submit_prep`'s gates are hard human-in-the-loop stops — the live `send` step is deferred to Phase 6 and never runs without explicit approval.
 
+*Implementation status (Amended 2026-10-27, v1.8):* eight workflows are real LangGraph graphs (`app_plan`, `cv_gen`, `doc_pipeline`, `ingestion`, `sop_gen`, `source_validate`, `submit_prep`, `url_match`); `source_monitor` is a plain-Python deterministic workflow. **No checkpointer and no interrupt/HITL pause exists in any of them**: the `submit_prep` approval gates are a database lookup, and `url_match` has no `normalize` node. Checkpointing, HITL pauses, the `url_match` `normalize` node and the invalid-JSON retry of §11 are built in **feature 011**, together with the agents that rely on them.
+
 ---
 
 ## 11. Tool Architecture
@@ -564,6 +570,8 @@ Application agent  ─┘
 - **Not MCP:** internal DB/vector access, matching, generation — in-process.
 - MCP + connectors exist because official-source freshness + multi-channel coverage are hard product requirements (§32, §30), not to say "we use MCP."
 
+*Implementation status (Amended 2026-10-27, v1.8):* **MCP was not built.** `official_fetch` and `web_fetch` are in-process HTTP connectors; `search` raises `NotImplementedError` and has no caller; no MCP provider was chosen (A5 still open). The MCP fetch/search servers are chosen and wired in **feature 011**, where the Research/Q&A and Discovery agents need them; registry governance (§29) applies to every MCP call.
+
 ---
 
 ## 16. Document, CV & SOP Subsystems
@@ -637,6 +645,8 @@ Deterministic rules evaluate structured criteria (nationality, GPA threshold, GR
 
 Auth · authorization · **user isolation (every query scoped by `user_id`)** · secure file handling · secrets via env/secret manager · API-key protection · input validation (Pydantic) · access control · structured logging · least-privilege DB. MVP-appropriate now; the `user_id` discipline makes SaaS isolation enforceable without rework. One user's data must never be reachable by another — enforced at the repository layer.
 
+*Implementation status (Amended 2026-10-27, v1.8, ADR-0015):* per-user isolation holds (repositories filter by `user_id`). The audit (`docs/full-project-audit.md` §8 and Part 4) and read-only checks of the VM and database found these §19 controls missing: **no authorization roles** — any signed-up user can approve sources and start monitoring runs (PRD FR-DISC-8); **no address check on user-supplied URLs** in URL match and source approval, so a request can reach internal addresses such as `169.254.169.254` (the guard from ADR-0010 is used only by candidate validation); **the application connects as the database owner** (`neondb_owner`: owns every table, can create roles, bypasses row security) instead of a least-privilege role; **no password rules** and no token-secret strength check; **no upload size or type limit**; **no `audit_log`** (§14); and **email alerts are never sent** because SMTP is not configured on the server (the code exists). These are closed in **feature 010, which runs before every other remaining feature**. The SSRF *redirect* residual risk accepted in ADR-0010 / ADR-0011 stays accepted for candidate validation.
+
 ---
 
 ## 20. Authentication Design
@@ -663,6 +673,8 @@ MVP: email/password, hashed (bcrypt/argon2), JWT access tokens, Signup/Login/Log
 *Deployment timing (v1.6, updated):* Docker packages the **backend** app (local parity from Phase 0). The **managed-DB/vector** part of the "leave the laptop early" goal was pulled forward: **PostgreSQL (Neon)** and **Qdrant Cloud** are both managed cloud services from **Phase 0**, not local containers — this partially resolves the earlier ⚠️ NOT YET DEFINED provider choice for DB/vector. A **minimal cloud runtime for the backend app itself** (containerized app + public endpoint + managed object storage) still lands at **end of Phase 2** (§22); **full production hardening = Phase 5**, **SaaS-scale managed infra = Phase 6**. Backend-hosting provider + object storage: ⚠️ NOT YET DEFINED — needs decision.
 
 *LLM provider & quota (Amended 2026-10-25, v1.7):* generation runs on **Google Gemini (`gemini-2.5-flash`) on the free tier**, with an **observed limit of about 20 requests/day per project** (quota is per project, not per API key). The project stays on the free tier until feature 006, where the paid-tier decision is taken (**ADR-0012**). All LLM calls pass through **one central budget** (ADR-0014, feature 003). *Drift to reconcile:* the implementation also calls Gemini for embeddings (live smoke test `test_gemini_embedding_reachable`), which departs from A2 and the Hugging Face row above; the decision is recorded under §46 ⚠️.
+
+*Agent framework (Amended 2026-10-27, v1.8, ADR-0015):* the OpenAI Agents SDK row above was **not implemented in Phases 1–5** — `backend/pyproject.toml` has no `openai-agents` dependency (first flagged in `specs/002-source-monitoring-hardening/research.md`, but no decision was recorded then). The row stands: **feature 011** builds all five agents on the OpenAI Agents SDK, using Gemini through its OpenAI-compatible endpoint, while LangGraph stays the workflow engine and LangChain the tools/RAG glue. The LangChain dependency is declared but not yet imported anywhere; 011 decides where it is genuinely used. The embeddings-provider question (§46 ⚠️ 2) is decided in the **004** spec.
 
 ---
 
@@ -732,6 +744,23 @@ After Phase 5 each new capability is a **numbered spec-kit feature folder** (`sp
 | 5 | **007 application-assistance** | Complete the human-approved application path | Depends on records and matching | not started |
 | 6 | **008 frontend**, **009 evals & KPIs** | React + TypeScript UI; measured KPIs | UI and measurement over a trustworthy core | not started |
 
+#### Amended build order — 2026-10-27 *(v1.8, ADR-0015)*
+
+After the full-project audit two feature folders are added and the order is amended. **Build order: 010 → 003 → 004 → 006 → 005 → 011 → 007 → 008/009.** The table above is kept as the v1.7 record; this table supersedes its order. Features are specified, planned, tasked and implemented **one at a time**, each starting from the code as it is at that moment.
+
+| Order | Feature | Scope added or confirmed by the audit (short) | Why here | Status (2026-10-27) |
+|---|---|---|---|---|
+| 1 | **010 security-hardening** *(new)* | Operator role and the **minimal** operator restriction on source approve/reject and monitoring runs (moved here from 004); address check on user-supplied URLs (URL match, source approval); least-privilege database role for the app; password rules and token-secret strength; upload size/type limits; `audit_log`; rollback after database errors; SMTP configured on the server; deploy current `main` to the VM | The server is public and these risks exist today | not started |
+| 2 | **003 quota-governance** | As in v1.7, plus audit findings: the discovery cache is defeated by ingestion's own log rows; LLM failures in discovery leave no trace; every LLM route answers 503, not 500, when the quota is spent. Its spec, plan and tasks predate the audit and are updated before implementation | Every later feature adds LLM load | spec, plan, tasks, ADR-0014 done (pre-audit); not implemented |
+| 3 | **004 trustworthy-scholarship-records** | As in v1.7 (operator restriction moved to 010), plus: funding value dropped by the normalizer; closed/expired never set; URL extraction labels its own output "verified"; duplicates; discovered records not indexed for Q&A; Qdrant chunks pile up; evidence snippet; dormant conflict policy; alert gaps; ingestion backoff; `www.` candidate duplicates; T140; embeddings decision | Matching, Q&A, alerts and agents are only as good as the record | not started |
+| 4 | **006 source-coverage-at-scale** | As in v1.7, plus: robots/source rules actually enforced; coverage counts only sources actually fetched; universities/providers coverage; all query dimensions; search channel within (or by amending) ADR-0005; **paid-tier decision** | Owner's coverage goal (ADR-0012) | not started |
+| 5 | **005 match-any-profile** | As in v1.7, plus: "Possibly" verdict reachable; exclusions change the verdict; "Inferred" outcome; soft-evidence check; required documents and remaining actions filled; latest match only; missing test scores give unknown, not fail; profile fields (PRD FR-PROFILE-2); semantic search; free-text GPA values | Correct verdicts before agents use them | not started |
+| 6 | **011 agent-layer** *(new)* | All five agents on the OpenAI Agents SDK; Main Agent through a chat route with FR-ROUTE clarification; Q&A live fetch and numeric grounding; MCP; LangGraph checkpoints and HITL pauses; per-intent response schemas with next action; `url_match` normalize node; invalid-JSON retry | Agents need correct tools (003–005) and the paid-tier decision (006) | not started |
+| 7 | **007 application-assistance** | As in v1.7, plus: CV/SOP grounding accepts requirement text as a user fact (fix within ADR-0003); empty drafts pass; SOP questions never created; Europass format; download routes; other material types; due dates; the Application agent requests missing documents and asks for approval at each step | Builds on the 011 agents | not started |
+| 8 | **008 frontend**, **009 evals & KPIs** | As in v1.7, plus: long operations as background jobs (A7); KPI-3…6 exposed; checker-accuracy, extraction, discovery and verification evals; RAG tests; ratified eval thresholds; real-model evals | UI and measurement over a trustworthy core | not started |
+
+A small **housekeeping** change (no spec, no new capability) runs before 010: correct the task checkboxes the audit found wrong, add `GEMINI_API_KEY` to `.env.example`, fix the Deep CI workflow settings, and run database tests on a disposable local Postgres instead of the shared database.
+
 ---
 
 ## 23. Spec-Driven Development Model
@@ -745,6 +774,11 @@ specs/
   adr/                 # architecture decision records
 ```
 Flow: **Requirement → Spec → Design → Implementation → Tests → Acceptance → Verification.** Each acceptance criterion traces to a requirement id; each GitHub issue cites its spec section; implementation PRs reference the issue + spec. A phase is "done" only when its spec's acceptance table is fully green.
+
+*As practised (Amended 2026-10-27, v1.8, ADR-0015):* the repo uses spec-kit feature folders `specs/00N-<name>/` (spec, plan, research, data-model, contracts, tasks) with ADRs in `adr/` at the repo root, not the `phase-N/` layout above. Three rules apply to every feature spec from 010 onward:
+1. **Entry-point rule** — every user-facing capability is reachable from an entry point (an API route, the scheduler, or an operator CLI command) and has a test that starts from that entry point; internal helpers must be called by something reachable. *(The Phase 1 Main Agent passed its tests while no route reached it.)*
+2. **Deviation stop rule** — if research finds that the code or plan differs from this blueprint or the PRD, work stops and the owner decides before anything is built, and the decision is recorded here and in the PRD. *(The missing OpenAI Agents SDK was noticed in 002 research, but no decision was taken.)*
+3. **Pre-flight** — before `/sp.specify`, the manager reads the related specs, ADRs and prior sessions; the owner verifies the relevant audit findings with read-only commands; assumptions are listed and approved.
 
 ---
 
@@ -856,6 +890,9 @@ No new agent; evals are a verification/CI concern (harness §9.1), implemented a
 - **A16 (v1.7, ADR-0014):** every LLM call goes through **one central budget** with priority classes (user-facing, one-off backfill, scheduled monitoring, candidate validation) and a reserve for user-facing work. Background work is deferred, never failed, when the reserve is reached; students get a clear "temporarily unavailable, try after <time>" answer, never a server error or a false "not eligible". Provider failures (quota, outage, unparseable response) never mark a source as failing.
 - **A17 (v1.7, ADR-0012):** source approval is restricted to **operators** (not any logged-in user); minimal restriction in feature 004, fuller roles and a review queue in feature 006. A10 (human-governed approval) is unchanged.
 - **A18 (v1.7):** A11 ("small seed registry") still describes the MVP, but **large-scale expansion is now scheduled** as feature 006 instead of Phase 6 (ADR-0012).
+- **A19 (v1.8, ADR-0015):** all **five** agents are implemented on the **OpenAI Agents SDK** (as §21 and `specs/001-scholarship-mvp/research.md` D1 state), with Gemini through its OpenAI-compatible endpoint, in feature 011. LangGraph remains the workflow engine and LangChain the tools/RAG glue. Behaviour contracts (§7, Part B) are unchanged.
+- **A20 (v1.8, ADR-0015):** the security gaps against §19 are closed in feature **010, before** any other remaining feature. The **minimal** operator restriction of A17 moves from 004 to 010; fuller roles and a review queue stay in 006.
+- **A21 (v1.8):** the entry-point rule, the deviation stop rule and the pre-flight (§23) apply to every feature spec from 010 onward.
 
 ---
 
@@ -894,6 +931,8 @@ No new agent; evals are a verification/CI concern (harness §9.1), implemented a
 | **v1.1** Monitoring designed, deferred to later phase | ✅ | §35, §22-P5 |
 | **v1.1** No new agent added; discovery stays one agent | ✅ | §7.3, §9 |
 | **v1.3** Matching upgraded to guardrailed agent; hard constraints rule-locked; agent count now 5 | ✅ | §7.5, §9, §18 |
+
+*Audit note (Amended 2026-10-27, v1.8):* the ✅ marks above are design-time claims. The full-project audit checked all 31 against the code, and the code agrees with 11 of them (`docs/full-project-audit.md` P2.2, rows B-60…B-90, and §17 item 9). The remaining gaps are scheduled in the §22 amended build order.
 
 ---
 
@@ -1076,6 +1115,8 @@ Every major capability, explicitly labeled. **MVP** = built first for personal u
 | Large-scale source/country expansion | **Future/Advanced (Phase 6)** → *amended v1.7: pulled forward to feature 006 (ADR-0012)* |
 | LLM quota governance + cost-aware monitoring *(v1.7)* | **Production (feature 003, before further features)** |
 | Official-page verification + `listed` status *(v1.7)* | **Production (feature 004)** |
+| Security hardening against §19 (roles, URL address check, least-privilege DB, credential and upload rules, audit log) *(v1.8)* | **Production (feature 010, first)** |
+| Agent layer on the OpenAI Agents SDK (five agents, chat route, MCP, checkpoints/HITL) *(v1.8)* | **Re-implementation of the MVP / Post-MVP agent capabilities (feature 011)** |
 | Live approval-gated portal submission | **Future/Advanced (Phase 6)** |
 | SaaS multi-tenancy, billing, quotas | **Future/Advanced (Phase 6)** |
 
@@ -1327,6 +1368,8 @@ NOT INCLUDED (by design): full prior conversation / transcripts.
 
 **Principle:** the Manager Handoff Packet answers *"what's true now + what to plan next"* for a **planner**; the Completion Summary answers *"what did the worker just verify"* for the **manager to absorb**. The packet **absorbs** the latest Completion Summary; it does not replace or duplicate the Brief. Minimum sufficient context, never maximum.
 
+*As practised (Amended 2026-10-27, v1.8):* the three artifacts exist in practice, but not as files under `specs/handoffs/`. The **Workstream Brief** is the feature's `tasks.md` plus the manager's CLI prompt for each slice; the **Completion Summary** is the worker's final report, pasted into the manager chat; the **Manager Handoff Packet** is the handoff prompt written at the end of each phase or session and pasted into the next manager chat (Phase 1→2, 2→3, 3→4, 4→5). No `specs/handoffs/` folder is required; the audit's "missing" finding for these artifacts (B-152…B-154) is resolved by this note, not by new files.
+
 ---
 
 ## 43. v1.4 Revision Notes
@@ -1439,6 +1482,51 @@ These decisions were taken after Phase 5 shipped, from a gap analysis of this bl
 ---
 
 *End of Master Blueprint v1.7 — 5 agents; post-Phase-5 decisions recorded (free-tier governance, verified vs listed, operator approval, country aliases, roadmap 003–009).*
+
+## 47. v1.8 Revision Notes — full-project audit and the security / agent plan *(2026-10-27)*
+
+These changes follow the **full-project audit** (`docs/full-project-audit.md`, Parts 1–4, merged to `main` on 2026-10-26: 595 marked rows; PRD IDs Met 26 / Partly 50 / Not met 16), read-only checks of the VM, database and CI run by the owner on 2026-10-26/27, and a review of this blueprint, the PRD, all ADRs and the prior phase sessions. The reasoning is in **ADR-0015**.
+
+| # | Change | Modified/New | Section | Feature | Why (one line) | Source |
+|---|---|---|---|---|---|---|
+| 1 | v1.8 change theme | Modified | header | — | Records the audit outcome and the plan | audit |
+| 2 | Implementation status of the five agents | Modified | §7 | 011 | Agents were plain functions; the SDK was never installed | audit §1 |
+| 3 | Checkpoints/HITL and `normalize` node not built | Modified | §10 | 011 | Workflows have no save/resume or pause | audit §2 |
+| 4 | MCP not built | Modified | §15 | 011 | No MCP anywhere in the code | audit §3 |
+| 5 | Missing §19 controls | Modified | §19 | 010 | The live server is exposed to these gaps | audit §8, VM/DB checks |
+| 6 | Agent framework status; embeddings decision moved to 004 | Modified | §21 | 011, 004 | The §21 row was not implemented | audit §1, 002 research |
+| 7 | Amended build order with 010 and 011 | **New** | §22 | 010, 011 | Security first; agents after correct tools | ADR-0015 |
+| 8 | Folder layout as practised; entry-point, deviation-stop and pre-flight rules | Modified | §23 | all | Prevent "built but unreachable" and silent deviations | audit, ADR-0015 |
+| 9 | Assumptions A19–A21 | **New** | §27 | — | SDK for all five agents; security first; process rules | ADR-0015 |
+| 10 | Audit note on the self-audit table | Modified | §28 | — | 31 ✅ claims; the code agrees with 11 | audit P2.2 |
+| 11 | Labels for 010 and 011 | Modified | §36 | 010, 011 | Labels must match the order | ADR-0015 |
+| 12 | Handoff artifacts as practised | Modified | §42 | — | They exist as chat prompts, not repo files | owner, 2026-10-27 |
+
+### Consistency audit (v1.8)
+- **Agent count stays 5** — 011 re-implements the same five agents; no agent is added; the §8 sub-agent rule is unchanged. ✅
+- **Behaviour contracts kept** — §7, the §7.5 guardrails a–f, dual-mode parity, the approval gates and Part B are unchanged; only the implementation framework is brought back in line with §21. ✅
+- **FR-ROUTE kept** — the Main Agent on the SDK must still ask for clarification instead of guessing; the Phase 1 router's clarification tests become its acceptance tests. ✅
+- **Governance kept and narrowed** — the operator restriction arrives earlier (010); A10 human approval is unchanged. ✅
+- **Free-tier stance kept** — 011 runs after 006, where the paid-tier decision is taken (ADR-0012); 003 governs every LLM call before that. ✅
+- **ADRs respected** — ADR-0003 (lexical grounding), ADR-0004 (append-only approvals), ADR-0005 (link-based candidate discovery), ADR-0007 (alert triggers) and ADR-0010/0011 (SSRF redirect residual risk) remain in force; ADR-0012's build order is amended by ADR-0015. ✅
+- **Nothing deleted** — every v1.7 sentence and the v1.7 roadmap table are kept; amendments are added beside them with a date and a source. ✅
+
+### ⚠️ NOT YET DEFINED — needs decision (introduced/confirmed by v1.8)
+1. **Paid LLM tier** — still at feature 006 (ADR-0012); 011 depends on it.
+2. **Embeddings provider** — decided in the 004 spec (§46 ⚠️ 2).
+3. **DAAD, Stipendium Hungaricum, KAUST** — 004 or 006 spec (§46 ⚠️ 3).
+4. **EACEA listing extraction** — 004 (§46 ⚠️ 4).
+5. **SMTP provider** for email alerts, and **how the least-privilege database role is created and used** — 010 spec.
+6. **MCP fetch/search server providers** (A5) — 011 spec.
+7. **Search channel vs ADR-0005** — 006 spec.
+8. **Real Gemini key in Deep CI** (weekly live smoke tests) — housekeeping.
+9. **Eval thresholds and checker-accuracy bar** (§25.1) — 009 spec.
+
+**Net effect (v1.8):** the blueprint now states honestly what the audit found, brings the OpenAI Agents SDK back as the framework for all five agents (feature 011), schedules the missing §19 controls first (feature 010), amends the build order to **010 → 003 → 004 → 006 → 005 → 011 → 007 → 008/009**, and adds three process rules so a capability cannot again count as done while unreachable. No agent, phase number or requirement ID was removed. Agent count remains **5**.
+
+---
+
+*End of Master Blueprint v1.8 — 5 agents (rebuilt on the OpenAI Agents SDK in 011); audit-driven plan recorded: security first (010), agents after matching (011), process rules (§23), handoff as practised (§42).*
 
 <!-- The section below is a separate document type (PRD). It defines WHAT/WHY at the product and agent-behavior level. It does not replace or duplicate the architecture defined above. -->
 

@@ -19,7 +19,7 @@ Help students find, understand, and apply to scholarships they're actually eligi
 - **Backend:** FastAPI (Python 3.12)
 - **Database:** PostgreSQL via Neon
 - **Vector store:** Qdrant Cloud
-- **Agent orchestration:** LangGraph + LangChain (Gemini via google-genai; no OpenAI Agents SDK)
+- **Agent orchestration:** OpenAI Agents SDK for the five agents (rebuilt in feature 011, ADR-0015); LangGraph for workflows; LangChain for tools/RAG; LLM: Gemini (free tier until feature 006)
 - **Infra:** Docker, GitHub Actions CI
 - **Frontend (later phase):** React + TypeScript
 
@@ -34,4 +34,4 @@ These are non-negotiable and apply across all agents and phases:
 
 ## Status
 
-Phases 0–5 complete and deployed (cloud VM, HTTPS). Feature 003 (LLM quota governance) is next.
+Phases 0–5 complete and deployed (cloud VM, HTTPS). Full-project audit merged 2026-10-26. Build order (ADR-0015): 010 security → 003 quota → 004 records → 006 sources → 005 matching → 011 agents → 007 application → 008/009. Feature 010 is next, after a housekeeping change.
