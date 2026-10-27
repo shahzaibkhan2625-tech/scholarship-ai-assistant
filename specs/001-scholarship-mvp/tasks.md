@@ -60,85 +60,85 @@ These are small, reversible scheduling calls, not architectural changes — flag
 
 **⚠️ Blocks US3 entirely (RAG/grounding) and is a prerequisite for US2's grounded extraction; run before story work.**
 
-- [ ] T012 [P] Shared `ValueStatus`/`Confidence`/`FieldValue` schema types (constitution Principle I vocabulary) in `backend/app/schemas/common.py`
-- [ ] T013 [P] Qdrant Cloud client wrapper in `backend/app/data/vectors/qdrant_client.py`
-- [ ] T014 [P] RAG document loaders in `backend/app/rag/loaders.py`
-- [ ] T015 [P] RAG chunking in `backend/app/rag/chunk.py`
-- [ ] T016 [P] Embedding tool wrapper in `backend/app/tools/embed.py`
-- [ ] T017 RAG embedding pipeline (ingests via T014/T015, embeds via T016) in `backend/app/rag/embed.py`
-- [ ] T018 RAG retrieval over Qdrant (depends on T013) in `backend/app/rag/retrieve.py`
-- [ ] T019 [P] `ground_check` tool (used by Q&A now; reused by CV/SOP generation in Phase 3) in `backend/app/tools/ground_check.py`
-- [ ] T020 RAG grounding-check node (depends on T018, T019) in `backend/app/rag/grounding.py`
+- [X] T012 [P] Shared `ValueStatus`/`Confidence`/`FieldValue` schema types (constitution Principle I vocabulary) in `backend/app/schemas/common.py`
+- [X] T013 [P] Qdrant Cloud client wrapper in `backend/app/data/vectors/qdrant_client.py`
+- [X] T014 [P] RAG document loaders in `backend/app/rag/loaders.py`
+- [X] T015 [P] RAG chunking in `backend/app/rag/chunk.py`
+- [X] T016 [P] Embedding tool wrapper in `backend/app/tools/embed.py`
+- [X] T017 RAG embedding pipeline (ingests via T014/T015, embeds via T016) in `backend/app/rag/embed.py`
+- [X] T018 RAG retrieval over Qdrant (depends on T013) in `backend/app/rag/retrieve.py`
+- [X] T019 [P] `ground_check` tool (used by Q&A now; reused by CV/SOP generation in Phase 3) in `backend/app/tools/ground_check.py`
+- [X] T020 RAG grounding-check node (depends on T018, T019) in `backend/app/rag/grounding.py`
 
 **Checkpoint**: RAG/grounding + vector store ready — US3 can now be built; US1/US2 do not depend on this subsection.
 
 ### Tests for User Story 1 — Profile (write first, must fail before implementation)
 
-- [ ] T021 [P] [US1] Contract test: `GET/PUT /profile`, `POST /profile/criteria`, `POST /profile/import-cv` in `backend/tests/api/test_profile_api.py`
-- [ ] T022 [P] [US1] Integration test covering spec.md US1 Acceptance Scenarios 1–4 (hard-constraint save, partial update, missing-field-not-silently-omitted, criterion reclassification) in `backend/tests/integration/test_profile_flow.py`
-- [ ] T023 [P] [US1] Unit test: `missing_info` tracking + `profile_criteria.kind` validation (hard_constraint/soft_preference/exclusion) in `backend/tests/services/test_profile_service.py`
+- [X] T021 [P] [US1] Contract test: `GET/PUT /profile`, `POST /profile/criteria`, `POST /profile/import-cv` in `backend/tests/api/test_profile_api.py`
+- [X] T022 [P] [US1] Integration test covering spec.md US1 Acceptance Scenarios 1–4 (hard-constraint save, partial update, missing-field-not-silently-omitted, criterion reclassification) in `backend/tests/integration/test_profile_flow.py`
+- [X] T023 [P] [US1] Unit test: `missing_info` tracking + `profile_criteria.kind` validation (hard_constraint/soft_preference/exclusion) in `backend/tests/services/test_profile_service.py`
 
 ### Implementation for User Story 1
 
-- [ ] T024 [US1] SQLAlchemy + Pydantic models for `profiles`, `education_records`, `test_scores`, `experience`, `profile_criteria`, `missing_info` in `backend/app/models/profile.py`
-- [ ] T025 [US1] Alembic migration for profile tables (depends on T024) in `backend/migrations/versions/{rev}_create_profile_tables.py`
-- [ ] T026 [US1] Profile repository, `user_id`-scoped (depends on T025) in `backend/app/data/repositories/profile_repo.py`
-- [ ] T027 [US1] Profile service — CRUD, criteria classify/reclassify, missing-info computation (depends on T026) in `backend/app/services/profile.py`
-- [ ] T028 [US1] Profile request/response schemas (depends on T024) in `backend/app/schemas/profile.py`
-- [ ] T029 [P] [US1] `extract_profile` tool — CV-import field suggestions, not auto-saved (FR contract: suggestions only) in `backend/app/tools/extract_profile.py`
-- [ ] T030 [US1] Profile API endpoints: `GET/PUT /profile`, `POST /profile/criteria`, `POST /profile/import-cv` (depends on T027, T028, T029) in `backend/app/api/profile.py`
-- [ ] T031 [US1] Wire profile router into the app (depends on T030) in `backend/app/main.py`
+- [X] T024 [US1] SQLAlchemy + Pydantic models for `profiles`, `education_records`, `test_scores`, `experience`, `profile_criteria`, `missing_info` in `backend/app/models/profile.py`
+- [X] T025 [US1] Alembic migration for profile tables (depends on T024) in `backend/migrations/versions/{rev}_create_profile_tables.py`
+- [X] T026 [US1] Profile repository, `user_id`-scoped (depends on T025) in `backend/app/data/repositories/profile_repo.py`
+- [X] T027 [US1] Profile service — CRUD, criteria classify/reclassify, missing-info computation (depends on T026) in `backend/app/services/profile.py`
+- [X] T028 [US1] Profile request/response schemas (depends on T024) in `backend/app/schemas/profile.py`
+- [X] T029 [P] [US1] `extract_profile` tool — CV-import field suggestions, not auto-saved (FR contract: suggestions only) in `backend/app/tools/extract_profile.py`
+- [X] T030 [US1] Profile API endpoints: `GET/PUT /profile`, `POST /profile/criteria`, `POST /profile/import-cv` (depends on T027, T028, T029) in `backend/app/api/profile.py`
+- [X] T031 [US1] Wire profile router into the app (depends on T030) in `backend/app/main.py`
 
 **Checkpoint**: US1 independently functional and testable (T021–T023 pass) per spec.md's Independent Test.
 
 ### Tests for User Story 2 — Match a scholarship by URL (write first, must fail before implementation)
 
-- [ ] T032 [P] [US2] Contract test: `POST /scholarships/match-url`, `POST /scholarships/{id}/match`, `GET /matches` in `backend/tests/api/test_matching_api.py`
-- [ ] T033 [P] [US2] Integration test covering US2 Acceptance Scenarios 1–4 (full verdict with evidence, hard-fail overrides soft strength, unknown-not-assumed-pass/fail, unreachable-URL reported explicitly, never as "not eligible") in `backend/tests/integration/test_url_match_flow.py`
-- [ ] T034 [US2] **Hard-constraint verdict-correctness test matrix** — fixed set of (known profile × known scholarship) fixture pairs → expected `eligibility_verdict`; constitution Principle II + spec.md SC-007: 100% of hard-constraint failures correctly reported as ineligible, zero overrides by soft-criteria strength; **build-breaking on failure, not a warning** — in `backend/tests/services/test_hard_constraints_matrix.py`
-- [ ] T035 [P] [US2] Guardrail-violation tests: Matching-agent output contradicting a hard-constraint result is rejected; a matched/failed criterion lacking an evidence reference is rejected; the agent has no web/search/fetch tool bound — in `backend/tests/agents/test_matching_guardrails.py`
-- [ ] T036 [P] [US2] Unit test: ranking never reorders past a hard-constraint failure (deterministic ranking formula, not agent-controlled) in `backend/tests/services/test_ranking.py`
+- [X] T032 [P] [US2] Contract test: `POST /scholarships/match-url`, `POST /scholarships/{id}/match`, `GET /matches` in `backend/tests/api/test_matching_api.py`
+- [X] T033 [P] [US2] Integration test covering US2 Acceptance Scenarios 1–4 (full verdict with evidence, hard-fail overrides soft strength, unknown-not-assumed-pass/fail, unreachable-URL reported explicitly, never as "not eligible") in `backend/tests/integration/test_url_match_flow.py`
+- [X] T034 [US2] **Hard-constraint verdict-correctness test matrix** — fixed set of (known profile × known scholarship) fixture pairs → expected `eligibility_verdict`; constitution Principle II + spec.md SC-007: 100% of hard-constraint failures correctly reported as ineligible, zero overrides by soft-criteria strength; **build-breaking on failure, not a warning** — in `backend/tests/services/test_hard_constraints_matrix.py`
+- [X] T035 [P] [US2] Guardrail-violation tests: Matching-agent output contradicting a hard-constraint result is rejected; a matched/failed criterion lacking an evidence reference is rejected; the agent has no web/search/fetch tool bound — in `backend/tests/agents/test_matching_guardrails.py`
+- [X] T036 [P] [US2] Unit test: ranking never reorders past a hard-constraint failure (deterministic ranking formula, not agent-controlled) in `backend/tests/services/test_ranking.py`
 
 ### Implementation for User Story 2
 
-- [ ] T037 [P] [US2] SQLAlchemy + Pydantic models: `scholarships`, `universities`, `programs`, `scholarship_fields` in `backend/app/models/scholarship.py`
-- [ ] T038 [P] [US2] SQLAlchemy + Pydantic models: `requirements` in `backend/app/models/requirement.py`
-- [ ] T039 [P] [US2] SQLAlchemy + Pydantic models: `funding_details` in `backend/app/models/funding.py`
-- [ ] T040 [P] [US2] SQLAlchemy + Pydantic models: `matches` in `backend/app/models/match.py`
-- [ ] T041 [US2] Alembic migration for scholarship/requirement/funding/match tables (depends on T037–T040) in `backend/migrations/versions/{rev}_create_scholarship_matching_tables.py`
-- [ ] T042 [P] [US2] Scholarship repository (depends on T041) in `backend/app/data/repositories/scholarship_repo.py`
-- [ ] T043 [P] [US2] Match repository, immutable append-only writes (depends on T041) in `backend/app/data/repositories/match_repo.py`
-- [ ] T044 [P] [US2] `web_fetch` tool — official-page fetch with explicit failure reporting (never silently "not eligible") in `backend/app/tools/web_fetch.py`
-- [ ] T045 [P] [US2] `extract_requirements` tool — LLM-assisted extraction of requirements/funding/deadline from a fetched page in `backend/app/tools/extract_requirements.py`
-- [ ] T046 [US2] `hard_constraints` service — deterministic GPA/degree/nationality/deadline/mandatory-test evaluation (depends on T038, T039) in `backend/app/services/hard_constraints.py`
-- [ ] T047 [US2] `ranking` service — deterministic ranking formula, agent supplies inputs only (depends on T046) in `backend/app/services/ranking.py`
-- [ ] T048 [US2] `MatchVerdict`/`CriterionOutcome` schemas — fixed, schema-locked, no free-text verdict (depends on T040) in `backend/app/schemas/match.py`
-- [ ] T049 [US2] `url_match` LangGraph workflow: fetch → extract → verify → `hard_constraints` → Matching agent → persist (depends on T044, T045, T046) in `backend/app/workflows/url_match/graph.py`
-- [ ] T050 [US2] Matching agent — guardrailed: schema-locked output, evidence-required, no-guess, no web/fetch tools, hard-constraint input is read-only (depends on T046, T048) in `backend/app/agents/matching/agent.py`
-- [ ] T051 [US2] URL-match API endpoint: `POST /scholarships/match-url` (depends on T049) in `backend/app/api/url_match.py`
-- [ ] T052 [US2] Matching API endpoints: `POST /scholarships/{id}/match`, `GET /matches` (depends on T050, T047, T043) in `backend/app/api/matching.py`
-- [ ] T053 [US2] Wire `url_match` + `matching` routers into the app (depends on T051, T052) in `backend/app/main.py`
+- [X] T037 [P] [US2] SQLAlchemy + Pydantic models: `scholarships`, `universities`, `programs`, `scholarship_fields` in `backend/app/models/scholarship.py`
+- [X] T038 [P] [US2] SQLAlchemy + Pydantic models: `requirements` in `backend/app/models/requirement.py`
+- [X] T039 [P] [US2] SQLAlchemy + Pydantic models: `funding_details` in `backend/app/models/funding.py`
+- [X] T040 [P] [US2] SQLAlchemy + Pydantic models: `matches` in `backend/app/models/match.py`
+- [X] T041 [US2] Alembic migration for scholarship/requirement/funding/match tables (depends on T037–T040) in `backend/migrations/versions/{rev}_create_scholarship_matching_tables.py`
+- [X] T042 [P] [US2] Scholarship repository (depends on T041) in `backend/app/data/repositories/scholarship_repo.py`
+- [X] T043 [P] [US2] Match repository, immutable append-only writes (depends on T041) in `backend/app/data/repositories/match_repo.py`
+- [X] T044 [P] [US2] `web_fetch` tool — official-page fetch with explicit failure reporting (never silently "not eligible") in `backend/app/tools/web_fetch.py`
+- [X] T045 [P] [US2] `extract_requirements` tool — LLM-assisted extraction of requirements/funding/deadline from a fetched page in `backend/app/tools/extract_requirements.py`
+- [X] T046 [US2] `hard_constraints` service — deterministic GPA/degree/nationality/deadline/mandatory-test evaluation (depends on T038, T039) in `backend/app/services/hard_constraints.py`
+- [X] T047 [US2] `ranking` service — deterministic ranking formula, agent supplies inputs only (depends on T046) in `backend/app/services/ranking.py`
+- [X] T048 [US2] `MatchVerdict`/`CriterionOutcome` schemas — fixed, schema-locked, no free-text verdict (depends on T040) in `backend/app/schemas/match.py`
+- [ ] T049 [US2] `url_match` LangGraph workflow: fetch → extract → verify → `hard_constraints` → Matching agent → persist (depends on T044, T045, T046) in `backend/app/workflows/url_match/graph.py` — Partly (audit P2.3: the graph has no verify node)
+- [X] T050 [US2] Matching agent — guardrailed: schema-locked output, evidence-required, no-guess, no web/fetch tools, hard-constraint input is read-only (depends on T046, T048) in `backend/app/agents/matching/agent.py`
+- [X] T051 [US2] URL-match API endpoint: `POST /scholarships/match-url` (depends on T049) in `backend/app/api/url_match.py`
+- [X] T052 [US2] Matching API endpoints: `POST /scholarships/{id}/match`, `GET /matches` (depends on T050, T047, T043) in `backend/app/api/matching.py`
+- [X] T053 [US2] Wire `url_match` + `matching` routers into the app (depends on T051, T052) in `backend/app/main.py`
 
 **Checkpoint**: US2 independently functional; verdict-correctness matrix (T034) and guardrail tests (T035) green.
 
 ### Tests for User Story 3 — Grounded Q&A (write first, must fail before implementation)
 
-- [ ] T054 [P] [US3] Contract test: `POST /scholarships/{scholarship_id}/qa` in `backend/tests/api/test_qa_api.py`
-- [ ] T055 [P] [US3] Integration test covering US3 Acceptance Scenarios 1–4 (verified answer with citation, unknown-not-guessed, inferred-labeled-not-verified, unrelated question not answered as grounded fact) in `backend/tests/integration/test_qa_flow.py`
+- [X] T054 [P] [US3] Contract test: `POST /scholarships/{scholarship_id}/qa` in `backend/tests/api/test_qa_api.py`
+- [X] T055 [P] [US3] Integration test covering US3 Acceptance Scenarios 1–4 (verified answer with citation, unknown-not-guessed, inferred-labeled-not-verified, unrelated question not answered as grounded fact) in `backend/tests/integration/test_qa_flow.py`
 - [X] T056 [P] [US3] Q&A groundedness eval case (scored, added to eval harness — constitution Principle V) in `backend/evals/cases/qa_groundedness.py`
 
 ### Implementation for User Story 3
 
-- [ ] T057 [US3] `QaAnswer` schema (no persisted table — data-model.md §5) in `backend/app/schemas/qa.py`
-- [ ] T058 [US3] Research/Q&A agent — grounded via retrieve+grounding (T018/T020), labels verified/inferred/unknown, cites `source_url`/`last_verified_at` (depends on T057, T018, T020) in `backend/app/agents/research_qa/agent.py`
-- [ ] T059 [US3] Q&A API endpoint: `POST /scholarships/{scholarship_id}/qa` (depends on T058) in `backend/app/api/qa.py`
-- [ ] T060 [US3] Wire `qa` router into the app (depends on T059) in `backend/app/main.py`
+- [X] T057 [US3] `QaAnswer` schema (no persisted table — data-model.md §5) in `backend/app/schemas/qa.py`
+- [ ] T058 [US3] Research/Q&A agent — grounded via retrieve+grounding (T018/T020), labels verified/inferred/unknown, cites `source_url`/`last_verified_at` (depends on T057, T018, T020) in `backend/app/agents/research_qa/agent.py` — Partly (audit P2.3: retrieval and ground_check are used but T020 is not, and there is no escalation to a live fetch)
+- [X] T059 [US3] Q&A API endpoint: `POST /scholarships/{scholarship_id}/qa` (depends on T058) in `backend/app/api/qa.py`
+- [X] T060 [US3] Wire `qa` router into the app (depends on T059) in `backend/app/main.py`
 
 **Checkpoint**: US3 independently functional.
 
 ### Phase 1 Integration (cross-story orchestration)
 
-- [X] T061 Main Orchestrator — intent routing across profile/url-match/qa/matching; requests clarification rather than guessing on ambiguous/uncertain intent (FR-ROUTE-1..3) (depends on T030, T051, T052, T059) in `backend/app/orchestration/main_agent.py`
+- [X] T061 Main Orchestrator — intent routing across profile/url-match/qa/matching; requests clarification rather than guessing on ambiguous/uncertain intent (FR-ROUTE-1..3) (depends on T030, T051, T052, T059) in `backend/app/orchestration/main_agent.py` — Not reachable from any route; agent layer fixed in feature 011 (ADR-0015)
 - [X] T062 [P] Integration test: ambiguous and multi-capability intent routing + clarification request (Edge Cases: "find and match, then draft my SOP") in `backend/tests/integration/test_main_agent_routing.py`
 - [X] T063 Extend eval-harness config to run matching-correctness + qa-groundedness evals as a CI score-regression gate (depends on T034, T056) in `backend/evals/runner.py`, `.github/workflows/ci.yml`
 
@@ -152,11 +152,11 @@ These are small, reversible scheduling calls, not architectural changes — flag
 
 ### Tests for User Story 4 (write first, must fail before implementation)
 
-- [ ] T064 [P] [US4] Contract test: `POST /discovery` in `backend/tests/api/test_discovery_api.py`
-- [ ] T065 [P] [US4] Integration test covering US4 Acceptance Scenarios 1–5 (≥2 distinct source types with attribution, coverage summary never claims complete/100%, new source recorded as pending-not-authoritative, fetch failure logged as a gap not "no scholarships exist", conflicting sources surfaced unless the official>recent>reliable rule resolves them) in `backend/tests/integration/test_discovery_flow.py`
+- [X] T064 [P] [US4] Contract test: `POST /discovery` in `backend/tests/api/test_discovery_api.py`
+- [ ] T065 [P] [US4] Integration test covering US4 Acceptance Scenarios 1–5 (≥2 distinct source types with attribution, coverage summary never claims complete/100%, new source recorded as pending-not-authoritative, fetch failure logged as a gap not "no scholarships exist", conflicting sources surfaced unless the official>recent>reliable rule resolves them) in `backend/tests/integration/test_discovery_flow.py` — Not done (audit P2.3)
 - [X] T066 [P] [US4] Source-registry compliance tests: non-`active` `source_id` blocks fetch; a `candidate_sources` row is never joined as authoritative before `approved` (constitution Principle IV, Development Workflow gate) in `backend/tests/sources/test_source_registry_compliance.py`
-- [ ] T067 [P] [US4] Unit test: `conflict_resolution` policy (official > recent > reliable; unresolved ⇒ surfaced `conflicting`, never silently averaged) in `backend/tests/services/test_conflict_resolution.py`
-- [ ] T068 [P] [US4] Unit test: `coverage` counts/gaps computation, `claims_complete_coverage` always `false` in `backend/tests/services/test_coverage.py`
+- [X] T067 [P] [US4] Unit test: `conflict_resolution` policy (official > recent > reliable; unresolved ⇒ surfaced `conflicting`, never silently averaged) in `backend/tests/services/test_conflict_resolution.py`
+- [X] T068 [P] [US4] Unit test: `coverage` counts/gaps computation, `claims_complete_coverage` always `false` in `backend/tests/services/test_coverage.py`
 
 ### Implementation for User Story 4
 
@@ -166,25 +166,25 @@ These are small, reversible scheduling calls, not architectural changes — flag
 - [X] T072 [P] [US4] Bounded retry policy for source fetches in `backend/app/sources/retry_policy.py`
 - [X] T073 [US4] `api_connector` + `official_fetch` connector wrappers — reject any fetch whose `source_id` isn't `active` (depends on T071) in `backend/app/sources/connectors/api_connector.py`, `backend/app/sources/connectors/official_fetch.py`
 - [X] T074 [P] [US4] `official_fetch` tool, registry-governed (depends on T073) in `backend/app/tools/official_fetch.py`
-- [X] T075 [P] [US4] `search` tool — scoped to governed sources, not unrestricted web search (FR-DISC-2) in `backend/app/tools/search.py`
-- [X] T076 [P] [US4] `api_connector` tool in `backend/app/tools/api_connector.py`
-- [ ] T077 [P] [US4] `classify` tool — rules + LLM fallback for fuzzy classification in `backend/app/tools/classify.py`
-- [ ] T078 [US4] `source_registry` service — registry CRUD, active-only gating (depends on T071) in `backend/app/services/source_registry.py`
-- [ ] T079 [P] [US4] `normalize` service in `backend/app/services/normalize.py`
-- [ ] T080 [US4] `classify` service — dispatches to T077 (depends on T077) in `backend/app/services/classify.py`
-- [ ] T081 [P] [US4] `dedup` service in `backend/app/services/dedup.py`
-- [ ] T082 [P] [US4] `verification` service — freshness window, `lifecycle_status` transitions in `backend/app/services/verification.py`
-- [ ] T083 [P] [US4] `conflict_resolution` service — official > recent > reliable in `backend/app/services/conflict_resolution.py`
+- [ ] T075 [P] [US4] `search` tool — scoped to governed sources, not unrestricted web search (FR-DISC-2) in `backend/app/tools/search.py` — Partly (audit P2.3: the domain filter is real, but the backend raises NotImplementedError and nothing calls it)
+- [ ] T076 [P] [US4] `api_connector` tool in `backend/app/tools/api_connector.py` — Partly (audit P2.3: wrapper exists; no API provider is onboarded)
+- [X] T077 [P] [US4] `classify` tool — rules + LLM fallback for fuzzy classification in `backend/app/tools/classify.py`
+- [X] T078 [US4] `source_registry` service — registry CRUD, active-only gating (depends on T071) in `backend/app/services/source_registry.py`
+- [X] T079 [P] [US4] `normalize` service in `backend/app/services/normalize.py`
+- [X] T080 [US4] `classify` service — dispatches to T077 (depends on T077) in `backend/app/services/classify.py`
+- [X] T081 [P] [US4] `dedup` service in `backend/app/services/dedup.py`
+- [X] T082 [P] [US4] `verification` service — freshness window, `lifecycle_status` transitions in `backend/app/services/verification.py`
+- [X] T083 [P] [US4] `conflict_resolution` service — official > recent > reliable in `backend/app/services/conflict_resolution.py`
 - [X] T084 [US4] `coverage` service — measured summary (checked/failed/gaps) in `backend/app/services/coverage.py`
-- [X] T085 [P] [US4] `rerank` tool, optional/flagged in `backend/app/tools/rerank.py`
-- [X] T086 [US4] `source_validate` workflow — human-approval-gated candidate-source promotion (depends on T078) in `backend/app/workflows/source_validate/graph.py`
+- [X] T085 [P] [US4] `rerank` tool, optional/flagged in `backend/app/tools/rerank.py` — Not reachable from any route; agent layer fixed in feature 011 (ADR-0015)
+- [X] T086 [US4] `source_validate` workflow — human-approval-gated candidate-source promotion (depends on T078) in `backend/app/workflows/source_validate/graph.py` — Not reachable from any route; agent layer fixed in feature 011 (ADR-0015)
 - [X] T087 [US4] `ingestion` workflow — extract → normalize → dedup → verify → classify pipeline (depends on T079, T080, T081, T082, T083) in `backend/app/workflows/ingestion/graph.py`
 - [X] T088 [US4] `DiscoveryResult`/`CoverageSummary` schemas (depends on T069) in `backend/app/schemas/discovery.py`
 - [X] T089 [US4] Discovery agent — governed sources only, multi-dimension query support (depends on T087, T084, T088) in `backend/app/agents/discovery/agent.py`
 - [X] T090 [US4] Discovery API endpoint: `POST /discovery` (depends on T089) in `backend/app/api/discovery.py`
 - [X] T091 [US4] Extend orchestrator to route discovery intent (depends on T090) in `backend/app/orchestration/main_agent.py`
 - [X] T092 [US4] Wire `discovery` router into the app (depends on T090) in `backend/app/main.py`
-- [X] T135 [US4] Build listing-page extraction tool for web-access-method discovery sources (was: `official_fetch`/web sources contributed to coverage/fetch-log only, never to `results` — see Resolution note 5, now RESOLVED) — DONE. `backend/app/tools/extract_listing.py` (LLM-based extraction + deterministic non-LLM grounding check, `ground_check(threshold=1.0)`, against the cleaned source text — an ungrounded/hallucinated candidate is dropped, never silently); `backend/app/sources/connectors/official_fetch.py`'s `fetch_and_extract_listing` (two-layer cache — in-run memoization + `update_frequency`-derived cross-run TTL reusing persisted `scholarship_sources` rows — plus all `source_fetch_log`/`failing`-status writes for the extraction step, kept at the connector tier per the existing `test_discovery_guardrails.py` AST guardrails, which the agent may never bypass); `backend/app/tools/listing_fetch.py` (agent-facing tool wrapper); `backend/app/agents/discovery/agent.py` wiring. **Resolves spec.md US4 Acceptance Scenario 1 only** (ranked results across ≥2 distinct governed source types) — confirmed by one real, live-fetch end-to-end run (`backend/tests/smoke/test_discovery_listing_extraction_live.py`, `pytest -m smoke`, picked up by `deep-ci.yml`'s weekly run, not the default suite) against EACEA (international_org) and HEC Pakistan (gov)-shaped content, yielding ranked results spanning both source types with `verification_status=unverified`. **Does NOT resolve Scenario 3** (new-source discovery/`candidate_sources` promotion) — separate capability, still open. Mocked coverage: 33 tests across `test_extract_listing.py`, `test_connectors.py`, `test_discovery_agent.py`, `test_discovery_guardrails.py`.
+- [ ] T135 [US4] Build listing-page extraction tool for web-access-method discovery sources (was: `official_fetch`/web sources contributed to coverage/fetch-log only, never to `results` — see Resolution note 5, now RESOLVED) — DONE. `backend/app/tools/extract_listing.py` (LLM-based extraction + deterministic non-LLM grounding check, `ground_check(threshold=1.0)`, against the cleaned source text — an ungrounded/hallucinated candidate is dropped, never silently); `backend/app/sources/connectors/official_fetch.py`'s `fetch_and_extract_listing` (two-layer cache — in-run memoization + `update_frequency`-derived cross-run TTL reusing persisted `scholarship_sources` rows — plus all `source_fetch_log`/`failing`-status writes for the extraction step, kept at the connector tier per the existing `test_discovery_guardrails.py` AST guardrails, which the agent may never bypass); `backend/app/tools/listing_fetch.py` (agent-facing tool wrapper); `backend/app/agents/discovery/agent.py` wiring. **Resolves spec.md US4 Acceptance Scenario 1 only** (ranked results across ≥2 distinct governed source types) — confirmed by one real, live-fetch end-to-end run (`backend/tests/smoke/test_discovery_listing_extraction_live.py`, `pytest -m smoke`, picked up by `deep-ci.yml`'s weekly run, not the default suite) against EACEA (international_org) and HEC Pakistan (gov)-shaped content, yielding ranked results spanning both source types with `verification_status=unverified`. **Does NOT resolve Scenario 3** (new-source discovery/`candidate_sources` promotion) — separate capability, still open. Mocked coverage: 33 tests across `test_extract_listing.py`, `test_connectors.py`, `test_discovery_agent.py`, `test_discovery_guardrails.py`. — Partly (audit P2.3: extraction is real, but POST /discovery does not rank (J-10))
   (numbered after T130-T134 for historical reasons — it belongs to Phase 2's scope, not a phase after Final Phase.)
 
 **Phase 2 Checkpoint**: US4 independently functional; source-registry compliance + conflict-resolution tests green — spec.md SC-002/SC-003 demoable.
@@ -216,7 +216,7 @@ These are small, reversible scheduling calls, not architectural changes — flag
 - [X] T106 [US5] `UploadedDocument`/`GeneratedDocument`/`DocumentType` schemas + minimal `Application` schema (depends on T099) in `backend/app/schemas/document.py`
 - [X] T107 [US5] Minimal application-create endpoint: `POST /applications` (depends on T101) in `backend/app/api/application.py`
 - [X] T108 [US5] Documents API endpoint: `POST /applications/{id}/documents`, `422` on parse failure — user asked to retry, never silently ignored (depends on T105, T106) in `backend/app/api/documents.py`
-- [X] T109 [US5] `cv_gen` workflow — requirement-aware, format-specific (e.g. Europass), `ground_check`-gated (depends on T019, T020, T102) in `backend/app/workflows/cv_gen/graph.py`
+- [ ] T109 [US5] `cv_gen` workflow — requirement-aware, format-specific (e.g. Europass), `ground_check`-gated (depends on T019, T020, T102) in `backend/app/workflows/cv_gen/graph.py` — Partly (audit P2.3: grounded and gated, but Europass changes one word in the heading and the file is .txt)
 - [X] T110 [US5] `sop_gen` workflow — answers scholarship-specific questions, `ground_check`-gated (depends on T019, T020, T102) in `backend/app/workflows/sop_gen/graph.py`
 - [X] T111 [US5] Generation API endpoints: `POST /applications/{id}/generate/cv`, `/generate/sop`, `409` on an information gap — reported, never filled with invented content (depends on T109, T110) in `backend/app/api/generation.py`
 - [X] T112 [US5] Wire minimal `application` + `documents` + `generation` routers into the app (depends on T107, T108, T111) in `backend/app/main.py`
@@ -232,9 +232,9 @@ These are small, reversible scheduling calls, not architectural changes — flag
 ### Tests for User Story 6 (write first, must fail before implementation)
 
 - [X] T113 [P] [US6] Contract test: `GET /applications` (tracker), `POST /applications/{id}/plan` in `backend/tests/api/test_application_api.py`
-- [ ] T114 [P] [US6] Contract test: `POST /applications/{id}/assistant/next-step`, `POST /applications/{id}/submission-approvals` in `backend/tests/api/test_application_assistant_api.py`
-- [ ] T115 [P] [US6] Integration test covering US6 Acceptance Scenarios 1–5 (every checklist item carries exactly one of the six readiness labels, missing-vs-AI-can-generate distinguished, nothing transmitted before explicit approval, an earlier approval does not carry forward to a new submission, agentic mode and deterministic mode produce identical checklists for the same inputs) in `backend/tests/integration/test_application_planning_flow.py`
-- [ ] T116 [P] [US6] Submission-approval scoping test: an approval for one `submission_scope` MUST NOT authorize a different/later submission (constitution Principle III, FR-APP-3) in `backend/tests/services/test_submission_approval_scope.py`
+- [X] T114 [P] [US6] Contract test: `POST /applications/{id}/assistant/next-step`, `POST /applications/{id}/submission-approvals` in `backend/tests/api/test_application_assistant_api.py`
+- [X] T115 [P] [US6] Integration test covering US6 Acceptance Scenarios 1–5 (every checklist item carries exactly one of the six readiness labels, missing-vs-AI-can-generate distinguished, nothing transmitted before explicit approval, an earlier approval does not carry forward to a new submission, agentic mode and deterministic mode produce identical checklists for the same inputs) in `backend/tests/integration/test_application_planning_flow.py`
+- [X] T116 [P] [US6] Submission-approval scoping test: an approval for one `submission_scope` MUST NOT authorize a different/later submission (constitution Principle III, FR-APP-3) in `backend/tests/services/test_submission_approval_scope.py`
 - [X] T117 [P] [US6] Static/contract test asserting no live-external-send endpoint or code path exists anywhere in the API surface (FR-APP-4) in `backend/tests/api/test_no_live_submission.py`
 
 ### Implementation for User Story 6
@@ -242,15 +242,15 @@ These are small, reversible scheduling calls, not architectural changes — flag
 - [X] T118 [US6] SQLAlchemy + Pydantic models: `tasks`, `submission_approvals` (extends `applications` from Phase 3) in `backend/app/models/application.py`
 - [X] T119 [US6] Alembic migration for `tasks` + `submission_approvals` (depends on T118) in `backend/migrations/versions/{rev}_create_application_planning_tables.py`
 - [X] T120 [US6] Extend application repository with plan/tracker/readiness queries (depends on T119) in `backend/app/data/repositories/application_repo.py`
-- [ ] T121 [US6] `readiness` service — recomputes `readiness_label` from document/generation state, never hand-edited (depends on T120) in `backend/app/services/readiness.py`
-- [ ] T122 [US6] `app_plan` workflow — verified requirements → six-label checklist; single workflow, two entry points so agentic and deterministic modes are provably identical (depends on T121) in `backend/app/workflows/app_plan/graph.py`
-- [ ] T123 [US6] `submit_prep` workflow — stops at `[APPROVAL GATE]`/`[FINAL APPROVAL GATE]`; no live-send code path exists (depends on T120) in `backend/app/workflows/submit_prep/graph.py`
-- [ ] T124 [US6] Application/Submission agent — drafts/assembles/stages materials only; wraps `app_plan`/`submit_prep`; exposes step-by-step and deterministic entry points (depends on T122, T123) in `backend/app/agents/application/agent.py`
+- [X] T121 [US6] `readiness` service — recomputes `readiness_label` from document/generation state, never hand-edited (depends on T120) in `backend/app/services/readiness.py`
+- [X] T122 [US6] `app_plan` workflow — verified requirements → six-label checklist; single workflow, two entry points so agentic and deterministic modes are provably identical (depends on T121) in `backend/app/workflows/app_plan/graph.py`
+- [X] T123 [US6] `submit_prep` workflow — stops at `[APPROVAL GATE]`/`[FINAL APPROVAL GATE]`; no live-send code path exists (depends on T120) in `backend/app/workflows/submit_prep/graph.py`
+- [ ] T124 [US6] Application/Submission agent — drafts/assembles/stages materials only; wraps `app_plan`/`submit_prep`; exposes step-by-step and deterministic entry points (depends on T122, T123) in `backend/app/agents/application/agent.py` — Partly (audit P2.3: it only reports the next step and drafts nothing)
 - [X] T125 [US6] `ApplicationPlan`/`ChecklistItem`/`ReadinessLabel`/`AssistantStepResult` schemas (depends on T118) in `backend/app/schemas/plan.py`
-- [ ] T126 [US6] `GET /applications` (tracker) + `POST /applications/{id}/plan` endpoints (depends on T122, T125) in `backend/app/api/application.py`
-- [ ] T127 [US6] Assistant + submission-approval endpoints: `POST /applications/{id}/assistant/next-step`, `POST /applications/{id}/submission-approvals` (append-only; never edited/reused) (depends on T124, T123) in `backend/app/api/application.py`
-- [ ] T128 [US6] Extend orchestrator to route application-planning/assistant intents (depends on T126, T127) in `backend/app/orchestration/main_agent.py`
-- [ ] T129 [US6] Wire the remaining `application` endpoints into the app — minimal create was already wired in Phase 3 (depends on T126, T127) in `backend/app/main.py`
+- [X] T126 [US6] `GET /applications` (tracker) + `POST /applications/{id}/plan` endpoints (depends on T122, T125) in `backend/app/api/application.py`
+- [X] T127 [US6] Assistant + submission-approval endpoints: `POST /applications/{id}/assistant/next-step`, `POST /applications/{id}/submission-approvals` (append-only; never edited/reused) (depends on T124, T123) in `backend/app/api/application.py`
+- [X] T128 [US6] Extend orchestrator to route application-planning/assistant intents (depends on T126, T127) in `backend/app/orchestration/main_agent.py`
+- [X] T129 [US6] Wire the remaining `application` endpoints into the app — minimal create was already wired in Phase 3 (depends on T126, T127) in `backend/app/main.py`
 
 **Phase 4 Checkpoint**: US6 independently functional; submission-approval scoping (T116) and no-live-send (T117) tests green — spec.md SC-005/SC-006 demoable. `workflows/source_monitor/` remains deliberately unbuilt (Resolution note 4).
 
@@ -260,18 +260,18 @@ These are small, reversible scheduling calls, not architectural changes — flag
 
 **Purpose**: Whole-project verification once all four phases are complete.
 
-- [X] T130 [P] Run `specs/001-scholarship-mvp/quickstart.md` validation against all Phase 1–4 endpoints — Verified live end-to-end (docs/t130-verification-log.md). Bugs 1+2 (Qdrant timeout, missing payload index) fixed in commit 32a47f5 and re-verified live (docs/t130-verification-log.md, "Bugs 1+2 re-verified" section). Phase 2 discovery gap (web-access-method sources returning zero results) is resolved: T135 (commit 45e3ef1) built listing-page extraction for US4 Scenario 1, and the candidate-source work (commit 68f8569, ADR-0005) covers US4 Scenario 3. STILL OPEN: three scenarios the log could not cleanly demonstrate live — US1 Scenario 4 (log: "INCONCLUSIVE — test contamination, not a product defect"), US2 Scenario 2 (log: "INCONCLUSIVE — real-world data limitation, not a demonstrated defect"), and US5 Scenario 1's live path (log: "no live, non-mocked, real-LLM-extraction run in this project has ever demonstrated the SATISFIED path end-to-end"). All three are covered by automated tests; none was demonstrated in this live run due to fixture/real-data limits, not product defects.
+- [ ] T130 [P] Run `specs/001-scholarship-mvp/quickstart.md` validation against all Phase 1–4 endpoints — Verified live end-to-end (docs/t130-verification-log.md). Bugs 1+2 (Qdrant timeout, missing payload index) fixed in commit 32a47f5 and re-verified live (docs/t130-verification-log.md, "Bugs 1+2 re-verified" section). Phase 2 discovery gap (web-access-method sources returning zero results) is resolved: T135 (commit 45e3ef1) built listing-page extraction for US4 Scenario 1, and the candidate-source work (commit 68f8569, ADR-0005) covers US4 Scenario 3. STILL OPEN: three scenarios the log could not cleanly demonstrate live — US1 Scenario 4 (log: "INCONCLUSIVE — test contamination, not a product defect"), US2 Scenario 2 (log: "INCONCLUSIVE — real-world data limitation, not a demonstrated defect"), and US5 Scenario 1's live path (log: "no live, non-mocked, real-LLM-extraction run in this project has ever demonstrated the SATISFIED path end-to-end"). All three are covered by automated tests; none was demonstrated in this live run due to fixture/real-data limits, not product defects. — Partly (audit P2.3: the task text itself lists three scenarios still not demonstrated live)
 - [X] T131 [P] Code-review checklist pass: confirm no LLM code path reaches into `hard_constraints`/`ranking` (Principle II) and no code path calls a live external submission API (Principle III) — constitution "Development Workflow & Quality Gates" — PASS — see full trace in this session; no violations found, 29/29 relevant tests green.
 - [X] T132 [P] Security hardening pass: confirm every repository query is `user_id`-scoped (FR-AUTH-2) across `profile_repo`, `scholarship_repo`, `match_repo`, `source_repo`, `document_repo`, `application_repo` — PASS — 30 functions reviewed, all correctly scoped or justified as global; one defense-in-depth gap found and hardened (profile_repo's six object-based mutators now independently verify ownership, matching document_repo's pattern).
 - [X] T133 Regenerate/verify `specs/001-scholarship-mvp/contracts/openapi.yaml` matches implemented FastAPI routes (drift check) — PASS — fixed #15 (real bug: 422 response schema now correctly documents FetchFailure), added missing responses= declarations for 7 domain-specific status codes, updated openapi.yaml to match live schema for all 18 originally-flagged items, zero remaining drift verified via 34-point targeted check. New unrelated contract gaps found by stricter tooling logged as follow-up task T136.
 - [X] T134 Full eval-suite run + CI score-regression gate verification across matching-correctness, qa-groundedness, generation-groundedness, and source-registry-compliance cases in `backend/evals/runner.py` — 3 of 4 categories run and PASS (matching_correctness 1.0/1.0, qa_groundedness 1.0/0.5, generation_groundedness 1.0/1.0). source_registry_compliance has no eval case implemented — deferred as follow-up task T137 rather than built here. (investigated under T137 and confirmed correctly-not-needed — deterministic architectural property, already fully covered by unit tests, not an eval-shaped judgment call; not a genuine gap in eval coverage.)
 - [X] T136 Fix OpenAPI contract gaps surfaced by T133's stricter drift check (missing required arrays on MatchVerdict, QaAnswer, TokenResponse, UserResponse, GeneratedDocument, ApplicationPlan, AssistantStepResult, DiscoveryResult; enum-vs-bare-string inlining) — PASS — allOf-aware diff found 18 schemas missing `required` (10 more than the 8 originally named: also UserResponse, ProfileCriterion, MissingInfoItem, Profile, UrlMatchResult, FetchFailure, CriterionOutcome, CoverageSummary, DiscoveryResultItem, UploadedDocument, ChecklistItem), all fixed from live schema's required set; CoverageSummary was also missing 3 properties entirely (as_of, sources_configured, sources_active), added typed to match live; enum-vs-bare-string was a single genuine gap (ProfileCriterion.dimension), not several — SourceRegistryCreate and 11 other enum-backed properties already matched. Zero remaining drift verified via 22-point targeted check (18 required-array + 1 enum + 3 new-property type checks). RE-VERIFIED (2026-10-01): independent live-schema re-diff of the 8 originally-named schemas confirmed this fix is still fully applied — all required arrays and enum value-sets match `app.openapi()` exactly; no drift, no yaml changes needed.
-- [X] T137 Build source_registry_compliance eval case (backend/evals/cases/) — INVESTIGATED, REJECTED: not built. Phase 2's registry-governance behavior (status filtering, candidate/registry table separation, `SourceNotApprovedError` raised pre-fetch) is a deterministic, architectural property — not an LLM-adjacent judgment call like qa_groundedness or generation_groundedness — so any score over it can only ever land at exactly 1.0 or 0.0, with no meaningful middle. `backend/tests/sources/test_source_registry_compliance.py`'s 11 tests (plus `test_connectors.py`'s `SourceNotApprovedError` coverage) already assert every one of these invariants individually, with clearer per-invariant failure diagnostics than an averaged float would give. Wrapping them into an eval case would be a rename of the same check, not a new signal. Conclusion: tests already gate this; runner.py's 3 cases (matching_correctness, qa_groundedness, generation_groundedness) are the correct complete set — no 4th category needed.
-- [X] T138 Add real (unmocked) Qdrant + Gemini smoke test and a deep-ci.yml workflow (workflow_dispatch + weekly schedule) to run it — the entire test suite currently mocks every LLM/vector-store boundary, so no automated check exists that those live services are reachable and functional; only manual verification (T130) has ever exercised them for real. Needs repo secrets for QDRANT_URL, QDRANT_API_KEY, GEMINI_API_KEY.
+- [X] T137 Build source_registry_compliance eval case (backend/evals/cases/) — INVESTIGATED, REJECTED: not built. Phase 2's registry-governance behavior (status filtering, candidate/registry table separation, `SourceNotApprovedError` raised pre-fetch) is a deterministic, architectural property — not an LLM-adjacent judgment call like qa_groundedness or generation_groundedness — so any score over it can only ever land at exactly 1.0 or 0.0, with no meaningful middle. `backend/tests/sources/test_source_registry_compliance.py`'s 11 tests (plus `test_connectors.py`'s `SourceNotApprovedError` coverage) already assert every one of these invariants individually, with clearer per-invariant failure diagnostics than an averaged float would give. Wrapping them into an eval case would be a rename of the same check, not a new signal. Conclusion: tests already gate this; runner.py's 3 cases (matching_correctness, qa_groundedness, generation_groundedness) are the correct complete set — no 4th category needed. — Decided against (audit P2.3)
+- [ ] T138 Add real (unmocked) Qdrant + Gemini smoke test and a deep-ci.yml workflow (workflow_dispatch + weekly schedule) to run it — the entire test suite currently mocks every LLM/vector-store boundary, so no automated check exists that those live services are reachable and functional; only manual verification (T130) has ever exercised them for real. Needs repo secrets for QDRANT_URL, QDRANT_API_KEY, GEMINI_API_KEY. — Partly (audit P2.3: smoke tests and workflow exist, but the repo secrets were never added so the workflow has never run on GitHub)
   - NOTE: the four liveness smoke tests (`backend/tests/smoke/test_live_services.py`) plus the discovery live test (`backend/tests/smoke/test_discovery_listing_extraction_live.py`) exist (commit ac15e0d and later), and `.github/workflows/deep-ci.yml` exists — but the repo secrets (QDRANT_URL, QDRANT_API_KEY, GEMINI_API_KEY) have not been added, so the workflow has never run on GitHub; the smoke tests were only run locally.
   - NOTE (investigated, deliberately NOT built): a real-LLM variant of qa_groundedness was evaluated and rejected. Of its 5 cases, only 2 (golden-path verified answer, appropriate-decline) would be strengthened by unmocking; case 3 (ungrounded_confident_llm_guess_downgraded_to_unknown) would become actively misleading — it only tests the downgrade path because the mock injects a deliberate fabrication, which a cooperative real LLM won't reliably produce, so the case would stay green while silently testing nothing. Case 4 depends on a precisely-tuned paraphrase overlap that a real LLM can't be made to hit reliably; case 5 has no LLM call to unmock. Conclusion: runner.py's all-mocked design is correct for a deterministic CI gate, and the "is the real LLM behaving" question belongs in the smoke tier (T138), not the eval tier.
 - [X] T139 Replace deprecated HTTP_422_UNPROCESSABLE_ENTITY with HTTP_422_UNPROCESSABLE_CONTENT (StarletteDeprecationWarning, 4 call sites surfaced by the CI run at commit 65cee1f).
-- [ ] T140 Fix T135 defect — `_run_web_listing_step` fetches the domain homepage (`f"https://{source.domain}"`, agent.py:214) instead of `list_page_url`. When `list_page_url` is set in `extraction_rules`, the agent should use it. Phase 5 or later. Until fixed, DAAD, Stipendium Hungaricum and KAUST are seeded with `discovery_role: false`.
+- [X] T140 Fix T135 defect — `_run_web_listing_step` fetches the domain homepage (`f"https://{source.domain}"`, agent.py:214) instead of `list_page_url`. When `list_page_url` is set in `extraction_rules`, the agent should use it. Phase 5 or later. Until fixed, DAAD, Stipendium Hungaricum and KAUST are seeded with `discovery_role: false`.
 
 ---
 
