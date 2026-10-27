@@ -12,6 +12,9 @@ jobs:
   live-service-smoke:
     runs-on: ubuntu-latest
     env:
+      # CI-only dummies so Settings loads; the smoke tests touch neither database nor auth.
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/scholarship_ci
+      JWT_SECRET_KEY: dummy-ci-secret-not-real
       QDRANT_URL: ${{ secrets.QDRANT_URL }}
       QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
