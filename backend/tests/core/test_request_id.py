@@ -81,6 +81,33 @@ def test_unhandled_error_is_logged_as_500_and_still_carries_an_id(client, caplog
     assert record.status == 500 and record.path == "/boom"
 
 
+def test_unhandled_error_500_carries_the_same_id_as_the_access_line(client, caplog):
+    caplog.set_level(logging.INFO, logger="app.access")
+    response = client.get("/boom")
+    assert response.status_code == 500
+    record = [r for r in caplog.records if r.name == "app.access"][-1]
+    assert response.headers[REQUEST_ID_HEADER] == record.request_id
+    assert re.fullmatch(r"[0-9a-f]{32}", record.request_id)
+
+
+def test_unhandled_error_500_echoes_a_well_formed_inbound_id(client):
+    response = client.get("/boom", headers={REQUEST_ID_HEADER: "client-abc.123_X"})
+    assert response.status_code == 500
+    assert response.headers[REQUEST_ID_HEADER] == "client-abc.123_X"
+
+
+def test_unhandled_error_is_still_raised_to_the_server_for_logging():
+    app = FastAPI()
+    app.add_middleware(RequestIDMiddleware)
+
+    @app.get("/boom")
+    def boom():
+        raise RuntimeError("kaboom")
+
+    with pytest.raises(RuntimeError, match="kaboom"):
+        TestClient(app).get("/boom")
+
+
 def test_the_real_app_has_the_middleware_mounted():
     from app.main import app
 
