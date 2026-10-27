@@ -1,11 +1,16 @@
-"""Shared test fixtures. Tests in this suite run against the real (free-tier)
-Neon Postgres instance configured in .env — there is no local test DB — so
-every DB-touching test skips itself (mirrors tests/test_db_connection.py)
-when DATABASE_URL is absent or unreachable, and every fixture that creates
-data cleans it up afterward."""
+"""Shared test fixtures. DB-touching tests need a Postgres at DATABASE_URL (CI uses a
+localhost service container; locally use a throw-away one, see tests/README.md) and skip
+themselves when it is absent or unreachable (mirrors tests/test_db_connection.py). Against
+a non-local host they skip unless ALLOW_SHARED_DB=1 (tests/db_guard.py). Every fixture that
+creates data cleans it up afterward.
 
+`pytest --offline` keeps only the tests that need neither a database nor the network and
+blocks every non-loopback socket and DNS lookup, so a leak fails loudly."""
+
+import ipaddress
 import logging
 import re
+import socket
 import uuid
 
 import pytest
@@ -13,6 +18,136 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
+
+from tests.db_guard import require_db_allowed
+
+
+# --- --offline mode -------------------------------------------------------------------
+
+# Fixtures through which a test reaches the database.
+_DB_FIXTURES = {"db_session_factory", "client", "authed_user"}
+# Modules that touch the database directly (SessionLocal / engine) or through fixtures local to
+# the module; deselected whole, so a missed fixture cannot leak a connection.
+_DIRECT_DB_MODULES = {
+    "tests/api/test_monitoring_api.py",
+    "tests/data/test_002_models.py",
+    "tests/data/test_monitoring_repo.py",
+    "tests/scheduling/test_locks.py",
+    "tests/scheduling/test_scheduler.py",
+    "tests/services/test_retention.py",
+    "tests/sources/test_source_registry_compliance.py",
+    "tests/test_auth.py",
+    "tests/test_db_connection.py",
+    "tests/workflows/test_source_monitor.py",
+    "tests/workflows/test_source_monitor_rematch.py",
+}
+
+_offline_leaks: list[str] = []
+_real_socket_ops: dict[str, object] = {}
+
+
+def _is_loopback(host) -> bool:
+    if host is None:
+        return True
+    if isinstance(host, bytes):
+        host = host.decode(errors="replace")
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def _blocked(kind: str, host) -> AssertionError:
+    message = f"{kind} BLOCKED by --offline: {host}"
+    _offline_leaks.append(message)
+    return AssertionError(message)
+
+
+def _install_network_block() -> None:
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+    real_getaddrinfo = socket.getaddrinfo
+    _real_socket_ops.update(connect=real_connect, connect_ex=real_connect_ex, getaddrinfo=real_getaddrinfo)
+
+    def check_address(address) -> None:
+        host = address[0] if isinstance(address, tuple) else None  # str address = AF_UNIX path
+        if not _is_loopback(host):
+            raise _blocked("NETWORK ATTEMPT", host)
+
+    def guarded_connect(self, address, *args, **kwargs):
+        check_address(address)
+        return real_connect(self, address, *args, **kwargs)
+
+    def guarded_connect_ex(self, address, *args, **kwargs):
+        check_address(address)
+        return real_connect_ex(self, address, *args, **kwargs)
+
+    def guarded_getaddrinfo(host, *args, **kwargs):
+        if not _is_loopback(host):
+            raise _blocked("DNS LOOKUP", host)
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    socket.socket.connect = guarded_connect
+    socket.socket.connect_ex = guarded_connect_ex
+    socket.getaddrinfo = guarded_getaddrinfo
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--offline",
+        action="store_true",
+        default=False,
+        help="Run only tests that need neither the database nor the network; block non-loopback sockets and DNS.",
+    )
+
+
+def pytest_configure(config):
+    if config.getoption("--offline"):
+        _install_network_block()
+
+
+def pytest_unconfigure(config):
+    if _real_socket_ops:
+        socket.socket.connect = _real_socket_ops.pop("connect")
+        socket.socket.connect_ex = _real_socket_ops.pop("connect_ex")
+        socket.getaddrinfo = _real_socket_ops.pop("getaddrinfo")
+
+
+def _uses_db_fixture(item) -> bool:
+    """True when a DB fixture defined in THIS file is in the item's fixture closure; a module that
+    defines its own fixture of the same name (e.g. tests/core/test_request_id.py `client`) is not DB."""
+    for name in _DB_FIXTURES & set(item.fixturenames):
+        definitions = item._fixtureinfo.name2fixturedefs.get(name)
+        if definitions and definitions[-1].func.__module__ == __name__:
+            return True
+    return False
+
+
+def pytest_collection_modifyitems(config, items):
+    if not config.getoption("--offline"):
+        return
+    keep, drop = [], []
+    for item in items:
+        module = item.nodeid.split("::")[0]
+        needs_db = _uses_db_fixture(item) or module in _DIRECT_DB_MODULES
+        (drop if needs_db else keep).append(item)
+    config.hook.pytest_deselected(items=drop)
+    items[:] = keep
+
+
+def pytest_sessionfinish(session, exitstatus):
+    # A leak raises inside the code under test, which may swallow the error; fail the run regardless.
+    if _offline_leaks and session.config.getoption("--offline"):
+        session.exitstatus = 1
+
+
+def pytest_terminal_summary(terminalreporter):
+    if _offline_leaks:
+        terminalreporter.section("--offline: blocked network access")
+        for leak in _offline_leaks:
+            terminalreporter.write_line(leak)
 
 
 def find_registered_routes(app, method: str, path: str | re.Pattern) -> list:
@@ -48,6 +183,7 @@ def find_registered_routes(app, method: str, path: str | re.Pattern) -> list:
 
 
 def _require_db():
+    require_db_allowed()  # before any connection attempt
     try:
         from app.data.repositories.db import SessionLocal
     except RuntimeError:

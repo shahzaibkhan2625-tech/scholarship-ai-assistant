@@ -5,8 +5,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
+from tests.db_guard import require_db_allowed
+
 
 def _get_client_and_session():
+    require_db_allowed()
     try:
         from app.data.repositories.db import SessionLocal
     except RuntimeError:
