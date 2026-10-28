@@ -113,7 +113,7 @@ These are small, reversible scheduling calls, not architectural changes — flag
 - [X] T046 [US2] `hard_constraints` service — deterministic GPA/degree/nationality/deadline/mandatory-test evaluation (depends on T038, T039) in `backend/app/services/hard_constraints.py`
 - [X] T047 [US2] `ranking` service — deterministic ranking formula, agent supplies inputs only (depends on T046) in `backend/app/services/ranking.py`
 - [X] T048 [US2] `MatchVerdict`/`CriterionOutcome` schemas — fixed, schema-locked, no free-text verdict (depends on T040) in `backend/app/schemas/match.py`
-- [ ] T049 [US2] `url_match` LangGraph workflow: fetch → extract → verify → `hard_constraints` → Matching agent → persist (depends on T044, T045, T046) in `backend/app/workflows/url_match/graph.py` — Partly (audit P2.3: the graph has no verify node)
+- [ ] T049 [US2] `url_match` LangGraph workflow: fetch → extract → verify → `hard_constraints` → Matching agent → persist (depends on T044, T045, T046) in `backend/app/workflows/url_match/graph.py` — Partly (audit P3.3: the graph has no verify node)
 - [X] T050 [US2] Matching agent — guardrailed: schema-locked output, evidence-required, no-guess, no web/fetch tools, hard-constraint input is read-only (depends on T046, T048) in `backend/app/agents/matching/agent.py`
 - [X] T051 [US2] URL-match API endpoint: `POST /scholarships/match-url` (depends on T049) in `backend/app/api/url_match.py`
 - [X] T052 [US2] Matching API endpoints: `POST /scholarships/{id}/match`, `GET /matches` (depends on T050, T047, T043) in `backend/app/api/matching.py`
@@ -130,7 +130,7 @@ These are small, reversible scheduling calls, not architectural changes — flag
 ### Implementation for User Story 3
 
 - [X] T057 [US3] `QaAnswer` schema (no persisted table — data-model.md §5) in `backend/app/schemas/qa.py`
-- [ ] T058 [US3] Research/Q&A agent — grounded via retrieve+grounding (T018/T020), labels verified/inferred/unknown, cites `source_url`/`last_verified_at` (depends on T057, T018, T020) in `backend/app/agents/research_qa/agent.py` — Partly (audit P2.3: retrieval and ground_check are used but T020 is not, and there is no escalation to a live fetch)
+- [ ] T058 [US3] Research/Q&A agent — grounded via retrieve+grounding (T018/T020), labels verified/inferred/unknown, cites `source_url`/`last_verified_at` (depends on T057, T018, T020) in `backend/app/agents/research_qa/agent.py` — Partly (audit P3.3: retrieval and ground_check are used but T020 is not, and there is no escalation to a live fetch)
 - [X] T059 [US3] Q&A API endpoint: `POST /scholarships/{scholarship_id}/qa` (depends on T058) in `backend/app/api/qa.py`
 - [X] T060 [US3] Wire `qa` router into the app (depends on T059) in `backend/app/main.py`
 
@@ -153,7 +153,7 @@ These are small, reversible scheduling calls, not architectural changes — flag
 ### Tests for User Story 4 (write first, must fail before implementation)
 
 - [X] T064 [P] [US4] Contract test: `POST /discovery` in `backend/tests/api/test_discovery_api.py`
-- [ ] T065 [P] [US4] Integration test covering US4 Acceptance Scenarios 1–5 (≥2 distinct source types with attribution, coverage summary never claims complete/100%, new source recorded as pending-not-authoritative, fetch failure logged as a gap not "no scholarships exist", conflicting sources surfaced unless the official>recent>reliable rule resolves them) in `backend/tests/integration/test_discovery_flow.py` — Not done (audit P2.3)
+- [ ] T065 [P] [US4] Integration test covering US4 Acceptance Scenarios 1–5 (≥2 distinct source types with attribution, coverage summary never claims complete/100%, new source recorded as pending-not-authoritative, fetch failure logged as a gap not "no scholarships exist", conflicting sources surfaced unless the official>recent>reliable rule resolves them) in `backend/tests/integration/test_discovery_flow.py` — Not done (audit P3.3)
 - [X] T066 [P] [US4] Source-registry compliance tests: non-`active` `source_id` blocks fetch; a `candidate_sources` row is never joined as authoritative before `approved` (constitution Principle IV, Development Workflow gate) in `backend/tests/sources/test_source_registry_compliance.py`
 - [X] T067 [P] [US4] Unit test: `conflict_resolution` policy (official > recent > reliable; unresolved ⇒ surfaced `conflicting`, never silently averaged) in `backend/tests/services/test_conflict_resolution.py`
 - [X] T068 [P] [US4] Unit test: `coverage` counts/gaps computation, `claims_complete_coverage` always `false` in `backend/tests/services/test_coverage.py`
@@ -245,7 +245,7 @@ These are small, reversible scheduling calls, not architectural changes — flag
 - [X] T121 [US6] `readiness` service — recomputes `readiness_label` from document/generation state, never hand-edited (depends on T120) in `backend/app/services/readiness.py`
 - [X] T122 [US6] `app_plan` workflow — verified requirements → six-label checklist; single workflow, two entry points so agentic and deterministic modes are provably identical (depends on T121) in `backend/app/workflows/app_plan/graph.py`
 - [X] T123 [US6] `submit_prep` workflow — stops at `[APPROVAL GATE]`/`[FINAL APPROVAL GATE]`; no live-send code path exists (depends on T120) in `backend/app/workflows/submit_prep/graph.py`
-- [ ] T124 [US6] Application/Submission agent — drafts/assembles/stages materials only; wraps `app_plan`/`submit_prep`; exposes step-by-step and deterministic entry points (depends on T122, T123) in `backend/app/agents/application/agent.py` — Partly (audit P2.3: it only reports the next step and drafts nothing)
+- [ ] T124 [US6] Application/Submission agent — drafts/assembles/stages materials only; wraps `app_plan`/`submit_prep`; exposes step-by-step and deterministic entry points (depends on T122, T123) in `backend/app/agents/application/agent.py` — Partly (audit P3.3: it only reports the next step and drafts nothing)
 - [X] T125 [US6] `ApplicationPlan`/`ChecklistItem`/`ReadinessLabel`/`AssistantStepResult` schemas (depends on T118) in `backend/app/schemas/plan.py`
 - [X] T126 [US6] `GET /applications` (tracker) + `POST /applications/{id}/plan` endpoints (depends on T122, T125) in `backend/app/api/application.py`
 - [X] T127 [US6] Assistant + submission-approval endpoints: `POST /applications/{id}/assistant/next-step`, `POST /applications/{id}/submission-approvals` (append-only; never edited/reused) (depends on T124, T123) in `backend/app/api/application.py`
