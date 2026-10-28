@@ -11,8 +11,24 @@ on:
 jobs:
   live-service-smoke:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: scholarship_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
-      # CI-only dummies so Settings loads; the smoke tests touch neither database nor auth.
+      # Real Postgres service container above - the DB-backed smoke test runs for real
+      # instead of self-skipping. JWT_SECRET_KEY stays a CI-only dummy; nothing reads it
+      # as a real secret.
       DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/scholarship_ci
       JWT_SECRET_KEY: dummy-ci-secret-not-real
       QDRANT_URL: ${{ secrets.QDRANT_URL }}
@@ -32,6 +48,10 @@ jobs:
       - name: Install dependencies
         working-directory: backend
         run: uv sync
+
+      - name: Run database migrations
+        working-directory: backend
+        run: uv run alembic upgrade head
 
       - name: Run live Qdrant + Gemini smoke tests
         working-directory: backend
