@@ -69,7 +69,8 @@ def _non_public(address: str) -> bool:
         return True  # an address we cannot parse is not one we will connect to
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
-    return not ip.is_global
+    # is_global is True for multicast (224.0.0.0/4, ff00::/8), so exclude it explicitly.
+    return not ip.is_global or ip.is_multicast or ip.is_unspecified or ip.is_reserved
 
 
 def unsafe_url_reason(url: str, *, resolve: Callable[[str], list[str]] = _resolve_host) -> str | None:

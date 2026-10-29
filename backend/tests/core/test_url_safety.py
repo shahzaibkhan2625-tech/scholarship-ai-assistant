@@ -39,7 +39,11 @@ def _inet_aton_resolver(host: str) -> list[str]:
 
 @pytest.mark.parametrize(
     "address",
-    ["127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.1.1", "169.254.169.254", "0.0.0.0", "100.64.0.1", "::1", "fd00::1"],
+    [
+        "127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.1.1", "169.254.169.254", "0.0.0.0", "100.64.0.1", "::1", "fd00::1",
+        # manager review: ipaddress.is_global is True for multicast, so these were wrongly "public"
+        "224.0.0.1", "239.255.255.250", "ff02::1", "::", "240.0.0.1", "::ffff:224.0.0.1",
+    ],
 )
 def test_non_public_addresses(address):
     assert _non_public(address) is True
