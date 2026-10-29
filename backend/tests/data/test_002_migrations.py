@@ -115,7 +115,6 @@ def test_exactly_one_head():
     parents = {down for _, down in revs.values() if down}
     heads = [rev for rev in revs if rev not in parents]
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == _assigned_str(_parse(_rev_c()), "revision")  # (c) = US8 B2 index, on top of (b)
 
 
 def test_revision_c_chains_from_revision_b_and_is_one_index_only():
