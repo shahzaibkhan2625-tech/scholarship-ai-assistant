@@ -1,24 +1,25 @@
 -- Contract for the least-privilege application role (010, FR-DBROLE-1..3, 6).
--- Run by the OWNER (migration role) over the DIRECT Neon connection, with psql variables:
---   psql "<owner direct url>" \
---        -v app_password='<new strong password>' \
---        -v migration_role='neondb_owner' \
---        -f db-role.sql
--- The password is passed as a psql variable so it is never stored in a file or in git.
--- Idempotent: safe to run again after adding tables or rotating the password.
+-- Run by the OWNER (migration role) over the DIRECT Neon connection, from an interactive terminal:
+--   read -rs OWNER_DIRECT_URL                      # paste the owner direct URL; nothing is echoed
+--   psql "$OWNER_DIRECT_URL" -v migration_role='neondb_owner' -f db-role.sql
+--   unset OWNER_DIRECT_URL
+-- No secret is ever typed on a command line. The role is created WITHOUT a password; the
+-- script then runs psql's \password, which prompts for it and sends only a hash to the
+-- server, so the password is not in this file, a psql variable, shell history or the process list.
+-- Idempotent: safe to run again after adding tables. Each run prompts for the password
+-- (use it to rotate; press Ctrl-C at the prompt to keep the current one).
 -- Sources: https://neon.com/docs/manage/roles (roles must be created with SQL to avoid
 -- neon_superuser), https://www.postgresql.org/docs/current/sql-alterdefaultprivileges.html,
 -- https://www.postgresql.org/docs/release/15.0/ (public schema CREATE).
 
--- 1. The role: log in, nothing else. NOBYPASSRLS matters even though no policies exist yet.
-SELECT format(
-  'CREATE ROLE scholarship_app WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS',
-  :'app_password')
+-- 1. The role: log in, nothing else, no password yet. NOBYPASSRLS matters even though no
+--    policies exist yet.
+SELECT 'CREATE ROLE scholarship_app WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS'
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scholarship_app')
 \gexec
 
-SELECT format('ALTER ROLE scholarship_app WITH PASSWORD %L', :'app_password')
-\gexec
+-- Set the password interactively (prompted twice; sent as a hash, never as plain text).
+\password scholarship_app
 
 -- 2. No one may create objects in public (older databases keep the pre-15 default).
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;

@@ -19,16 +19,9 @@ Nine stories close the gaps the audit found on the public server. The technical 
 
 **Migration: yes**, one additive Alembic revision (`users.is_operator`, unique index on `lower(email)`, `audit_log`). **New dependency: none.**
 
-## Open item for the owner before `/sp.tasks` (FR-PROC-2)
+## Decision recorded: Q-1 = A (owner, 2026-10-29)
 
-**Q-1 — `GET /monitoring/runs/{run_id}` exposes raw fetch-log rows.** The approved assumption was "only `GET /sources/{id}/fetch-log` is the fetch-log read path" and "if the plan finds a route that does expose fetch-log rows, it follows FR-PROC-2". `app/api/monitoring.py:55-61` builds `source_outcomes` from `SourceFetchLogRead` rows for the run. This is not a Blueprint/PRD deviation; it is a gap inside the approved spec.
-- **Recommended (A):** make `GET /monitoring/runs/{run_id}` operator-only too (it is operator information, and D-2's intent is "students do not read fetch logs"). `GET /monitoring/runs` (list; no fetch-log rows) stays open.
-- (B) keep the route open and return the run without `source_outcomes` to non-operators.
-- (C) leave it open as approved (the leak stays).
-
-This plan is written for **A** (`contracts/api-delta.md` marks it pending). Changing to B or C is a one-line difference in one task. **Do not run `/sp.tasks` until the owner picks.** If A, D-2 in "Records to update" gains the run-detail route (already worded that way below).
-
-No other difference from the Blueprint or PRD beyond D-1..D-4 was found (research.md header and section F).
+`GET /monitoring/runs/{run_id}` returns `source_outcomes` built from raw fetch-log rows (`app/api/monitoring.py:55-61`), so it becomes **operator-only** like `GET /sources/{id}/fetch-log`. `GET /monitoring/runs` (the list, which carries no fetch-log rows) stays open to every signed-in user. The operator-only set is therefore: approve, reject, manual run, run detail, source fetch log, candidate validations. This closes the gap found in research (F-4) without any difference from the Blueprint or PRD beyond D-1..D-4; D-2 below includes the run-detail route. `/sp.tasks` is no longer blocked by this item.
 
 ## Technical Context
 
@@ -65,7 +58,7 @@ File paths are relative to `backend/`. "T:" lists the tests (all start at the en
 
 ### US1 Operator-only governance (FR-AUTHZ-1..7)
 - `app/models/user.py`: `is_operator`. `app/api/deps.py`: `require_operator(current_user = Depends(get_current_user))` → 403 `Operator access required`.
-- Apply to `app/api/sources.py` approve (`:51`), reject (`:74`), validations (`:97`); `app/api/monitoring.py` `POST` (`:64`) and (per Q-1 A) run detail (`:44`); `app/api/health.py` fetch-log (`:43`).
+- Apply to `app/api/sources.py` approve (`:51`), reject (`:74`), validations (`:97`); `app/api/monitoring.py` `POST` (`:64`) and run detail (`:44`, Q-1 = A); `app/api/health.py` fetch-log (`:43`).
 - `app/services/operator.py`: CLI (`contracts/operator-cli.md`).
 - `/metrics`: no code change; the existing Caddy test (`tests/infra/test_deploy_config.py`) stays.
 - T: `tests/api/test_operator_gate.py` (matrix: anonymous 401 / student 403 / operator success for every gated route; no side effects on 403), `tests/services/test_operator_cli.py`, `tests/api/test_no_role_endpoints.py` (OpenAPI scan; extra `is_operator` field ignored on sign-up and profile), regression: existing `tests/api/*` run unchanged with a student token for student routes.
@@ -167,7 +160,7 @@ Caddyfile, .env.example, .github/workflows/ci.yml, deep-ci.yml, docs/operations-
 
 ## Records to update (text only; not applied here)
 
-The manager edits the Blueprint and PRD; the ADR comes from `/sp.adr`. Exact changes required by D-1..D-4 (and Q-1 if option A is chosen):
+The manager edits the Blueprint and PRD; the ADR comes from `/sp.adr`. Exact changes required by D-1..D-4 (including Q-1 = A):
 
 ### Master Blueprint (`specs/scholarship-ai-assistant-master-blueprint-v1.md`), version 1.8 → 1.9
 
@@ -175,22 +168,22 @@ The manager edits the Blueprint and PRD; the ADR comes from `/sp.adr`. Exact cha
    `The SSRF *redirect* residual risk accepted in ADR-0010 / ADR-0011 stays accepted for candidate validation.`
    with
    `*(Amended 2026-10-29, v1.9, D-1, ADR-0016):* the SSRF redirect residual risk accepted in ADR-0010 / ADR-0011 is **closed**: every fetch of a user-supplied or candidate URL checks the address of the first URL and of every redirect hop (5 hops at most) before any request is sent to it, and connects only to an address that passed the check.`
-2. **§22, row 1 (010 security-hardening), scope cell** — replace `Operator role and the **minimal** operator restriction on source approve/reject and monitoring runs (moved here from 004); address check on user-supplied URLs (URL match, source approval)` with `Operator role (one operator, the owner; granted only by a server command) restricting source approve/reject, manual monitoring runs, source fetch-log reads, candidate-validation reads [and the per-run source outcomes, if Q-1 = A]; address check on every hop of every fetch of a user-supplied or candidate URL (URL match, source approval, candidate validation); public host name required at source approval`. Keep the rest of the row (least-privilege role, password rules, upload limits, `audit_log`, rollback, SMTP, deploy).
-3. **§27 A17** — append: `*(v1.9)* the restriction covers approve, reject, manually started monitoring runs, source fetch-log reads and candidate-validation reads; operator status is granted and revoked only by a command on the server.` **A20** — change `the **minimal** operator restriction of A17 moves from 004 to 010` to `the operator restriction of A17, as widened in v1.9, moves from 004 to 010`.
+2. **§22, row 1 (010 security-hardening), scope cell** — replace `Operator role and the **minimal** operator restriction on source approve/reject and monitoring runs (moved here from 004); address check on user-supplied URLs (URL match, source approval)` with `Operator role (one operator, the owner; granted only by a server command) restricting source approve/reject, manual monitoring runs, source fetch-log reads, candidate-validation reads the per-run source outcomes (monitoring run detail); address check on every hop of every fetch of a user-supplied or candidate URL (URL match, source approval, candidate validation); public host name required at source approval`. Keep the rest of the row (least-privilege role, password rules, upload limits, `audit_log`, rollback, SMTP, deploy).
+3. **§27 A17** — append: `*(v1.9)* the restriction covers approve, reject, manually started monitoring runs, source fetch-log reads, monitoring run detail (per-source outcomes) and candidate-validation reads; operator status is granted and revoked only by a command on the server.` **A20** — change `the **minimal** operator restriction of A17 moves from 004 to 010` to `the operator restriction of A17, as widened in v1.9, moves from 004 to 010`.
 4. **§14, line `audit_log(id, user_id, action, entity, at)`** — add the note: `Actions recorded: user.signup, source.approve, source.reject, monitoring.run.manual, submission.approve, operator.grant. Append-only for the application role. user_id is the actor, or the grantee for operator.grant.`
 5. **§47 "NOT YET DEFINED" item 5** — mark decided: `SMTP provider: the owner's Gmail account, smtp.gmail.com port 587 (STARTTLS, verified certificate), authenticated with a Google App Password held only in the VM environment. Least-privilege database role: created with SQL (not the Neon console) as scholarship_app, used by the app over the pooled connection; migrations run as the owner over the direct connection.`
 6. **New §48 "v1.9 Revision Notes"** — table of the changes above (source: spec 010, D-1..D-4), a consistency audit (no requirement removed; Constitution unchanged; agent count stays 5), and the header theme line.
 
 ### PRD (`specs/scholarship-ai-assistant-prd-v1.md`), version 1.2 → 1.3
 
-1. **FR-DISC-8** — append: `*(v1.3, OD-16)* Reading a source's fetch log and a candidate's validation results is also restricted to operators. Operator status is granted only by a command run on the server.`
+1. **FR-DISC-8** — append: `*(v1.3, OD-16)* Reading a source's fetch log, a monitoring run's per-source outcomes (run detail) and a candidate's validation results is also restricted to operators. Operator status is granted only by a command run on the server.`
 2. **NFR-SEC-4** — replace `it shall not reach private, loopback, link-local or cloud-metadata addresses` with `it shall not reach private, loopback, link-local, reserved or cloud-metadata addresses, including through redirects: every redirect hop is checked before a request is sent to it`.
 3. **NFR-SEC-7** — replace the list with `(sign-up, source approval/rejection, manually started monitoring runs, submission approvals, granting operator status)`.
-4. **Open-decisions table** — add `| OD-16 (v1.3, 2026-10-29) | Security hardening scope fixed by the owner: redirect-aware address check including candidate validation; operator-only reads of fetch logs and candidate validations; operator grants audited; Gmail (App Password) as the mail provider | §9, §14 FR-DISC-8, §26 NFR-SEC-4, NFR-SEC-7 (ADR-0016) |` and the matching revision-notes rows.
+4. **Open-decisions table** — add `| OD-16 (v1.3, 2026-10-29) | Security hardening scope fixed by the owner: redirect-aware address check including candidate validation; operator-only reads of fetch logs, monitoring run detail and candidate validations; operator grants audited; Gmail (App Password) as the mail provider | §9, §14 FR-DISC-8, §26 NFR-SEC-4, NFR-SEC-7 (ADR-0016) |` and the matching revision-notes rows.
 
 ### ADRs (text for `/sp.adr`; existing ADRs get a dated amendment line only)
 
-- **New ADR-0016 "Security hardening: redirect-safe fetch, operator-only governance, least-privilege database role, audit log"** — one cluster, as ADR-0015 did: (1) fetch pins the checked address and checks every hop, superseding the residual risk of ADR-0010 and ADR-0011 Q4; (2) one operator, a boolean on the user row, changed only by a server command, with the widened operator-only set (D-2); (3) SQL-created `scholarship_app` role on the pooled URL, migrations as owner on the direct URL, default privileges for future tables; (4) `audit_log` written in the action's transaction, append-only by privilege, `operator.grant` included (D-3); (5) Gmail SMTP with an App Password (D-4). Alternatives to record: console-created role, unpinned per-hop check, role claim in the token, audit read API.
+- **New ADR-0016 "Security hardening: redirect-safe fetch, operator-only governance, least-privilege database role, audit log"** — one cluster, as ADR-0015 did: (1) fetch pins the checked address and checks every hop, superseding the residual risk of ADR-0010 and ADR-0011 Q4; (2) one operator, a boolean on the user row, changed only by a server command, with the widened operator-only set (approve, reject, manual run, run detail, fetch log, validations; D-2); (3) SQL-created `scholarship_app` role on the pooled URL, migrations as owner on the direct URL, default privileges for future tables; (4) `audit_log` written in the action's transaction, append-only by privilege, `operator.grant` included (D-3); (5) Gmail SMTP with an App Password (D-4). Alternatives to record: console-created role, unpinned per-hop check, role claim in the token, audit read API.
 - **ADR-0010**: add `## Amendment (feature 010, ADR-0016)` — negative consequences (a) and (b) are closed by the per-hop, pinned fetch; the "Alternatives: modify `fetch_url`" item is now done.
 - **ADR-0011**: Q4 gets `Superseded by ADR-0016 (2026-10-29)`; Q5 unchanged.
 - **ADR-0015**: decision 1's last sentence (`The SSRF redirect risk accepted in ADR-0010 and ADR-0011 stays accepted.`) and the matching Negative-consequences bullet get `Superseded by ADR-0016 (owner decision 2026-10-29).`

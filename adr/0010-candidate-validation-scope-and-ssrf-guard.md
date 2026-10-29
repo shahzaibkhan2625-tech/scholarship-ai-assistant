@@ -45,3 +45,5 @@ T244 (the monitor-run trigger) and the workflow half of T240 landed in commit `8
 - Spec: `specs/002-source-monitoring-hardening/spec.md` (US7, FR-CANDVAL-1..4, SC-006)
 - Tasks: T238–T245 (T244 and part of T240 deferred); research.md Decision 6 (corrected)
 - Related ADRs: ADR-0001 (registry governance), ADR-0005 (candidate discovery), ADR-0008 (transaction-scoped locks, pooled Neon)
+
+- Amendment 2026-10-29: the redirect residual risk is closed by ADR-0016.

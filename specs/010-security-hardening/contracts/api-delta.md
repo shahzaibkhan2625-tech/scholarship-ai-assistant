@@ -21,7 +21,7 @@ Changes to the existing HTTP API. **No new routes.** Paths, methods and success 
 | `POST /monitoring/runs` | any user | operator; 403 otherwise | audited |
 | `GET /sources/{source_id}/fetch-log` | any user | operator; 403 otherwise | |
 | `GET /sources/candidates/{candidate_id}/validations` | any user | operator; 403 otherwise | |
-| `GET /monitoring/runs/{run_id}` | any user | **pending owner decision Q-1 (plan.md)**: recommended operator-only, because `source_outcomes` returns raw fetch-log rows | |
+| `GET /monitoring/runs/{run_id}` | any user | operator; 403 otherwise (Q-1 = A, 2026-10-29: `source_outcomes` returns raw fetch-log rows) | |
 
 Unchanged and open to every signed-in user: `GET /sources`, `GET /sources/candidates`, `GET /sources/health`, `GET /monitoring/runs`, `GET /coverage`, and every student route. `/metrics` stays answered 404 by the public listener (Caddyfile) and bearer-protected in the app.
 
