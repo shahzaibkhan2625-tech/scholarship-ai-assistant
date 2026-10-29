@@ -25,6 +25,12 @@ def session(db_session_factory):
     s.close()
 
 
+@pytest.fixture
+def operator_user(client, make_user):
+    """010: the gated routes need an operator; same shape as `authed_user` (no cleanup: rolled back)."""
+    return {"client": client, "headers": make_user(is_operator=True)["headers"]}
+
+
 def _source(session, label="h", **overrides):
     data = dict(
         name=f"Health Test {label}", source_type="gov", official_status="official",
@@ -171,8 +177,8 @@ def test_timeout_counts_as_a_failed_outcome(authed_user, session):
 # --- GET /sources/{id}/fetch-log -------------------------------------------------------
 
 
-def test_fetch_log_is_newest_first_and_exposes_url_and_fallback(authed_user, session):
-    client, headers = authed_user["client"], authed_user["headers"]
+def test_fetch_log_is_newest_first_and_exposes_url_and_fallback(operator_user, session):
+    client, headers = operator_user["client"], operator_user["headers"]
     source = _source(session, "log")
     for i in range(3):
         _log(session, source, _run(session, i), FetchStatus.OK, i, items_found=i)
@@ -189,8 +195,8 @@ def test_fetch_log_is_newest_first_and_exposes_url_and_fallback(authed_user, ses
             "monitoring_run_id"} <= set(body[0])
 
 
-def test_fetch_log_limit_default_and_bounds(authed_user, session):
-    client, headers = authed_user["client"], authed_user["headers"]
+def test_fetch_log_limit_default_and_bounds(operator_user, session):
+    client, headers = operator_user["client"], operator_user["headers"]
     source = _source(session, "lim")
     for i in range(55):
         _log(session, source, None, FetchStatus.OK, i)
@@ -202,8 +208,8 @@ def test_fetch_log_limit_default_and_bounds(authed_user, session):
     assert client.get(path, headers=headers, params={"limit": 0}).status_code == 422
 
 
-def test_fetch_log_404_for_unknown_source_but_works_for_non_active(authed_user, session):
-    client, headers = authed_user["client"], authed_user["headers"]
+def test_fetch_log_404_for_unknown_source_but_works_for_non_active(operator_user, session):
+    client, headers = operator_user["client"], operator_user["headers"]
     assert client.get(f"/sources/{uuid.uuid4()}/fetch-log", headers=headers).status_code == 404
     disabled = _source(session, "dlog", status="disabled")
     assert client.get(f"/sources/{disabled.id}/fetch-log", headers=headers).status_code == 200

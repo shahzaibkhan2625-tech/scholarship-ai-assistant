@@ -202,6 +202,32 @@ def test_no_route_trims_defaulted_or_none_fields_from_responses():
     assert offenders == []
 
 
+# -- 010: the six operator-only operations document 403 (api-delta.md) ----------------------
+
+OPERATOR_ONLY = [
+    ("post", "/sources/candidates/{candidate_id}/approve"),
+    ("post", "/sources/candidates/{candidate_id}/reject"),
+    ("get", "/sources/candidates/{candidate_id}/validations"),
+    ("post", "/monitoring/runs"),
+    ("get", "/monitoring/runs/{run_id}"),
+    ("get", "/sources/{source_id}/fetch-log"),
+]
+OPEN_TO_STUDENTS = [
+    ("get", "/sources"), ("get", "/sources/candidates"), ("get", "/sources/health"),
+    ("get", "/monitoring/runs"), ("get", "/coverage"),
+]
+
+
+def test_the_six_operator_only_operations_declare_403():
+    paths = app.openapi()["paths"]
+    assert [(m, p) for m, p in OPERATOR_ONLY if "403" not in paths[p][m]["responses"]] == []
+
+
+def test_the_routes_open_to_students_do_not_declare_403():
+    paths = app.openapi()["paths"]
+    assert [(m, p) for m, p in OPEN_TO_STUDENTS if "403" in paths[p][m]["responses"]] == []
+
+
 # -- negative tests: the comparator must notice each kind of drift ------------------------
 
 

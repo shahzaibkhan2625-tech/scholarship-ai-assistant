@@ -1,6 +1,6 @@
 """Source-health routes (002 US3, FR-HEALTH-1..4, FR-FETCH-3).
 
-Bearer auth like `/sources` (no operator gate yet). Read-only. Must be included
+Bearer auth like `/sources`; the per-source fetch log is operator-only (010 FR-AUTHZ-1). Read-only. Must be included
 BEFORE the sources router in `main.py` so `/sources/health` is never captured by
 a `/sources/{...}` path parameter."""
 
@@ -9,7 +9,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_operator
 from app.data.repositories import source_repo
 from app.data.repositories.db import get_db
 from app.models.source import SourceStatus
@@ -43,12 +43,15 @@ def get_sources_health(
 @router.get(
     "/sources/{source_id}/fetch-log",
     response_model=list[SourceFetchLogEntry],
-    responses={404: {"description": "source_id not found"}},
+    responses={
+        403: {"description": "operator access required"},
+        404: {"description": "source_id not found"},
+    },
 )
 def get_source_fetch_log(
     source_id: uuid.UUID,
     limit: int = Query(50, ge=1, le=200),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_operator),
     db: Session = Depends(get_db),
 ) -> list[SourceFetchLogEntry]:
     if source_repo.get_source_any_status(db, source_id) is None:

@@ -11,7 +11,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_operator
 from app.data.repositories import candidate_validation_repo, source_repo
 from app.data.repositories.db import get_db
 from app.data.repositories.source_repo import CandidateSourceAlreadyReviewedError, CandidateSourceNotFoundError
@@ -52,6 +52,7 @@ def list_pending_candidates(
     "/sources/candidates/{candidate_id}/approve",
     response_model=SourceRegistryRead,
     responses={
+        403: {"description": "operator access required"},
         404: {"description": "candidate_id not found"},
         409: {"description": "candidate already approved/rejected"},
     },
@@ -59,7 +60,7 @@ def list_pending_candidates(
 def approve_candidate(
     candidate_id: uuid.UUID,
     source_data: SourceRegistryCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_operator),
     db: Session = Depends(get_db),
 ) -> SourceRegistryRead:
     try:
@@ -75,6 +76,7 @@ def approve_candidate(
     "/sources/candidates/{candidate_id}/reject",
     response_model=CandidateSourceRead,
     responses={
+        403: {"description": "operator access required"},
         404: {"description": "candidate_id not found"},
         409: {"description": "candidate already approved/rejected"},
     },
@@ -82,7 +84,7 @@ def approve_candidate(
 def reject_candidate(
     candidate_id: uuid.UUID,
     body: CandidateSourceReject,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_operator),
     db: Session = Depends(get_db),
 ) -> CandidateSourceRead:
     try:
@@ -97,11 +99,14 @@ def reject_candidate(
 @router.get(
     "/sources/candidates/{candidate_id}/validations",
     response_model=list[CandidateSourceValidationRead],
-    responses={404: {"description": "candidate_id not found"}},
+    responses={
+        403: {"description": "operator access required"},
+        404: {"description": "candidate_id not found"},
+    },
 )
 def list_candidate_validations(
     candidate_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_operator),
     db: Session = Depends(get_db),
 ) -> list[CandidateSourceValidationRead]:
     """Advisory pre-check history, newest first (US7). Read-only: it informs the

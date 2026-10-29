@@ -21,6 +21,12 @@ def session(db_session_factory):
     s.close()
 
 
+@pytest.fixture
+def operator_user(client, make_user):
+    """010: the gated routes need an operator; same shape as `authed_user` (no cleanup: rolled back)."""
+    return {"client": client, "headers": make_user(is_operator=True)["headers"]}
+
+
 # --- auth ----------------------------------------------------------------------
 
 
@@ -72,13 +78,13 @@ def test_list_runs_limit_bounds(authed_user, session):
 # --- GET /monitoring/runs/{id} ----------------------------------------------------
 
 
-def test_get_run_unknown_id_is_404(authed_user):
-    response = authed_user["client"].get(f"/monitoring/runs/{uuid.uuid4()}", headers=authed_user["headers"])
+def test_get_run_unknown_id_is_404(operator_user):
+    response = operator_user["client"].get(f"/monitoring/runs/{uuid.uuid4()}", headers=operator_user["headers"])
     assert response.status_code == 404
 
 
-def test_get_run_embeds_source_outcomes_from_fetch_logs_carrying_the_run_id(authed_user, session):
-    client, headers = authed_user["client"], authed_user["headers"]
+def test_get_run_embeds_source_outcomes_from_fetch_logs_carrying_the_run_id(operator_user, session):
+    client, headers = operator_user["client"], operator_user["headers"]
     source = source_repo.upsert_source_by_domain(
         session,
         SourceRegistryCreate(
@@ -115,19 +121,19 @@ def background_calls(monkeypatch):
     return calls
 
 
-def test_post_starts_a_run_in_the_background_and_returns_202(authed_user, session, background_calls):
+def test_post_starts_a_run_in_the_background_and_returns_202(operator_user, session, background_calls):
     monitoring_repo.fail_leftover_running_runs(session)  # a real running row would 409 (rolled back at teardown)
-    response = authed_user["client"].post("/monitoring/runs", headers=authed_user["headers"])
+    response = operator_user["client"].post("/monitoring/runs", headers=operator_user["headers"])
     assert response.status_code == 202
     body = response.json()
     assert body["status"] == "running" and body["trigger"] == "manual" and body["ended_at"] is None
     assert background_calls == [uuid.UUID(body["id"])]
 
 
-def test_post_while_a_run_is_in_progress_is_409_and_starts_nothing(authed_user, session, background_calls):
+def test_post_while_a_run_is_in_progress_is_409_and_starts_nothing(operator_user, session, background_calls):
     monitoring_repo.fail_leftover_running_runs(session)
     monitoring_repo.create_run(session, MonitoringTrigger.SCHEDULED)  # status running
-    response = authed_user["client"].post("/monitoring/runs", headers=authed_user["headers"])
+    response = operator_user["client"].post("/monitoring/runs", headers=operator_user["headers"])
     assert response.status_code == 409
     assert background_calls == []
 

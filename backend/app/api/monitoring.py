@@ -1,5 +1,6 @@
 """Source-monitoring routes (002 FR-MON-1/5). Bearer auth like every other
-router. There is deliberately no way to pass a source list: a run always
+router; starting a run and reading one run (it embeds fetch-log rows) are operator-only
+(010 FR-AUTHZ-1), the run list is open to any signed-in user. There is deliberately no way to pass a source list: a run always
 covers the governed set `run_source_monitor` loads itself."""
 
 import logging
@@ -8,7 +9,7 @@ import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_operator
 from app.data.repositories import monitoring_repo
 from app.data.repositories.db import SessionLocal, get_db
 from app.models.monitoring import MonitoringTrigger
@@ -44,11 +45,14 @@ def list_monitoring_runs(
 @router.get(
     "/monitoring/runs/{run_id}",
     response_model=MonitoringRunDetail,
-    responses={404: {"description": "run_id not found"}},
+    responses={
+        403: {"description": "operator access required"},
+        404: {"description": "run_id not found"},
+    },
 )
 def get_monitoring_run(
     run_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_operator),
     db: Session = Depends(get_db),
 ) -> MonitoringRunDetail:
     run = monitoring_repo.get_run(db, run_id)
@@ -65,11 +69,14 @@ def get_monitoring_run(
     "/monitoring/runs",
     response_model=MonitoringRunRead,
     status_code=status.HTTP_202_ACCEPTED,
-    responses={409: {"description": "a monitoring run is already in progress"}},
+    responses={
+        403: {"description": "operator access required"},
+        409: {"description": "a monitoring run is already in progress"},
+    },
 )
 def trigger_monitoring_run(
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_operator),
     db: Session = Depends(get_db),
 ) -> MonitoringRunRead:
     run = monitoring_repo.create_run_if_none_running(db, MonitoringTrigger.MANUAL)
