@@ -22,6 +22,7 @@ __all__ = [
     "UnsafeUrlError",
     "is_public_hostname",
     "resolve_public",
+    "static_hostname_rule",
     "unsafe_url_reason",
 ]
 
@@ -124,12 +125,9 @@ def resolve_public(host: str, *, resolve: Callable[[str], list[str]] = _resolve_
     return addresses
 
 
-def is_public_hostname(domain: str, *, resolve: Callable[[str], list[str]] = _resolve_host) -> str | None:
-    """None if `domain` is acceptable as a registry source domain; otherwise the rule it breaks.
-
-    Static rules first (IP literal, single label, reserved/private suffix), then a lookup: a
-    name that resolves to a non-public address is refused. A name that does not resolve yet is
-    not refused (the monitor reports it as unreachable)."""
+def static_hostname_rule(domain: str) -> str | None:
+    """None if `domain` passes the static (no-DNS) part of the public-host rule; otherwise the rule it
+    breaks: an IP literal, a single-label name, or a reserved / private-network name."""
     name = domain.strip().strip("[]").rstrip(".").lower()
     try:
         ipaddress.ip_address(name)
@@ -143,6 +141,19 @@ def is_public_hostname(domain: str, *, resolve: Callable[[str], list[str]] = _re
     for suffix in SPECIAL_USE_NAMES + PRIVATE_NAME_SUFFIXES:
         if name == suffix or name.endswith("." + suffix):
             return f"domain uses the reserved or private name '.{suffix}'"
+    return None
+
+
+def is_public_hostname(domain: str, *, resolve: Callable[[str], list[str]] = _resolve_host) -> str | None:
+    """None if `domain` is acceptable as a registry source domain; otherwise the rule it breaks.
+
+    Static rules first (`static_hostname_rule`), then a lookup: a name that resolves to a
+    non-public address is refused. A name that does not resolve yet is not refused (the monitor
+    reports it as unreachable)."""
+    rule = static_hostname_rule(domain)
+    if rule:
+        return rule
+    name = domain.strip().strip("[]").rstrip(".").lower()
     try:
         resolve_public(name, resolve=resolve)
     except UnsafeUrlError as exc:

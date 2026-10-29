@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from app.core.url_safety import static_hostname_rule
 from app.models.source import (
     AccessMethod,
     CandidateSourceStatus,
@@ -31,6 +32,11 @@ def _validate_domain(value: str) -> str:
         raise ValueError("domain must not include a URL scheme (e.g. 'https://')")
     if "/" in value:
         raise ValueError("domain must not include a path")
+    # 010 FR-SSRF-6: static part of the public-host rule (IP literal, single label, reserved or
+    # private suffix). The DNS part runs in the approve route.
+    rule = static_hostname_rule(value)
+    if rule:
+        raise ValueError(f"domain must be a public host name ({rule})")
     if not _HOSTNAME_RE.match(value):
         raise ValueError("domain must be a bare hostname (e.g. 'www2.daad.de')")
     return value

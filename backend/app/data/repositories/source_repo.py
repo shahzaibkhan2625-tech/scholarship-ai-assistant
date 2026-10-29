@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from sqlalchemy import and_, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.source import (
@@ -42,6 +43,17 @@ class CandidateSourceNotFoundError(Exception):
 
 class CandidateSourceAlreadyReviewedError(Exception):
     """Raised when approve/reject is attempted on a non-pending candidate."""
+
+
+class DuplicateSourceDomainError(Exception):
+    """Raised when approving a candidate would register a `source_registry.domain` that already exists (010)."""
+
+
+def _is_duplicate_domain(exc: IntegrityError) -> bool:
+    """True when the unique violation is on `source_registry.domain` (not some other constraint)."""
+    constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None) or ""
+    text = f"{constraint} {exc.orig}".lower()
+    return "source_registry" in text and "domain" in text
 
 
 def get_active_sources(
@@ -243,7 +255,13 @@ def approve_candidate_source(
     candidate.reviewed_by = reviewed_by
     candidate.reviewed_at = datetime.now()
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()  # the candidate stays pending
+        if _is_duplicate_domain(exc):
+            raise DuplicateSourceDomainError(f"source domain {source_data.domain} is already registered") from exc
+        raise
     db.refresh(source)
     return source
 

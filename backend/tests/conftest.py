@@ -365,6 +365,18 @@ def _no_candidate_validation_in_monitor_runs(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_dns_in_source_approval(monkeypatch):
+    """010 T370: approving a candidate now resolves the domain (FR-SSRF-6). Existing tests approve
+    throw-away `*.example.org` names; keep them off real DNS by resolving everything to a public
+    address. Tests of the rule (tests/api/test_source_approval_domain.py) re-patch this."""
+    try:
+        import app.api.sources  # noqa: F401
+    except RuntimeError:  # settings unavailable (no DATABASE_URL): nothing to guard
+        return
+    monkeypatch.setattr("app.api.sources._resolve_host", lambda host: ["93.184.216.34"])
+
+
+@pytest.fixture(autouse=True)
 def _reset_rate_limiter():
     """US8: the app's limiter is process-global in-memory state and every `TestClient` request
     comes from the same address, so without a reset a long suite would eventually be
