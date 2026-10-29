@@ -4,10 +4,13 @@ are injected, so nothing here touches the network or an LLM. DB-backed tests run
 inside the rolled-back `db_session_factory` transaction."""
 
 import ast
+import logging
+import socket
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
 import pytest
 
 from app.data.repositories import candidate_validation_repo, source_repo
@@ -15,6 +18,7 @@ from app.models.source import CandidateSourceStatus, SourceRegistry
 from app.schemas.source import CandidateSourceCreate
 from app.services import candidate_validation as cv
 from app.tools.extract_listing import ExtractListingOutput
+from app.tools import web_fetch
 from app.tools.web_fetch import FetchResult
 
 _PUBLIC_IP = "93.184.216.34"
@@ -165,6 +169,66 @@ def test_redirect_to_a_private_address_is_discarded_and_recorded_as_blocked(sess
     assert extract.calls == []  # content from the redirect target is never used
     assert row.reachable is False and "blocked" in row.reachable_detail and "redirect" in row.reachable_detail
     assert row.official_signals["affiliation_terms"] == []  # nor mined for signals
+
+
+# --- 010 T364: the real fetch refuses redirect hops before requesting them -----
+
+
+def _install_wire(monkeypatch, routes: dict[str, str]):
+    """Real `fetch_url` over a recording MockTransport. `routes` maps a Host header to the
+    Location it redirects to (hosts not listed answer 200)."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        location = routes.get(request.headers["Host"])
+        if location:
+            return httpx.Response(302, headers={"Location": location})
+        return httpx.Response(200, text=_PAGE)
+
+    real = web_fetch._make_client
+    monkeypatch.setattr(web_fetch, "_make_client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+
+    def resolve(host: str) -> list[str]:
+        if host.endswith("example-uni.edu"):
+            return [_PUBLIC_IP]
+        raise socket.gaierror(host)
+
+    monkeypatch.setattr(web_fetch, "_resolve_host", resolve)
+    return requests
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["https://10.0.0.8/admin", "https://169.254.169.254/latest/meta-data/", "https://[::1]/", "https://224.0.0.1/"],
+)
+def test_redirect_to_a_non_public_address_is_never_requested_and_recorded_as_blocked(
+    session, monkeypatch, caplog, location
+):
+    requests = _install_wire(monkeypatch, {"funds.example-uni.edu": location})
+    candidate = _candidate(session)
+    extract = _extract(3)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.candidate_validation"):
+        row = cv.validate_candidate(session, candidate.id, extract_listing=extract, resolve=_public, now=lambda: _T0)
+
+    assert [r.url.host for r in requests] == [_PUBLIC_IP]  # the first hop only; the target was never requested
+    assert extract.calls == []
+    assert row.reachable is False and row.extractable is False
+    assert row.reachable_detail.startswith("blocked: ")
+    assert row.official_signals["affiliation_terms"] == []
+    assert any(str(candidate.id) in record.getMessage() for record in caplog.records)  # refusal logged with the id
+
+
+def test_public_redirect_chain_is_followed_and_final_url_check_still_runs(session, monkeypatch):
+    requests = _install_wire(monkeypatch, {"funds.example-uni.edu": "https://www.example-uni.edu/awards"})
+    candidate = _candidate(session)
+
+    row = cv.validate_candidate(session, candidate.id, extract_listing=_extract(2), resolve=_public, now=lambda: _T0)
+
+    assert len(requests) == 2
+    assert row.reachable is True
+    assert "redirected to https://www.example-uni.edu/awards" in row.reachable_detail
 
 
 # --- the three checks -------------------------------------------------------

@@ -17,10 +17,10 @@ source-gated connector cannot be used; the low-level `fetch_url` is. Because the
 URL came from an arbitrary third-party link, `unsafe_url_reason` refuses
 non-http(s) schemes and any loopback / private / link-local / reserved target,
 on the requested URL and again on the post-redirect `final_url`.
-**Limit:** `fetch_url` follows redirects internally, so a redirect to a
-non-public address has already been requested by the time `final_url` is
-checked. The check guarantees that content is discarded and recorded as
-blocked, not that the request was never sent (ADR-0010).
+A redirect cannot steer the fetch either (010, ADR-0016): `fetch_url` checks every hop and
+connects only to an address that passed the check, so a redirect to a non-public address is
+never requested and comes back as a `blocked: ...` result. The post-redirect `final_url` check
+below stays as a second, independent check (it also covers an injected `fetch`).
 
 **Transactions.** The candidate is read and the read transaction is ended
 (`commit`) BEFORE any network or LLM call, so no pooled-Neon backend sits
@@ -96,21 +96,27 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _reachability(url: str, fetch: Callable[[str], FetchResult], resolve) -> tuple[bool, str, str | None]:
+def _reachability(
+    url: str, fetch: Callable[[str], FetchResult], resolve, candidate_id: uuid.UUID | None = None
+) -> tuple[bool, str, str | None]:
     """(reachable, detail, html). `html` is None unless the page is usable."""
     reason = unsafe_url_reason(url, resolve=resolve)
     if reason:
+        logger.warning("candidate %s: URL refused: %s", candidate_id, reason)
         return False, f"blocked: {reason}", None
     try:
         result = fetch(url)
     except Exception as exc:  # noqa: BLE001 - a fetch bug is a recorded finding, not a crash
         return False, f"fetch raised {type(exc).__name__}: {exc}", None
     if not result.success:
+        if result.blocked:
+            logger.warning("candidate %s: fetch refused: %s", candidate_id, result.error)
         return False, result.error or f"HTTP {result.status_code}", None
     final_url = result.final_url or url
     if final_url != url:
         redirect_reason = unsafe_url_reason(final_url, resolve=resolve)
         if redirect_reason:
+            logger.warning("candidate %s: redirect target refused: %s", candidate_id, redirect_reason)
             return False, f"blocked: redirect target {final_url} is not allowed ({redirect_reason})", None
     detail = f"HTTP {result.status_code}"
     if final_url != url:
@@ -150,7 +156,7 @@ def validate_candidate(
     matched_keyword = (candidate.signals or {}).get("matched_keyword")
     db.commit()  # end the read transaction before any network / LLM call
 
-    reachable, reachable_detail, html = _reachability(url, fetch, resolve)
+    reachable, reachable_detail, html = _reachability(url, fetch, resolve, candidate_id)
     if html is None:
         extractable, extractable_detail = False, "not attempted: page not reachable"
     else:
