@@ -356,7 +356,7 @@ def test_rematch_cap_setting_defaults_to_500(monkeypatch):
 
     monkeypatch.delenv("MAX_ALERT_REMATCHES_PER_RUN", raising=False)
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pw@localhost/db")
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-0123456789abcdef-0123456789")  # allow-secret
     assert Settings(_env_file=None).max_alert_rematches_per_run == 500
     monkeypatch.setenv("MAX_ALERT_REMATCHES_PER_RUN", "7")
     assert Settings(_env_file=None).max_alert_rematches_per_run == 7

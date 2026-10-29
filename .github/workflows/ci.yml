@@ -26,7 +26,7 @@ jobs:
       # real in CI instead of self-skipping. JWT_SECRET_KEY stays a CI-only
       # dummy; nothing reads it as a real secret.
       DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/scholarship_ci
-      JWT_SECRET_KEY: dummy-ci-secret-not-real
+      JWT_SECRET_KEY: ci-only-dummy-secret-0123456789abcdef
 
     steps:
       - name: Checkout code

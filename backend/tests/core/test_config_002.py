@@ -22,7 +22,7 @@ def clean_env(monkeypatch):
     for name in _NEW_VARS:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pw@localhost/db")
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-0123456789abcdef-0123456789")  # allow-secret
     return monkeypatch
 
 

@@ -30,7 +30,7 @@ jobs:
       # instead of self-skipping. JWT_SECRET_KEY stays a CI-only dummy; nothing reads it
       # as a real secret.
       DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/scholarship_ci
-      JWT_SECRET_KEY: dummy-ci-secret-not-real
+      JWT_SECRET_KEY: ci-only-dummy-secret-0123456789abcdef
       QDRANT_URL: ${{ secrets.QDRANT_URL }}
       QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

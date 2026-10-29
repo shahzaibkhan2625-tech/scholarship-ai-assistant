@@ -28,10 +28,10 @@ The first deliverable slice is **T349 - T382** (Phases 3-5), on top of Setup and
 
 **Purpose**: things that must be true before any story code lands, so CI and the test suite stay green.
 
-- [ ] T327 [P] Raise the CI JWT secret to at least 32 characters (a throwaway, non-secret string such as `ci-only-dummy-secret-0123456789abcdef`) in the `env:` block - `.github/workflows/ci.yml` (EXTENDED) - Satisfies: FR-CRED-3
-- [ ] T328 [P] Raise the deep-CI JWT secret to at least 32 characters in the `env:` block (same throwaway string) - `.github/workflows/deep-ci.yml` (EXTENDED) - Satisfies: FR-CRED-3
-- [ ] T329 [P] Raise the `"test-secret"` values set by monkeypatch to 32+ character throwaway strings (comment `# allow-secret` as the repo does): `backend/tests/core/test_config_002.py` line 25 and `backend/tests/services/test_alerts.py` line 359 - `backend/tests/core/test_config_002.py, backend/tests/services/test_alerts.py` (EXTENDED) - Satisfies: FR-CRED-3
-- [ ] T330 [P] Create the new test package for security tests - `backend/tests/security/__init__.py` (NEW) - Satisfies: FR-PROC-1
+- [X] T327 [P] Raise the CI JWT secret to at least 32 characters (a throwaway, non-secret string such as `ci-only-dummy-secret-0123456789abcdef`) in the `env:` block - `.github/workflows/ci.yml` (EXTENDED) - Satisfies: FR-CRED-3
+- [X] T328 [P] Raise the deep-CI JWT secret to at least 32 characters in the `env:` block (same throwaway string) - `.github/workflows/deep-ci.yml` (EXTENDED) - Satisfies: FR-CRED-3
+- [X] T329 [P] Raise the `"test-secret"` values set by monkeypatch to 32+ character throwaway strings (comment `# allow-secret` as the repo does): `backend/tests/core/test_config_002.py` line 25 and `backend/tests/services/test_alerts.py` line 359 - `backend/tests/core/test_config_002.py, backend/tests/services/test_alerts.py` (EXTENDED) - Satisfies: FR-CRED-3
+- [X] T330 [P] Create the new test package for security tests - `backend/tests/security/__init__.py` (NEW) - Satisfies: FR-PROC-1
 - [ ] T331 Standing checkpoint (no code): if any later task finds code, tests or documents that differ from the Blueprint or PRD beyond D-1..D-4, STOP, write the finding at the top of this file under `## STOP`, and wait for the owner. Do not edit the Blueprint, PRD or ADRs - `specs/010-security-hardening/tasks.md` (EXTENDED) - Satisfies: FR-PROC-2
 
 ## Phase 2: Foundational (blocks every story)
