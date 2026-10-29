@@ -12,7 +12,7 @@ Unlike the rest of the suite, this test deliberately calls the REAL
 configured Gemini API — same category as `test_live_services.py` (T138):
 excluded from the normal run via the `smoke` marker, picked up by
 deep-ci.yml's weekly `pytest -m smoke tests/smoke/`. Only the raw network
-transport (`httpx.get`, inside `app.tools.web_fetch`) is mocked, dispatching
+transport (the httpx client `app.tools.web_fetch._make_client` builds) is mocked, dispatching
 by domain to HTML reconstructed from the real markup shapes T135's Phase A
 found live-fetching EACEA (international_org) and HEC Pakistan (gov) — not
 byte-for-byte captures, per this project's "no external test-data
@@ -24,7 +24,7 @@ Cost: exactly 2 real Gemini calls per run (one per dedicated source; T135/A9's
 per-run memoization guarantees no more than one call per unique source_id
 regardless of how many profile dimensions match it). The 5 real seeded
 sources are also reachable via this profile's other active-source lookups,
-but `_fake_httpx_get`'s fallback returns empty content for any URL that
+but the fake transport's fallback returns empty content for any URL that
 isn't one of this test's two dedicated domains, which stays under
 `extract_listing`'s minimum-viable-text-length gate — zero extra LLM calls
 for those.
@@ -56,13 +56,14 @@ call. Treat any failure here as "investigate before re-running," not
 """
 
 import uuid
-from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from app.data.repositories import source_repo
 from app.schemas.source import SourceRegistryCreate
+from app.tools import web_fetch as web_fetch_module
 
 pytestmark = pytest.mark.smoke
 
@@ -101,23 +102,24 @@ _HEC_LIKE_HTML = """
 """
 
 
-def _fake_httpx_get(url: str, **_kwargs) -> SimpleNamespace:
-    if "eacea-smoke" in url:
+def _fake_transport_handler(request: httpx.Request) -> httpx.Response:
+    # 010: `fetch_url` pins the connection to the checked IP, so the logical host is in the
+    # `Host` header (the request URL carries the IP).
+    host = request.headers["Host"]
+    if "eacea-smoke" in host:
         html = _EACEA_LIKE_HTML
-    elif "hec-smoke" in url:
+    elif "hec-smoke" in host:
         html = _HEC_LIKE_HTML
     else:
         html = "<html></html>"  # any other active source: empty -> never a real LLM call
-    # `.url` must be set: `app/tools/web_fetch.py`'s `fetch_url` reads
-    # `str(response.url)` into `final_url` on every call (added in US6's
-    # 0205d23, after this fixture was last touched) -- a bare
-    # `SimpleNamespace(status_code=200, text=html)` raises `AttributeError`
-    # here, which this file's own retry/fetch-error path then quietly turns
-    # into a normal FAIL row (never an exception reaching the discovery
-    # agent), making every run fail with 0 candidates regardless of what
-    # Gemini would have returned. Found 2026-10-24 investigating why this
-    # test kept returning 0 candidates; see docs/operations-hardening.md.
-    return SimpleNamespace(status_code=200, text=html, url=url)
+    return httpx.Response(200, text=html)
+
+
+def _fake_make_client(**kwargs) -> httpx.Client:
+    return _REAL_MAKE_CLIENT(transport=httpx.MockTransport(_fake_transport_handler), **kwargs)
+
+
+_REAL_MAKE_CLIENT = web_fetch_module._make_client
 
 
 def test_discovery_endpoint_extracts_real_listing_candidates_across_two_source_types(authed_user, db_session_factory):
@@ -133,7 +135,7 @@ def test_discovery_endpoint_extracts_real_listing_candidates_across_two_source_t
             name="Smoke Test EACEA-like Source",
             source_type="international_org",
             official_status="official",
-            domain=f"eacea-smoke-{uuid.uuid4().hex}.example.invalid",
+            domain=f"eacea-smoke-{uuid.uuid4().hex}.example.com",
             access_method="web",
             reliability_level="high",
             status="active",
@@ -147,7 +149,7 @@ def test_discovery_endpoint_extracts_real_listing_candidates_across_two_source_t
             name="Smoke Test HEC-like Source",
             source_type="gov",
             official_status="official",
-            domain=f"hec-smoke-{uuid.uuid4().hex}.example.invalid",
+            domain=f"hec-smoke-{uuid.uuid4().hex}.example.com",
             access_method="web",
             reliability_level="high",
             status="active",
@@ -159,7 +161,7 @@ def test_discovery_endpoint_extracts_real_listing_candidates_across_two_source_t
     put_response = client.put("/profile", headers=headers, json={"target_countries": [eacea_country, hec_country]})
     assert put_response.status_code == 200
 
-    with patch("app.tools.web_fetch.httpx.get", side_effect=_fake_httpx_get):
+    with patch("app.tools.web_fetch._make_client", side_effect=_fake_make_client),          patch("app.tools.web_fetch._resolve_host", return_value=["93.184.216.34"]):
         response = client.post("/discovery", headers=headers)
 
     assert response.status_code == 200

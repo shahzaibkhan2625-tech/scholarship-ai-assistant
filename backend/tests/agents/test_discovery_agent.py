@@ -19,6 +19,7 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from app.agents.discovery.agent import run_discovery
@@ -27,6 +28,7 @@ from app.models.scholarship import Scholarship
 from app.models.source import FetchStatus, SourceRegistry
 from app.schemas.source import SourceFetchLogCreate, SourceRegistryCreate
 from app.services.classify import ClassifiedScholarshipFields
+from app.tools import web_fetch as web_fetch_module
 from app.tools.api_connector import ApiConnectorOutput
 from app.tools.listing_fetch import ListingFetchOutput
 
@@ -296,7 +298,7 @@ def test_offline_discovery_flow_two_new_web_sources_with_correctly_mocked_extrac
     """Regression test (2026-10-24): reproduces the LIVE smoke test's exact shape
     (two brand-new web sources, one international_org + one gov, no
     listing_page_url -> homepage fallback) but with fully offline mocks: a
-    fake `httpx.get` (no network) and a fake `extract_listing_from_page` (no
+    fake a fake httpx transport (no network) and a fake `extract_listing_from_page` (no
     LLM) returning grounded candidates directly. Everything else -- the real
     `listing_fetch_tool` -> `fetch_and_extract_listing` -> `resolve_fetch_target`
     chain, caching, redirect checks -- runs unmocked, exactly as US6 left it.
@@ -334,9 +336,15 @@ def test_offline_discovery_flow_two_new_web_sources_with_correctly_mocked_extrac
     def ok_api(db_arg, source_id, query):
         return ApiConnectorOutput(source_id=source_id, query=query, status="ok", records=[])
 
-    def fake_httpx_get(url: str, **_kwargs) -> SimpleNamespace:
-        # Correctly set `.url` -- the fix for the bug this test exists to isolate.
-        return SimpleNamespace(status_code=200, text="<html>offline fixture</html>", url=url)
+    def transport_handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>offline fixture</html>")
+
+    # 010: `fetch_url` now builds its client through `_make_client` and resolves names itself;
+    # inject a fake transport and a public-address resolver (no real network or DNS).
+    real_make_client = web_fetch_module._make_client
+
+    def fake_make_client(**kwargs):
+        return real_make_client(transport=httpx.MockTransport(transport_handler), **kwargs)
 
     def fake_extract_listing(_html: str, *, source_url: str) -> ExtractListingOutput:
         if intl_domain in source_url:
@@ -362,7 +370,7 @@ def test_offline_discovery_flow_two_new_web_sources_with_correctly_mocked_extrac
         kwargs.setdefault("extract_listing", fake_extract_listing)
         return real_fetch_and_extract_listing(db_arg, source_id, url, **kwargs)
 
-    with patch("app.tools.web_fetch.httpx.get", side_effect=fake_httpx_get), \
+    with patch("app.tools.web_fetch._make_client", side_effect=fake_make_client),          patch("app.tools.web_fetch._resolve_host", return_value=["93.184.216.34"]), \
          patch("app.tools.listing_fetch.fetch_and_extract_listing", side_effect=wrapped_fetch_and_extract_listing), \
          patch("app.workflows.ingestion.graph.classify_service.classify_candidate", return_value=_FAKE_CLASSIFICATION):
         run = run_discovery(session, profile, fetch_api=ok_api)
