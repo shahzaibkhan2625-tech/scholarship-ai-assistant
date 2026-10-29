@@ -1,0 +1,332 @@
+# Tasks: Security Hardening of the Live Server
+
+**Input**: `specs/010-security-hardening/` - spec.md, plan.md, research.md, data-model.md, contracts/api-delta.md, contracts/operator-cli.md, contracts/db-role.sql, quickstart.md; `adr/0016-security-hardening-redirect-safe-fetch-single-operator-least-privilege-db-role-audit-log-and-gmail-smtp.md`
+**Prerequisites**: plan.md and spec.md (approved). Continues the T-id sequence: 001 used T001-T140, 002 T141-T250 (highest id found in `specs/*/tasks.md`), 003 T251-T326 (highest id found) - **first id here is T327, last is T450**.
+**Tests**: MANDATORY (constitution Principle V; spec FR-PROC-1). In every story the test tasks come first, start at that story's entry point from the spec's entry-point map, and MUST fail before the implementation tasks start.
+**Migrations**: the worker only GENERATES the Alembic revision and applies it to a LOCAL/CI Postgres. **The worker never runs Alembic against Neon and never handles a secret**; every such step is an `OWNER:` task.
+
+## Format: `- [ ] T### [P?] [USn?] Description - path (NEW|EXTENDED) - Depends: ... - Satisfies: ...`
+
+- **[P]**: different files and no dependency on an incomplete task.
+- **[USn]**: user-story phases only.
+- **NEW / EXTENDED**: file created by this feature, or additive change to an existing file (existing public signatures keep working).
+- **OWNER:** steps are performed by the owner; Claude stops there.
+- Paths are relative to the repo root `scholarship-ai-assistant/`.
+
+## Hard rules baked into every task
+
+- Student features are unchanged (FR-AUTHZ-6); no existing test expectation is weakened. Tests are edited only where behaviour changes by design (listed explicitly: gated routes, `web_fetch` patch point, upload types, signup rules).
+- **No new dependency.** Standard library (`ipaddress`, `socket`, `ssl`, `smtplib`, `argparse`) and existing packages only; a task that seems to need one stops and asks (FR-PROC-2).
+- No secret, token, page content or raw exception text is written to a log, a response or the repository.
+- Blueprint, PRD and ADR files are NOT edited by any task (the manager edits the Blueprint and PRD; ADR-0016 is done).
+- Matching code, agents and submission paths are untouched (constitution Principles II, III).
+
+## MVP: US1 + US2 + US3 (all P1)
+The first deliverable slice is **T349 - T382** (Phases 3-5), on top of Setup and Foundational (T327-T348). It closes the three exposures that exist today (any user can govern sources, the server can be steered to internal addresses, the app holds owner rights). It is demonstrable and CI-proven before any P2/P3 story starts. Deploying the MVP alone is possible but the owner deploys once, after US8, to avoid three rounds of owner steps.
+
+## Phase 1: Setup
+
+**Purpose**: things that must be true before any story code lands, so CI and the test suite stay green.
+
+- [ ] T327 [P] Raise the CI JWT secret to at least 32 characters (a throwaway, non-secret string such as `ci-only-dummy-secret-0123456789abcdef`) in the `env:` block - `.github/workflows/ci.yml` (EXTENDED) - Satisfies: FR-CRED-3
+- [ ] T328 [P] Raise the deep-CI JWT secret to at least 32 characters in the `env:` block (same throwaway string) - `.github/workflows/deep-ci.yml` (EXTENDED) - Satisfies: FR-CRED-3
+- [ ] T329 [P] Raise the `"test-secret"` values set by monkeypatch to 32+ character throwaway strings (comment `# allow-secret` as the repo does): `backend/tests/core/test_config_002.py` line 25 and `backend/tests/services/test_alerts.py` line 359 - `backend/tests/core/test_config_002.py, backend/tests/services/test_alerts.py` (EXTENDED) - Satisfies: FR-CRED-3
+- [ ] T330 [P] Create the new test package for security tests - `backend/tests/security/__init__.py` (NEW) - Satisfies: FR-PROC-1
+- [ ] T331 Standing checkpoint (no code): if any later task finds code, tests or documents that differ from the Blueprint or PRD beyond D-1..D-4, STOP, write the finding at the top of this file under `## STOP`, and wait for the owner. Do not edit the Blueprint, PRD or ADRs - `specs/010-security-hardening/tasks.md` (EXTENDED) - Satisfies: FR-PROC-2
+
+## Phase 2: Foundational (blocks every story)
+
+**Purpose**: shared pieces several stories need: the `url_safety` module, `require_operator`, `audit_repo`, the one Alembic revision, config fields, shared test fixtures.
+**Checkpoint**: after this phase the schema exists on a LOCAL/CI Postgres, `require_operator` and `audit_repo` are unit-tested, and the moved SSRF guard passes its old and new tests.
+
+- [ ] T332 [P] Write `test_url_safety.py` FIRST (must fail): the moved guard (`unsafe_url_reason`, `_non_public`, scheme, `localhost`, IPv4-mapped IPv6, multi-address with one private, unresolvable host not refused) plus `resolve_public(host)` and `is_public_hostname(domain)` (IP literal, single label, IANA special-use names `alt example invalid local localhost onion test home.arpa`, conventional suffixes `internal corp lan home intranet private localdomain`, resolves-private, plain public name OK) and numeric encodings `2130706433`, `0x7f.1`, `017700000001` judged on their RESOLVED addresses - `backend/tests/core/test_url_safety.py` (NEW) - Satisfies: FR-SSRF-1, FR-SSRF-3, FR-SSRF-6
+- [ ] T333 [P] Write `test_audit_repo.py` FIRST: `record()` adds a row but never commits (a rollback removes it), rejects an action outside the closed set (`user.signup source.approve source.reject monitoring.run.manual submission.approve operator.grant`), stores `<kind>:<uuid>` entities - `backend/tests/data/test_audit_repo.py` (NEW) - Satisfies: FR-AUDIT-1, FR-AUDIT-2
+- [ ] T334 [P] Write `test_config_010.py` FIRST: defaults of `MAX_UPLOAD_BYTES` (10485760), `MAX_FETCH_REDIRECTS` (5), optional `MIGRATION_DATABASE_URL`; a helper `migration_url(settings)` returns the migration URL when set, else `database_url` - `backend/tests/core/test_config_010.py` (NEW) - Satisfies: FR-DBROLE-2
+- [ ] T335 [P] Write `test_operator_dependency.py` FIRST using a test-only router that depends on `require_operator`: no token -> 401, non-operator -> 403 `Operator access required`, operator -> 200, and flipping `is_operator` in the database makes the very next request change result with the same token (FR-AUTHZ-4) - `backend/tests/api/test_operator_dependency.py` (NEW) - Satisfies: FR-AUTHZ-2, FR-AUTHZ-4
+- [ ] T336 [P] Write `test_migration_010.py` FIRST (runs against local/CI Postgres only): after upgrade, `users.is_operator` exists, NOT NULL, default false; a unique index on `lower(email)` rejects `Ada@x.com` + `ada@x.com`; `audit_log` has `id user_id action entity at` with indexes on `(at)` and `(user_id, at)` and no foreign key; the conditional REVOKE does not fail when `scholarship_app` does not exist; downgrade removes all three - `backend/tests/data/test_migration_010.py` (NEW) - Satisfies: FR-AUTHZ-3, FR-AUDIT-1, FR-CRED-2, FR-CRED-5
+- [ ] T337 Add `is_operator: Mapped[bool]` (NOT NULL, `server_default` false) to the `User` model - `backend/app/models/user.py` (EXTENDED) - Depends: T336 - Satisfies: FR-AUTHZ-1, FR-AUTHZ-3
+- [ ] T338 [P] Create the `AuditLog` model per data-model.md section 2 (UUID pk, `user_id` UUID NOT NULL with NO foreign key, `action` text, `entity` text, `at` timestamptz default now()) - `backend/app/models/audit.py` (NEW) - Depends: T336 - Satisfies: FR-AUDIT-1
+- [ ] T339 Add settings `migration_database_url` (alias `MIGRATION_DATABASE_URL`, optional), `max_upload_bytes` (alias `MAX_UPLOAD_BYTES`, default 10485760) and `max_fetch_redirects` (alias `MAX_FETCH_REDIRECTS`, default 5, ge=0), and the `migration_url(settings)` helper; apply the existing psycopg-scheme normalisation to the migration URL too - `backend/app/core/config.py` (EXTENDED) - Depends: T334 - Satisfies: FR-DBROLE-2
+- [ ] T340 In Alembic `env.py` import the audit model (so metadata sees it) and use `migration_url(settings)` for `sqlalchemy.url` instead of `settings.database_url` - `backend/migrations/env.py` (EXTENDED) - Depends: T338, T339 - Satisfies: FR-DBROLE-2
+- [ ] T341 Create the shared guard module: MOVE `_resolve_host`, `_non_public`, `unsafe_url_reason` unchanged from `candidate_validation.py`, and add `resolve_public(host) -> list[str]` (raises `UnsafeUrlError` with the reason if any address is non-public; unresolvable hosts raise a distinct `UnresolvableHostError`) and `is_public_hostname(domain) -> str | None` with the documented reserved/private suffix constants (IANA special-use names + conventional private suffixes, comment cites the IANA registry URL) - `backend/app/core/url_safety.py` (NEW) - Depends: T332 - Satisfies: FR-SSRF-1, FR-SSRF-3, FR-SSRF-6
+- [ ] T342 In `candidate_validation.py` delete the moved functions and import/re-export `_resolve_host`, `_non_public`, `unsafe_url_reason` from `app.core.url_safety` (names stay importable); then run `backend/tests/services/test_candidate_validation.py` and `backend/tests/core/test_url_safety.py` and confirm both pass unchanged - `backend/app/services/candidate_validation.py` (EXTENDED) - Depends: T341 - Satisfies: FR-SSRF-1
+- [ ] T343 Create `audit_repo.record(db, user_id, action, entity)` (closed `AUDIT_ACTIONS` set, `db.add` only, never commits or flushes the caller's other work) - `backend/app/data/repositories/audit_repo.py` (NEW) - Depends: T333, T338 - Satisfies: FR-AUDIT-1, FR-AUDIT-2
+- [ ] T344 Add `require_operator(current_user = Depends(get_current_user)) -> User` raising 403 `Operator access required` when `current_user.is_operator` is false (runs after authentication, so 401 still wins) - `backend/app/api/deps.py` (EXTENDED) - Depends: T335, T337 - Satisfies: FR-AUTHZ-1, FR-AUTHZ-2, FR-AUTHZ-4
+- [ ] T345 GENERATE (do not apply to Neon) the single additive Alembic revision after head `f2b8d4a6c1e3`: add `users.is_operator`, unique index on `lower(email)`, create `audit_log` with its two indexes, and a `DO $$ ... IF EXISTS (role scholarship_app) THEN REVOKE UPDATE, DELETE, TRUNCATE ON audit_log ...` block; downgrade drops all of it. Name the file `<new_rev>_security_hardening.py` - `backend/migrations/versions/<new_rev>_security_hardening.py` (NEW) - Depends: T336, T337, T338, T340 - Satisfies: FR-AUTHZ-3, FR-AUDIT-1, FR-AUDIT-3, FR-CRED-2, FR-CRED-5
+- [ ] T346 Apply the revision to a LOCAL/CI Postgres only (`alembic upgrade head` with `MIGRATION_DATABASE_URL` pointing at a localhost database; the repo's shared-DB guard `ALLOW_SHARED_DB` must NOT be set). The worker never runs Alembic against Neon; the owner does that in the deploy phase. Run `backend/tests/data/test_migration_010.py` and `backend/tests/core/test_config_010.py` until green - `backend/migrations/versions/<new_rev>_security_hardening.py` (EXTENDED) - Depends: T345 - Satisfies: FR-DBROLE-2
+- [ ] T347 Add shared fixtures `make_user(is_operator=False)` (creates a user in the test transaction and returns id, email and bearer headers) and `operator_headers`/`student_headers` built on it; leave `authed_user` working as a non-operator - `backend/tests/conftest.py` (EXTENDED) - Depends: T337 - Satisfies: FR-PROC-1
+- [ ] T348 [P] Document `MIGRATION_DATABASE_URL` (empty placeholder, comment: owner/direct URL, passed only to the one-off migration command, never stored on the VM) and `MAX_UPLOAD_BYTES`/`MAX_FETCH_REDIRECTS` in `.env.example`; keep `JWT_SECRET_KEY=change-me-to-a-random-secret` (it is the value that must be refused) - `.env.example` (EXTENDED) - Depends: T339 - Satisfies: FR-DBROLE-2, FR-MAIL-3
+
+## Phase 3: User Story 1 - Only the operator governs sources (P1) - MVP
+
+**Goal**: approve, reject, manual run, run detail, fetch log and candidate validations are operator-only; operator status changes only through the server command.
+**Independent test**: create two users, grant one by `python -m app.services.operator grant`, call every gated route as anonymous / student / operator; run the existing student journeys unchanged.
+
+- [ ] T349 [P] [US1] Write the operator-gate matrix FIRST: for approve, reject, `POST /monitoring/runs`, `GET /monitoring/runs/{run_id}`, `GET /sources/{source_id}/fetch-log`, `GET /sources/candidates/{candidate_id}/validations`, assert anonymous -> 401, student -> 403 with NO side effect (candidate still `pending`, no run row, no data in the body), operator -> same success as today; also assert `GET /sources`, `GET /sources/candidates`, `GET /sources/health`, `GET /monitoring/runs`, `GET /coverage` and the student routes still return 200 for a student - `backend/tests/api/test_operator_gate.py` (NEW) - Depends: T347 - Satisfies: FR-AUTHZ-1, FR-AUTHZ-2, FR-AUTHZ-6, SC-001
+- [ ] T350 [P] [US1] Write the operator-CLI tests FIRST, starting at `main(argv)`: `grant --email` on a non-operator (stdout `granted operator status to <email>`, exit 0, exactly one `operator.grant` row with user_id = grantee and entity `user:<id>`), re-grant (`already an operator`, exit 0, no second row), `revoke` (exit 0, no audit row), revoke of a non-operator, unknown email (`no such user`, exit 1, nothing changed), bad arguments (exit 2), mixed-case email input, and that after grant the same user's NEXT HTTP request to an operator route succeeds and after revoke is 403 - `backend/tests/services/test_operator_cli.py` (NEW) - Depends: T347, T343 - Satisfies: FR-AUTHZ-3, FR-AUTHZ-4, FR-AUDIT-1, SC-001
+- [ ] T351 [P] [US1] Write the no-role-endpoint tests FIRST: the OpenAPI document has no path containing `operator`, `role` or `admin`; `POST /auth/signup` and `PUT /profile` with an extra `"is_operator": true` create/update normally and the user is NOT an operator; `GET /auth/...` responses never include `is_operator` - `backend/tests/api/test_no_role_endpoints.py` (NEW) - Depends: T347 - Satisfies: FR-AUTHZ-3, SC-001
+- [ ] T352 [P] [US1] Update the existing tests that call a now-gated route over HTTP so they authenticate as an operator (use `make_user(is_operator=True)`); do not weaken any assertion: `backend/tests/api/test_candidate_validations_api.py`, `backend/tests/api/test_health.py` (fetch-log), `backend/tests/api/test_monitoring_api.py` (POST and run detail), `backend/tests/api/test_openapi_contract_002.py` (add the 403 response to the five gated operations) - `backend/tests/api/test_candidate_validations_api.py, backend/tests/api/test_health.py, backend/tests/api/test_monitoring_api.py, backend/tests/api/test_openapi_contract_002.py` (EXTENDED) - Depends: T347 - Satisfies: FR-AUTHZ-1, FR-AUTHZ-6
+- [ ] T353 [P] [US1] Audit the other tests that mention the gated paths (`backend/tests/integration/test_listing_page_fetch_flow.py`, `backend/tests/services/test_coverage.py`, `backend/tests/services/test_retention.py`, `backend/tests/sources/test_allow_failing_gate.py`, `backend/tests/sources/test_connectors.py`, `backend/tests/workflows/test_source_monitor.py`); edit ONLY those that call an approve/reject/POST-run/run-detail/fetch-log/validations route over HTTP; leave service-level callers untouched; record the audit result as a one-line comment in the task commit message - `backend/tests/integration/test_listing_page_fetch_flow.py (and the files listed)` (EXTENDED) - Depends: T347 - Satisfies: FR-AUTHZ-6
+- [ ] T354 [US1] Gate approve, reject and validations with `Depends(require_operator)` (replace `get_current_user` on those three routes) and add `403` to each route's `responses` - `backend/app/api/sources.py` (EXTENDED) - Depends: T349, T344 - Satisfies: FR-AUTHZ-1, FR-AUTHZ-2
+- [ ] T355 [P] [US1] Gate `POST /monitoring/runs` and `GET /monitoring/runs/{run_id}` (run detail returns `source_outcomes` built from fetch-log rows, lines 55-61, owner decision Q-1 = A); `GET /monitoring/runs` (list) stays on `get_current_user`; add `403` to `responses` - `backend/app/api/monitoring.py` (EXTENDED) - Depends: T349, T344 - Satisfies: FR-AUTHZ-1, FR-AUTHZ-2
+- [ ] T356 [P] [US1] Gate `GET /sources/{source_id}/fetch-log` with `require_operator`; `GET /sources/health` stays open; add `403` to `responses` - `backend/app/api/health.py` (EXTENDED) - Depends: T349, T344 - Satisfies: FR-AUTHZ-1, FR-AUTHZ-2
+- [ ] T357 [P] [US1] Create the operator CLI per `contracts/operator-cli.md`: `main(argv) -> int` with `grant`/`revoke --email`, trimmed + lower-cased + case-insensitive lookup, exit codes 0/1/2, `SessionLocal` opened inside `main`, `raise SystemExit(main())`; grant writes the flag change and `audit_repo.record(db, grantee_id, "operator.grant", f"user:{id}")` in ONE commit; no password hashes or tokens in output - `backend/app/services/operator.py` (NEW) - Depends: T350, T343, T337 - Satisfies: FR-AUTHZ-3, FR-AUTHZ-4, FR-AUDIT-1
+- [ ] T358 [US1] Run `backend/tests/api/test_operator_gate.py`, `test_no_role_endpoints.py`, `backend/tests/services/test_operator_cli.py` and the whole `backend/tests/api/` folder on the local Postgres; confirm student-route tests pass with no edited expectations and that `backend/tests/infra/test_deploy_config.py` still asserts `/metrics` is answered 404 by the Caddyfile - `backend/tests/api/` (EXTENDED) - Depends: T354, T355, T356, T357, T352, T353, T351 - Satisfies: FR-AUTHZ-6, FR-AUTHZ-7, SC-001
+
+## Phase 4: User Story 2 - User-supplied URLs cannot reach internal addresses (P1) - MVP
+
+**Goal**: no request ever reaches a non-public address, on the first URL or any redirect hop; approval needs a public host name; duplicate domain is a 409.
+**Independent test**: the 20+ case battery against a recording fake network, through URL match, source approval, candidate validation (manual run and scheduler tick) and the API connector.
+
+- [ ] T359 [P] [US2] Write the SSRF battery FIRST against a recording `httpx.MockTransport` and an injected resolver (no real network): AT LEAST 20 blocked cases (127.0.0.1, `localhost`, `[::1]`, 10/8, 172.16/12, 192.168/16, 169.254.169.254, `fd00::/8`, IPv4-mapped `::ffff:10.0.0.1`, `2130706433`, `0x7f.1`, `017700000001`, `0.0.0.0`, 100.64/10, multi-address DNS with one private, a hostname resolving to metadata, `file://`, `ftp://`, redirect to private at hop 1, hop 2 and the last allowed hop, redirect to `file://`, scheme downgrade) each asserting ZERO requests reached the transport for the blocked hop and a `FetchResult(success=False, blocked=True, error="blocked: ...")`; the 6th redirect hop is refused; PINNING: for a public name the transport sees `request.url.host == <checked IP>`, header `Host == <name[:port]>` and `extensions["sni_hostname"] == <name>` for https; `trust_env` is off (proxy env vars ignored); a public happy path with 2 redirects works and `final_url` is the last URL; relative `Location` is resolved; log line carries the reason without secrets - `backend/tests/tools/test_web_fetch_ssrf.py` (NEW) - Depends: T341 - Satisfies: FR-SSRF-1, FR-SSRF-2, FR-SSRF-3, FR-SSRF-4, FR-SSRF-5, FR-SSRF-8, SC-002
+- [ ] T360 [P] [US2] Update the two existing tests that patch `app.tools.web_fetch.httpx.get` (it will no longer be called) to use the new transport seam (`app.tools.web_fetch._make_client`) with a fake transport and injected resolver: `backend/tests/agents/test_discovery_agent.py` (line 365) and `backend/tests/smoke/test_discovery_listing_extraction_live.py` (line 162); behaviour asserted must not change - `backend/tests/agents/test_discovery_agent.py, backend/tests/smoke/test_discovery_listing_extraction_live.py` (EXTENDED) - Depends: T341 - Satisfies: FR-SSRF-8
+- [ ] T361 [P] [US2] Extend the API-connector tool tests FIRST: the default transport refuses a registry domain that resolves to a non-public address (no request sent), does not follow redirects, and still works for a public domain - `backend/tests/tools/test_api_connector_tool.py` (EXTENDED) - Depends: T341 - Satisfies: FR-SSRF-1, FR-SSRF-8
+- [ ] T362 [P] [US2] Write the route-level test FIRST, starting at `POST /scholarships/match-url`: metadata address, loopback, a redirect to a private address -> 422 `FetchFailure` whose `error` starts `blocked:`, no scholarship row created, one log line with user id, entry point and reason; a public URL still returns the normal result - `backend/tests/api/test_match_url_ssrf.py` (NEW) - Depends: T347 - Satisfies: FR-SSRF-1, FR-SSRF-5, FR-SSRF-8, SC-002
+- [ ] T363 [P] [US2] Write the approval tests FIRST, starting at `POST /sources/candidates/{id}/approve` as operator: domain `internal.corp`, `localhost`, `10.0.0.5`, `169.254.169.254`, `intranet`, a name resolving to a private address -> 422 naming the rule and no source created, candidate still `pending`; a duplicate registry domain -> 409 and candidate still `pending`; a public domain -> 200 as today - `backend/tests/api/test_source_approval_domain.py` (NEW) - Depends: T347, T341 - Satisfies: FR-SSRF-6, FR-SSRF-7, SC-002
+- [ ] T364 [P] [US2] Extend the candidate-validation tests FIRST: a redirect to a non-public address is never requested (recording transport), the row records `blocked: ...`, the retained post-redirect `final_url` check still works with the injected fetch seam - `backend/tests/services/test_candidate_validation.py` (EXTENDED) - Depends: T342 - Satisfies: FR-SSRF-1, FR-SSRF-2
+- [ ] T365 [P] [US2] Write the entry-point test FIRST: seed one pending candidate whose URL redirects to a private address and start from (a) `POST /monitoring/runs` as operator and (b) the scheduler tick function `_run_scheduled_monitor` in `backend/app/scheduling/scheduler.py`; with the web_fetch transport seam faked, assert the validation row says `blocked` and the recording transport saw no request to the private address - `backend/tests/workflows/test_candidate_validation_entry_ssrf.py` (NEW) - Depends: T347, T341 - Satisfies: FR-SSRF-1, FR-SSRF-2, SC-002
+- [ ] T366 [US2] Rewrite `fetch_url`: per hop `resolve_public(host)` (refuse if any address non-public), connect to ONE checked address by putting the IP in the request URL (brackets for IPv6) with `Host` header = original host[:port] and `extensions={"sni_hostname": host}` for https; `follow_redirects=False`, `trust_env=False`; follow 301/302/303/307/308 itself with `urljoin`, http/https only, at most `settings.max_fetch_redirects` hops; add `blocked: bool = False` to `FetchResult`; blocked/over-long chains return `success=False, blocked=True, error="blocked: ..."`; module-level `_make_client(...)` seam for tests; keep `timeout`, user agent and the existing success/4xx/timeout result shapes; log refusals at WARNING with host and reason only - `backend/app/tools/web_fetch.py` (EXTENDED) - Depends: T359, T360, T341 - Satisfies: FR-SSRF-1, FR-SSRF-2, FR-SSRF-3, FR-SSRF-4, FR-SSRF-5, FR-SSRF-8
+- [ ] T367 [P] [US2] Replace the bare `httpx.get(f"https://{source.domain}")` in `_default_client` with the shared safe-request helper from `web_fetch.py` using zero redirects - `backend/app/sources/connectors/api_connector.py` (EXTENDED) - Depends: T361, T366 - Satisfies: FR-SSRF-1, FR-SSRF-8
+- [ ] T368 [P] [US2] Extend `_validate_domain` / `SourceRegistryCreate.domain` validation: reject IP literals (v4/v6), single-label names, IANA special-use and conventional private suffixes (via `is_public_hostname` static part), with a message naming the rule - `backend/app/schemas/source.py` (EXTENDED) - Depends: T363, T341 - Satisfies: FR-SSRF-6
+- [ ] T369 [P] [US2] In `approve_candidate_source` catch the unique violation on `source_registry.domain` (`IntegrityError`), `rollback()`, and raise a new `DuplicateSourceDomainError`; the candidate stays `pending` - `backend/app/data/repositories/source_repo.py` (EXTENDED) - Depends: T363 - Satisfies: FR-SSRF-7
+- [ ] T370 [US2] In the approve route call `is_public_hostname(domain)` (DNS part) before the repository call -> 422 with the reason; map `DuplicateSourceDomainError` -> 409 `Source domain already registered`; add 409/422 to `responses`. - `backend/app/api/sources.py` (EXTENDED) - Depends: T354, T368, T369, T341 - Satisfies: FR-SSRF-6, FR-SSRF-7
+- [ ] T371 [US2] In `candidate_validation.py` keep the post-redirect `final_url` check as a second check, rewrite the module docstring's "Limit" paragraph (the redirect limitation is closed by ADR-0016), and log refusals with the candidate id - `backend/app/services/candidate_validation.py` (EXTENDED) - Depends: T366, T364 - Satisfies: FR-SSRF-1, FR-SSRF-5
+- [ ] T372 [P] [US2] Log a blocked URL-match fetch with `user_id` and entry point `match-url` (use the existing `log_context`; no page content, no secrets) where `_fetch_node` receives `FetchResult.blocked` - `backend/app/workflows/url_match/graph.py` (EXTENDED) - Depends: T366, T362 - Satisfies: FR-SSRF-5
+- [ ] T373 [US2] Run all US2 tests plus `backend/tests/workflows/`, `backend/tests/sources/`, `backend/tests/agents/`, `backend/tests/integration/` on local Postgres; confirm the SSRF battery has at least 20 blocked cases and every one asserts zero connection to a non-public address - `backend/tests/` (EXTENDED) - Depends: T366, T367, T370, T371, T372, T365 - Satisfies: SC-002
+
+## Phase 5: User Story 3 - The running app has least-privilege database access (P1) - MVP
+
+**Goal**: the app runs as `scholarship_app`; migrations run as owner; CI proves the whole suite passes under the restricted role.
+**Independent test**: as `scholarship_app` CREATE/ALTER/DROP TABLE and CREATE ROLE are refused, the full suite and deep smoke test pass.
+**MVP checkpoint**: US1 + US2 + US3 are the first deliverable slice (all P1).
+
+- [ ] T374 [P] [US3] Write the role tests FIRST: connected as the app role, `CREATE TABLE`, `ALTER TABLE users ...`, `DROP TABLE`, `CREATE ROLE`, `CREATE DATABASE` each fail with a privilege error; DML on every application table works; a table created later by the migration role is usable without a manual grant (default privileges); the role has `rolbypassrls = false`; the test skips with a stated reason when the connected role is owner-level - `backend/tests/security/test_db_role.py` (NEW) - Depends: T330, T346 - Satisfies: FR-DBROLE-1, FR-DBROLE-3, SC-003
+- [ ] T375 [P] [US3] Write the start-up warning test FIRST: with a fake connection reporting an owner-level role (superuser, createdb, createrole, bypassrls, or CREATE on schema public) the check logs one WARNING and does not block start; with a restricted role it logs nothing; the check is invoked from the application lifespan (start the app via `TestClient` context) - `backend/tests/core/test_db_owner_warning.py` (NEW) - Depends: T330 - Satisfies: FR-DBROLE-5
+- [ ] T376 [US3] Create the role script as an exact copy of `specs/010-security-hardening/contracts/db-role.sql`, adding ONE guard so CI can run it non-interactively: wrap the `\password scholarship_app` line in `\if :{?skip_password} \else ... \endif` (CI passes `-v skip_password=1` and sets a throwaway password with `ALTER ROLE`); apply the same guard to the contract file so the two stay identical; no password anywhere in either file - `backend/scripts/db/create_app_role.sql` (NEW) - Depends: T374 - Satisfies: FR-DBROLE-1, FR-DBROLE-3, FR-DBROLE-6
+- [ ] T377 [P] [US3] Keep the contract identical to the script (same `\if` guard, same text) - `specs/010-security-hardening/contracts/db-role.sql` (EXTENDED) - Depends: T376 - Satisfies: FR-DBROLE-6
+- [ ] T378 [P] [US3] Create the start-up check: query `pg_roles` for the connected role (`rolsuper`, `rolcreatedb`, `rolcreaterole`, `rolbypassrls`) and `has_schema_privilege(current_user, 'public', 'CREATE')`; log one WARNING `database credentials have owner-level rights` naming which flags are true (never the URL or password); never raises - `backend/app/core/db_role_check.py` (NEW) - Depends: T375 - Satisfies: FR-DBROLE-5
+- [ ] T379 [US3] Call the check once from the `lifespan` in `main.py` (after logging is configured, inside a `try` that cannot stop start-up) - `backend/app/main.py` (EXTENDED) - Depends: T378 - Satisfies: FR-DBROLE-5
+- [ ] T380 [P] [US3] CI: after the Postgres service is healthy, create the restricted role by running `backend/scripts/db/create_app_role.sql` with `psql -v ON_ERROR_STOP=1 -v migration_role=postgres -v skip_password=1` as `postgres`, then `ALTER ROLE scholarship_app PASSWORD 'ci-only-not-a-secret'`; run `alembic upgrade head` with `MIGRATION_DATABASE_URL` = the `postgres` URL; run `pytest` with `DATABASE_URL` = `postgresql+psycopg://scholarship_app:ci-only-not-a-secret@localhost:5432/scholarship_ci`. Keep the eval score-gate and pip-audit steps as they are (they must also run with the restricted URL or `postgres`; use whichever they already need) - `.github/workflows/ci.yml` (EXTENDED) - Depends: T376, T327 - Satisfies: FR-DBROLE-4, SC-003
+- [ ] T381 [P] [US3] Deep CI: the same role creation, owner-credential migration and restricted-role test run, including the DB-backed smoke test - `.github/workflows/deep-ci.yml` (EXTENDED) - Depends: T376, T328 - Satisfies: FR-DBROLE-4, SC-003
+- [ ] T382 [US3] On a LOCAL Postgres reproduce the CI sequence (create role -> migrate as owner -> run the WHOLE `backend/tests` suite as `scholarship_app`); fix any missing grant in `create_app_role.sql` (and its contract copy) or any test that needs DDL, then confirm `test_db_role.py` ran (not skipped) and the suite is green. Record the result in the commit message - `backend/scripts/db/create_app_role.sql` (EXTENDED) - Depends: T379, T380, T381, T374 - Satisfies: FR-DBROLE-4, SC-003
+
+## Phase 6: User Story 4 - Credentials must be strong enough (P2)
+
+**Goal**: password 8..72 bytes (never cut), case-insensitive email, refuse to start on a weak or placeholder signing secret.
+**Independent test**: sign up with 0/7/8/72/73-byte passwords and `Ada@x.com` then `ada@x.com`; start with 31 / 32 / placeholder secrets.
+
+- [ ] T383 [P] [US4] Write the credential tests FIRST, starting at `POST /auth/signup` and `POST /auth/login`: passwords of 0, 7 -> 422 (message `at least 8 characters`); 8 and 72 ASCII bytes -> 201; 73 bytes and 25 four-byte characters (100 bytes) -> 422 (message `at most 72 bytes`), never accepted-and-cut; no composition rules (`aaaaaaaa` accepted); `Ada@x.com` then `ada@x.com` -> 409; an account created with mixed-case email directly in the DB (legacy row) logs in with any casing; a legacy account with a 5-char and a >72-byte password still logs in; response email is lower-case; a simulated race (the existence check monkeypatched to return None so the insert hits the `lower(email)` unique index) -> 409 not 500; `hash_password` raises ValueError above 72 bytes - `backend/tests/api/test_auth_credentials.py` (NEW) - Depends: T347, T346 - Satisfies: FR-CRED-1, FR-CRED-2, FR-CRED-4, SC-004
+- [ ] T384 [P] [US4] Write the signing-secret tests FIRST: `Settings` with a 31-character secret, an empty secret and `change-me-to-a-random-secret` raise a validation error whose message names the problem and does NOT contain the secret value; a 32-character secret loads; also start the app module via a subprocess with a weak secret and assert a non-zero exit and no secret in stderr - `backend/tests/core/test_config_secret.py` (NEW) - Depends: T330 - Satisfies: FR-CRED-3, SC-004
+- [ ] T385 [P] [US4] Update `backend/tests/test_auth.py` where it asserts exact-case email behaviour or uses passwords the new rules reject (keep every other assertion); grep `backend/tests` for other `/auth/signup` payloads with passwords under 8 characters and fix only those - `backend/tests/test_auth.py` (EXTENDED) - Depends: T383 - Satisfies: FR-CRED-1, FR-CRED-4
+- [ ] T386 [P] [US4] `SignupRequest`: validator `password` min 8 characters and `len(value.encode("utf-8")) <= 72` with the two messages from `contracts/api-delta.md`, no composition rules; `email` validators on `SignupRequest` and `LoginRequest` doing `strip().lower()`; `LoginRequest.password` gets NO length rule - `backend/app/schemas/auth.py` (EXTENDED) - Depends: T383 - Satisfies: FR-CRED-1, FR-CRED-2, FR-CRED-4
+- [ ] T387 [P] [US4] `hash_password` raises `ValueError` when `len(password.encode("utf-8")) > 72` (defence in depth); keep the `bcrypt<4.1` pin and the `CryptContext` as is - `backend/app/core/security.py` (EXTENDED) - Depends: T383 - Satisfies: FR-CRED-1
+- [ ] T388 [US4] Sign-up and login look the user up with `func.lower(User.email) == payload.email`; sign-up catches `IntegrityError` from the `lower(email)` index, rolls back and returns 409 `Email already registered`; `UserResponse` returns the stored lower-case address - `backend/app/api/auth.py` (EXTENDED) - Depends: T386, T387 - Satisfies: FR-CRED-2, FR-CRED-4
+- [ ] T389 [US4] Add a `model_validator` on `Settings` refusing `jwt_secret_key` shorter than 32 characters or equal to `change-me-to-a-random-secret` (message names the rule, never the value) - `backend/app/core/config.py` (EXTENDED) - Depends: T384, T329, T339 - Satisfies: FR-CRED-3
+- [ ] T390 [US4] Run `backend/tests/api/test_auth_credentials.py`, `backend/tests/core/test_config_secret.py`, `backend/tests/test_auth.py`, then the full `backend/tests/` suite (every test module imports settings, so any leftover short secret fails here) - `backend/tests/` (EXTENDED) - Depends: T388, T389, T385 - Satisfies: SC-004
+- [ ] T391 [P] [US4] Write the read-only collision pre-check as a ready-to-run query in the runbook text (done in the deploy-docs task) and add a unit test that the migration's unique-index step fails closed on colliding rows (covered by `test_migration_010.py`); no data is changed - `backend/tests/data/test_migration_010.py` (EXTENDED) - Depends: T346 - Satisfies: FR-CRED-5
+
+## Phase 7: User Story 5 - Uploads are limited and safe (P2)
+
+**Goal**: PDF only (by content), 10 MiB maximum, clear errors, CV import never blocks other users.
+**Independent test**: exact-limit and over-limit files, renamed files, corrupt/encrypted PDFs at both upload routes; a slow CV import while `/health` is called.
+
+- [ ] T392 [P] [US5] Write the upload tests FIRST, starting at `POST /applications/{id}/documents` and `POST /profile/import-cv`: a valid PDF of exactly 10485760 bytes -> accepted; 10485761 bytes -> 413 `File too large (maximum 10 MB)`; a text file named `x.pdf` -> 415 `Only PDF files are accepted`; a real PDF named `x.bin` -> accepted; empty -> 400 `File is empty`; corrupt, truncated, encrypted PDFs -> 422 at BOTH routes (never 500); for every refusal nothing is stored (fake storage records zero saves) and no `application_documents` row exists; the CV import no longer decodes a non-PDF as text - `backend/tests/api/test_upload_limits.py` (NEW) - Depends: T347 - Satisfies: FR-UPLOAD-1, FR-UPLOAD-2, SC-005
+- [ ] T393 [P] [US5] Write the non-blocking test FIRST using `httpx.AsyncClient` over `ASGITransport`: patch `extract_profile_from_text` with a function that sleeps 2 seconds, start `POST /profile/import-cv`, and while it runs `GET /health` must return in under 1 second; this test must FAIL against the current `async def import_cv` - `backend/tests/api/test_import_cv_nonblocking.py` (NEW) - Depends: T347 - Satisfies: FR-UPLOAD-3, SC-005
+- [ ] T394 [P] [US5] Write the middleware tests FIRST with a bare ASGI app: a declared `Content-Length` over the limit on `/profile/import-cv` or `/applications/{id}/documents` -> 413 before the app runs; a chunked body without `Content-Length` that exceeds the limit -> 413 after the limit is crossed; other paths and small bodies untouched; non-HTTP scopes untouched - `backend/tests/core/test_body_limit.py` (NEW) - Depends: T330 - Satisfies: FR-UPLOAD-1, SC-005
+- [ ] T395 [P] [US5] Write the helper tests FIRST: `read_pdf_upload(file, max_bytes)` reads at most `max_bytes + 1` bytes, returns bytes for `%PDF-` within the first 1024 bytes, raises typed errors for too-large (413), not-pdf (415), empty (400) - `backend/tests/core/test_uploads.py` (NEW) - Depends: T330 - Satisfies: FR-UPLOAD-1, FR-UPLOAD-2
+- [ ] T396 [P] [US5] Extend the deploy-config tests FIRST: the `Caddyfile` contains `request_body` with `max_size 11MB` inside the site block, ABOVE `reverse_proxy`, and the `/metrics` 404 rule is still above `reverse_proxy` - `backend/tests/infra/test_deploy_config.py` (EXTENDED) - Depends: T330 - Satisfies: FR-UPLOAD-1, FR-AUTHZ-7
+- [ ] T397 [P] [US5] Update existing tests whose expectations change by design: `backend/tests/api/test_profile_api.py` (`test_import_cv_returns_suggestions_without_persisting` uploads `cv.txt` as text; give it a small valid PDF) and `backend/tests/workflows/test_doc_pipeline.py` (identify-type is now content-based, not filename-based; add a case for a PDF with a non-`.pdf` name) - `backend/tests/api/test_profile_api.py, backend/tests/workflows/test_doc_pipeline.py` (EXTENDED) - Depends: T392 - Satisfies: FR-UPLOAD-1
+- [ ] T398 [US5] Create `read_pdf_upload(file, max_bytes=settings.max_upload_bytes)` and the typed errors (mapped to HTTPException 413/415/400) - `backend/app/core/uploads.py` (NEW) - Depends: T395, T339 - Satisfies: FR-UPLOAD-1, FR-UPLOAD-2
+- [ ] T399 [P] [US5] Create the pure-ASGI body-limit middleware (same style as `rate_limit.py`/`request_id.py`) for the two upload path patterns, limit = `max_upload_bytes` + 64 KiB multipart allowance, 413 JSON `File too large (maximum 10 MB)` - `backend/app/core/body_limit.py` (NEW) - Depends: T394, T339 - Satisfies: FR-UPLOAD-1
+- [ ] T400 [US5] Register the body-limit middleware in `main.py` next to the existing `add_middleware` calls - `backend/app/main.py` (EXTENDED) - Depends: T399, T379 - Satisfies: FR-UPLOAD-1
+- [ ] T401 [P] [US5] In `upload_document` replace `file.file.read()` (line 57) with `read_pdf_upload(file)`; refusals happen BEFORE the storage save and the row insert - `backend/app/api/documents.py` (EXTENDED) - Depends: T392, T398 - Satisfies: FR-UPLOAD-1, FR-UPLOAD-2
+- [ ] T402 [P] [US5] Change `import_cv` from `async def` to plain `def`, read with `read_pdf_upload(file)`, remove the text-decode branch of `_extract_text_from_upload`, and map `PdfReader`/parse errors to 422 `We could not read this PDF` - `backend/app/api/profile.py` (EXTENDED) - Depends: T392, T393, T398 - Satisfies: FR-UPLOAD-1, FR-UPLOAD-2, FR-UPLOAD-3
+- [ ] T403 [P] [US5] `_identify_type_node` stops testing the filename suffix; it checks `%PDF-` in the first 1024 bytes of `file_bytes` instead - `backend/app/workflows/doc_pipeline/graph.py` (EXTENDED) - Depends: T397 - Satisfies: FR-UPLOAD-1
+- [ ] T404 [P] [US5] Add `request_body { max_size 11MB }` to the site block above `reverse_proxy`, with a comment citing the 10 MiB file limit; do not touch the `/metrics` rule - `Caddyfile` (EXTENDED) - Depends: T396 - Satisfies: FR-UPLOAD-1
+- [ ] T405 [US5] Run the US5 tests, `backend/tests/api/test_documents_api.py`, `backend/tests/api/test_profile_api.py`, `backend/tests/workflows/test_doc_pipeline.py`, `backend/tests/infra/`; confirm the non-blocking test fails on the old code (git stash check) and passes now - `backend/tests/api/` (EXTENDED) - Depends: T401, T402, T403, T400, T404, T397 - Satisfies: SC-005
+
+## Phase 8: User Story 6 - A record of who did what (P2)
+
+**Goal**: six audited actions, written in the action's transaction, append-only by privilege, no read route.
+**Independent test**: perform each action through its entry point and count rows; refused actions leave none.
+
+- [ ] T406 [P] [US6] Write the audit tests FIRST, each starting at its entry point: `POST /auth/signup` -> one `user.signup` row (user = new user, entity `user:<id>`, `at` within 5 s); operator approve -> `source.approve` (entity `candidate_source:<id>`); reject -> `source.reject`; operator `POST /monitoring/runs` -> `monitoring.run.manual` (entity `monitoring_run:<id>`); student `POST /applications/{id}/submission-approvals` -> `submission.approve` (entity `submission_approval:<id>`); CLI grant -> `operator.grant`; a 403, 409 or 422 leaves zero rows; a scheduled run (`_run_scheduled_monitor`) writes none; when `audit_repo.record` raises, the action does not complete (no user, no source, no run, no approval row) - `backend/tests/api/test_audit_log.py` (NEW) - Depends: T347, T343, T346 - Satisfies: FR-AUDIT-1, FR-AUDIT-2, SC-006
+- [ ] T407 [P] [US6] Write the no-read-path test FIRST: no OpenAPI path contains `audit`; a student token calling any guessable audit path gets 404/405 (not data) - `backend/tests/api/test_no_audit_route.py` (NEW) - Depends: T347 - Satisfies: FR-AUDIT-4, SC-006
+- [ ] T408 [P] [US6] Write the append-only test FIRST: as the app role, `INSERT` and `SELECT` on `audit_log` work and `UPDATE`, `DELETE`, `TRUNCATE` are refused; skip with a stated reason when connected as owner - `backend/tests/security/test_audit_append_only.py` (NEW) - Depends: T330, T376 - Satisfies: FR-AUDIT-3, SC-006
+- [ ] T409 [US6] In sign-up: `db.add(user)`, `db.flush()`, `audit_repo.record(db, user.id, "user.signup", f"user:{user.id}")`, then the single `commit` - `backend/app/api/auth.py` (EXTENDED) - Depends: T406, T388 - Satisfies: FR-AUDIT-1, FR-AUDIT-2
+- [ ] T410 [US6] In `approve_candidate_source` and `reject_candidate_source` call `audit_repo.record` (`source.approve` / `source.reject`, actor = `reviewed_by`, entity `candidate_source:<candidate_id>`) immediately before the existing `db.commit()` - `backend/app/data/repositories/source_repo.py` (EXTENDED) - Depends: T406, T369 - Satisfies: FR-AUDIT-1, FR-AUDIT-2
+- [ ] T411 [P] [US6] Add optional `actor_id: uuid.UUID | None = None` to `create_run_if_none_running`/`create_run`; when given, `db.flush()` the run and record `monitoring.run.manual` (entity `monitoring_run:<id>`) before the commit; the scheduler and recovery paths pass none - `backend/app/data/repositories/monitoring_repo.py` (EXTENDED) - Depends: T406 - Satisfies: FR-AUDIT-1, FR-AUDIT-2
+- [ ] T412 [US6] `trigger_monitoring_run` passes `actor_id=current_user.id` - `backend/app/api/monitoring.py` (EXTENDED) - Depends: T411, T355 - Satisfies: FR-AUDIT-1
+- [ ] T413 [P] [US6] In `create_submission_approval` record `submission.approve` (actor `user_id`, entity `submission_approval:<id>` after `flush`) before the existing commit - `backend/app/data/repositories/application_repo.py` (EXTENDED) - Depends: T406 - Satisfies: FR-AUDIT-1, FR-AUDIT-2
+- [ ] T414 [US6] Run the US6 tests and `backend/tests/api/test_no_live_submission.py`; confirm the constitution Principle III test still passes untouched - `backend/tests/api/` (EXTENDED) - Depends: T409, T410, T412, T413, T407, T408 - Satisfies: FR-AUDIT-1, FR-AUDIT-4, SC-006
+
+## Phase 9: User Story 7 - The app recovers after a database error (P2)
+
+**Goal**: rollback at the four unprotected broad catches; an AST test keeps new ones honest.
+**Independent test**: inject a database error at each site through its entry point; the next write and the closing summary succeed.
+
+- [ ] T415 [P] [US7] Write the AST guard FIRST: walk `backend/app/**/*.py`; every `except Exception`/bare `except` handler must either contain a call to `rollback`/`safe_rollback`, re-raise, or appear in a documented allow-list `{file:line-context: reason}` taken from research R3 (alerts SMTP/channel, candidate_validation fetch/extract, classify, pdf_parse, ingestion `_index_node`, request_id, per-session scheduler/api/main handlers, retry_policy) - `backend/tests/security/test_broad_catch_rollback.py` (NEW) - Depends: T330 - Satisfies: FR-RECOV-1, SC-007
+- [ ] T416 [P] [US7] Fault-injection test FIRST, starting at the manual monitoring run / scheduler tick: make `source_repo.record_or_bump_candidate_source` raise a database error inside candidate detection; assert the source's fetch outcome is still logged, the next source is processed, the run completes - `backend/tests/sources/test_candidate_detection_rollback.py` (NEW) - Depends: T347 - Satisfies: FR-RECOV-1, FR-RECOV-2, SC-007
+- [ ] T417 [P] [US7] Fault-injection test FIRST, starting at the discovery route (`POST` in `backend/app/api/discovery.py`, function `discover`): a database error inside one discovery step is skipped, the remaining steps run, the next write succeeds and the closing `get_coverage_summary` returns, so the response is 200 - `backend/tests/agents/test_discovery_rollback.py` (NEW) - Depends: T347 - Satisfies: FR-RECOV-1, FR-RECOV-2, SC-007
+- [ ] T418 [P] [US7] Fault-injection test FIRST, starting at the monitoring run and at URL match: a database error in the `store` stage of the ingestion workflow (non-retryable path) and in a retryable stage leaves a usable session so `_log_failure` writes its row - `backend/tests/workflows/test_ingestion_rollback.py` (NEW) - Depends: T347 - Satisfies: FR-RECOV-1, FR-RECOV-2, SC-007
+- [ ] T419 [US7] Add `safe_rollback(db)` next to `get_db` (calls `db.rollback()`, swallows and logs a failing rollback so it cannot mask the original error) - `backend/app/data/repositories/db.py` (EXTENDED) - Depends: T415 - Satisfies: FR-RECOV-1
+- [ ] T420 [P] [US7] Call `safe_rollback(db)` in the `except Exception: pass` of candidate detection (line 308) and log the exception TYPE only - `backend/app/sources/connectors/official_fetch.py` (EXTENDED) - Depends: T416, T419 - Satisfies: FR-RECOV-1, FR-RECOV-2
+- [ ] T421 [P] [US7] Call `safe_rollback(db)` in the discovery step handler (line 285) before appending to `fetch_errors` - `backend/app/agents/discovery/agent.py` (EXTENDED) - Depends: T417, T419 - Satisfies: FR-RECOV-1, FR-RECOV-2
+- [ ] T422 [P] [US7] In `_run_stage` call `safe_rollback(state["db"])` on BOTH failure paths (the non-retryable `except` at line 133 and the `run_with_retry` failure result) before `_log_failure` - `backend/app/workflows/ingestion/graph.py` (EXTENDED) - Depends: T418, T419 - Satisfies: FR-RECOV-1, FR-RECOV-2
+- [ ] T423 [US7] Run the US7 tests and `backend/tests/security/test_broad_catch_rollback.py` must be green with no entry missing from the allow-list - `backend/tests/security/` (EXTENDED) - Depends: T420, T421, T422 - Satisfies: FR-RECOV-1, FR-RECOV-2, SC-007
+
+## Phase 10: User Story 8 - Email alerts are delivered (P3)
+
+**Goal**: Gmail over verified STARTTLS, log lines, short reason codes, no secrets in the repo.
+**Independent test**: a fake SMTP server receives one message; unconfigured and failing cases keep the in-app alert and log the reason.
+
+- [ ] T424 [P] [US8] Write the mail tests FIRST with a recording fake `smtplib.SMTP` (the existing alert tests already stub it), starting at the alert dispatch of a manual monitoring run: configured -> exactly one message to the user's address and the in-app alert exists; `starttls` is called with an `ssl.SSLContext` whose `verify_mode` is `CERT_REQUIRED` and `check_hostname` True; `SMTP_PASSWORD` with spaces (Google format) is stripped; unconfigured -> alert present, `email_error == "not_configured"`, one WARNING log line; send failure -> alert present, `email_error == "send_failed"`, the log has the exception type but NOT the password or full server text, the run completes; no recipient -> `no_recipient` - `backend/tests/services/test_alerts_email.py` (NEW) - Depends: T347 - Satisfies: FR-MAIL-1, FR-MAIL-2, SC-008
+- [ ] T425 [P] [US8] Entry-point test FIRST: start from the scheduler tick `_run_scheduled_monitor` with a changed fixture source and a user with email alerts on; assert one email through the fake SMTP and one alert via `GET /alerts` - `backend/tests/workflows/test_alert_email_entry.py` (NEW) - Depends: T347 - Satisfies: FR-MAIL-1, SC-008
+- [ ] T426 [P] [US8] Extend the repository secret scan FIRST with an App-Password-shaped pattern (four groups of four lowercase letters, with or without spaces) and a check that `.env.example` mail values are empty placeholders - `backend/tests/test_no_secrets_in_repo.py` (EXTENDED) - Depends: T330 - Satisfies: FR-MAIL-3, SC-008
+- [ ] T427 [US8] In `EmailChannel.send`: `smtp.starttls(context=ssl.create_default_context())`; strip spaces from the configured password; set `email_error` to the short codes `not_configured`, `no_recipient`, `send_failed`; add `logger.warning` for each (reason code, exception TYPE and SMTP reply code only; never the password or full message); `delivered_email_at` behaviour unchanged - `backend/app/services/alerts.py` (EXTENDED) - Depends: T424, T425 - Satisfies: FR-MAIL-1, FR-MAIL-2, SC-008
+- [ ] T428 [US8] Document the Gmail values as comments next to the existing empty `SMTP_*` / `ALERTS_FROM_EMAIL` lines (host `smtp.gmail.com`, port 587, STARTTLS, App Password requires 2-Step Verification); values stay empty - `.env.example` (EXTENDED) - Depends: T348, T426 - Satisfies: FR-MAIL-3
+- [ ] T429 [US8] Run the US8 tests plus `backend/tests/services/test_alerts.py`, `backend/tests/api/test_alerts_api.py`, `backend/tests/integration/test_monitoring_alert_flow.py` - `backend/tests/services/` (EXTENDED) - Depends: T427, T428 - Satisfies: FR-MAIL-1, FR-MAIL-2, FR-MAIL-3, SC-008
+
+## Phase 11: User Story 9 - The server runs the current code (P3, last)
+
+**Goal**: runbook, post-deploy check script, deploy-config assertions; then the OWNER deploys. Claude stops at every `OWNER:` task.
+**Independent test**: the eight post-deploy checks of spec US9 scenario 2 pass on the live server and are recorded in runbook section 13.
+
+- [ ] T430 [P] [US9] Extend the deploy-config tests FIRST: the compose files and the repo contain no owner database URL and no `MIGRATION_DATABASE_URL` value (only the variable name may appear in docs); `docker-compose.podman.yml` still has no `DATABASE_URL`/`JWT_SECRET_KEY`; the Caddyfile keeps the body limit and the `/metrics` 404 above `reverse_proxy`; both CI workflows reference `scholarship_app` and a 32+ character JWT secret - `backend/tests/infra/test_deploy_config.py` (EXTENDED) - Depends: T404, T380, T381 - Satisfies: FR-DEPLOY-1, FR-AUTHZ-7, FR-DBROLE-2
+- [ ] T431 [P] [US9] Write the post-deploy checker tests FIRST against a fake HTTP server and fake SQL results: checks 1-6 and 8 of spec US9 scenario 2 each return PASS/FAIL with the exact reason; exit code non-zero if any fails; check 8 fails on zero operators and on more than one; tokens/passwords/URLs are read from environment variables and never printed - `backend/tests/infra/test_post_deploy_check.py` (NEW) - Depends: T330 - Satisfies: FR-DEPLOY-2, SC-009
+- [ ] T432 [US9] Create `post_deploy_check.py`: reads `SITE_URL`, `OPERATOR_TOKEN`, `THROWAWAY_EMAIL`/`THROWAWAY_PASSWORD`, `APP_DATABASE_URL`, `OWNER_DATABASE_URL` from the environment; checks (1) `/health` 200, (2) 7-char password 422 / 8-char 201, (3) throwaway `POST /monitoring/runs` and `GET /monitoring/runs/{id}` 403 and list 200, (4) match-url to `http://169.254.169.254/` -> 422 `blocked`, (5) as the app role `CREATE TABLE zz_check` is refused, (6) `/metrics` 404, (8) exactly one `is_operator` row; prints PASS/FAIL per check; check 7 (email) is printed as `MANUAL` - `backend/scripts/post_deploy_check.py` (NEW) - Depends: T431 - Satisfies: FR-DEPLOY-2, SC-009
+- [ ] T433 [P] [US9] Update the runbook: new section "Database roles" (create the role with `\password`, `read -rs` for the owner URL, pooled vs direct URLs, default privileges, re-run after migrations), new section "Deploy 010" mirroring `specs/010-security-hardening/quickstart.md` section B (pre-flight email-collision query, build-without-swap, one-off migration container with `sudo --preserve-env`, `.env` edits, Caddy, owner sign-up then grant, post-deploy checks, rollback), section 9 (Gmail App Password rotation), section 11 (REMOVE the SSRF redirect limitation row; add the response-size and single-operator limits), and a blank section 13 row set for the 010 deployment record - `docs/operations-hardening.md` (EXTENDED) - Depends: T432, T376 - Satisfies: FR-DBROLE-6, FR-DEPLOY-1, FR-DEPLOY-2, FR-DEPLOY-3, FR-CRED-5
+- [ ] T434 [P] [US9] Add a short pointer in the VM notes to the new "Deploy 010" and "Database roles" sections (two-database-URL migration replaces `podman exec ... alembic upgrade head` for this release) - `docs/vm-deployment-notes.md` (EXTENDED) - Depends: T433 - Satisfies: FR-DEPLOY-1
+- [ ] T435 [US9] OWNER: pre-flight, read-only: confirm the VM is on `main` with the merged feature (`git -C <repo> branch --show-current`, `git log -1 --oneline`); run the email-collision query with owner credentials (`SELECT lower(email), count(*) FROM users GROUP BY 1 HAVING count(*) > 1;`) - expect zero rows (the production database has 0 users); `cp .env .env.pre-010`; note the current image id. Claude stops here until the owner reports - `VM` (EXTENDED) - Depends: T433, T358, T373, T382, T390, T405, T414, T423, T429 - Satisfies: FR-CRED-5, FR-DEPLOY-3
+- [ ] T436 [US9] OWNER: create the app role. In an interactive terminal: `read -rs OWNER_DIRECT_URL`, `psql "$OWNER_DIRECT_URL" -v migration_role='neondb_owner' -f backend/scripts/db/create_app_role.sql`, type the new app password at the `\password` prompt, `unset OWNER_DIRECT_URL`. Verify the printed role flags are all false and `can_create_in_public` is false. The worker never sees the URL or the password - `Neon (direct URL)` (EXTENDED) - Depends: T435 - Satisfies: FR-DBROLE-1, FR-DBROLE-2, FR-DBROLE-6, FR-DEPLOY-1
+- [ ] T437 [US9] OWNER: build the new image without swapping: `sudo /usr/local/bin/podman-compose -f docker-compose.podman.yml build backend` - `VM` (EXTENDED) - Depends: T436 - Satisfies: FR-DEPLOY-1
+- [ ] T438 [US9] OWNER: apply the migration as the owner with the URL passed by variable name only: `read -rs MIGRATION_DATABASE_URL; export MIGRATION_DATABASE_URL; sudo --preserve-env=MIGRATION_DATABASE_URL podman run --rm --env-file .env -e MIGRATION_DATABASE_URL <new image> uv run alembic upgrade head`, then the same with `alembic current` (expect the new head), then `unset MIGRATION_DATABASE_URL`; re-run `create_app_role.sql` (Ctrl-C at the password prompt keeps the password) so the new tables are granted and `audit_log` is append-only - `Neon (direct URL)` (EXTENDED) - Depends: T437 - Satisfies: FR-DBROLE-2, FR-DBROLE-3, FR-AUDIT-3, FR-DEPLOY-1
+- [ ] T439 [US9] OWNER: edit the VM `.env` (mode 600): `DATABASE_URL` = `scholarship_app` on the POOLED (`-pooler`) host; `JWT_SECRET_KEY` of at least 32 characters; add the Gmail App Password (Google account with 2-Step Verification) as `SMTP_PASSWORD`, with `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_USERNAME` and `ALERTS_FROM_EMAIL` set to the same Gmail address; do NOT add `MIGRATION_DATABASE_URL` - `VM .env` (EXTENDED) - Depends: T438 - Satisfies: FR-DBROLE-1, FR-CRED-3, FR-MAIL-1, FR-MAIL-3, FR-DEPLOY-1
+- [ ] T440 [US9] OWNER: validate the Caddyfile with `caddy validate` (runbook section 2 step 3) and recreate the containers in the runbook section 10 order (stop/remove Caddy, then backend, then `up -d`, no `--build`); confirm the start-up log has no `owner-level rights` warning - `VM` (EXTENDED) - Depends: T439 - Satisfies: FR-DBROLE-5, FR-UPLOAD-1, FR-DEPLOY-1
+- [ ] T441 [US9] OWNER: sign up the owner's own account through the API (`POST /auth/signup`, email + a password of 8 to 72 bytes); the production database has 0 users, so this is the first account - `VM (public site)` (EXTENDED) - Depends: T440 - Satisfies: FR-AUTHZ-5
+- [ ] T442 [US9] OWNER: grant operator status: `sudo podman exec scholarship-ai-assistant_backend_1 uv run python -m app.services.operator grant --email <owner>` (expect `granted operator status to <owner>`; `no such user` means the sign-up was skipped) - `VM` (EXTENDED) - Depends: T441 - Satisfies: FR-AUTHZ-3, FR-AUTHZ-5, FR-AUDIT-1
+- [ ] T443 [US9] OWNER: run `backend/scripts/post_deploy_check.py` with the environment variables it documents and the manual email check (trigger or wait for one alert for the owner's profile; mail must arrive within 5 minutes); also confirm the two live monitored sources still fetch (manual run as the owner, then read the run detail). Any FAIL -> rollback per runbook (restore `.env.pre-010`, retag the previous image, recreate containers) - `VM + public site` (EXTENDED) - Depends: T442 - Satisfies: FR-DEPLOY-2, FR-DEPLOY-3, FR-MAIL-1, SC-008, SC-009, SC-001, SC-003
+- [ ] T444 [US9] OWNER: record the deployed commit, post-deploy results and rollback material in `docs/operations-hardening.md` section 13; Claude then commits that record on the feature branch - `docs/operations-hardening.md` (EXTENDED) - Depends: T443 - Satisfies: FR-DEPLOY-1, FR-DEPLOY-2, SC-009
+
+## Phase 12: Polish and cross-cutting
+
+**Purpose**: close-out documentation and full verification. Blueprint, PRD and ADR edits are NOT tasks here (the manager edits the Blueprint and PRD; ADR-0016 is done).
+
+- [ ] T445 [P] Update the Status line of the charter: feature 010 shipped on the VM (date and commit from the deployment record); next in order is 003 - `specs/charter.md` (EXTENDED) - Depends: T444 - Satisfies: FR-DEPLOY-1
+- [ ] T446 [P] Add a closing note (feature 010, date, commit) to each audit row this feature closes - X-02, X-04, X-05, X-06, X-09, X-10, B-58, B-115, P4-AU-1, P4-SR-2 (partly: field cross-check left to 006), P4-PR-1, P4-OF-4, P4-DA-4 - in the style earlier features used - `docs/full-project-audit.md` (EXTENDED) - Depends: T444 - Satisfies: SC-010
+- [ ] T447 Read-only check (do not edit): confirm the manager has applied the Blueprint v1.9 and PRD v1.3 edits listed in plan.md "Records to update" and that ADR-0016 and the three pointer lines exist; if anything is missing, report it to the owner instead of editing those files - `specs/scholarship-ai-assistant-master-blueprint-v1.md, specs/scholarship-ai-assistant-prd-v1.md, adr/` (EXTENDED) - Depends: T444 - Satisfies: FR-PROC-3
+- [ ] T448 Walk `specs/010-security-hardening/quickstart.md` section A end to end on a local database and fix any command that no longer matches the code (edit only quickstart.md) - `specs/010-security-hardening/quickstart.md` (EXTENDED) - Depends: T429, T423, T414 - Satisfies: SC-010
+- [ ] T449 Run the full `backend/tests` suite as `scholarship_app` on local Postgres, the eval score-gate step and `pip-audit` exactly as `.github/workflows/ci.yml` does; confirm no new dependency appears in `backend/pyproject.toml` or `backend/uv.lock` - `backend/pyproject.toml` (EXTENDED) - Depends: T448 - Satisfies: SC-010
+- [ ] T450 Entry-point audit: for each row of the spec's Entry-point map, open the test named in the coverage table below and confirm its first call is the route / CLI `main` / scheduler function / app start named there; fix the test if not - `specs/010-security-hardening/tasks.md` (EXTENDED) - Depends: T449 - Satisfies: FR-PROC-1, SC-010
+
+## Dependencies and execution order
+
+- Phase 1 -> Phase 2 -> (US1, US2, US3 may overlap after Phase 2, but `backend/app/api/sources.py` is edited by US1 then US2, `backend/app/main.py` by US3 then US5, `backend/app/api/auth.py` by US4 then US6, `backend/app/data/repositories/source_repo.py` by US2 then US6: do those in the order of the Depends lists).
+- US3's CI tasks need the role script; every later story's tests then run as `scholarship_app` in CI.
+- US4 needs the migration (`lower(email)` index); US6 needs US1's CLI and US4's `auth.py`; US7 and US8 are independent of each other; US9's OWNER tasks need every story validated (v_us*).
+- Polish needs the owner's deployment record.
+
+### Parallel examples
+
+- Phase 2 tests: T332, T333, T334, T335, T336 touch different new files.
+- US1 tests T349, T350, T351 then implementations T355, T356, T357 in parallel (T354 is separate because US2 edits the same file later).
+- US2 tests T359, T362, T363, T365 in parallel; then T366 first, the rest after it.
+- US5 tests T392, T393, T394, T395 in parallel; implementations T401, T402, T403, T404 in parallel.
+
+## Implementation strategy
+
+1. Setup + Foundational, checkpoint on a local database.
+2. **MVP**: US1, US2, US3, each with its validation task (`v_us*`), then stop and demo/CI-check.
+3. P2 stories (US4-US7) one at a time, each leaves the suite green.
+4. US8, then US9 documents and scripts; then the OWNER sequence in order (`o_pre` ... `o_record`), Claude waiting at each step.
+5. Polish after the deployment record exists.
+
+## Requirement-to-task coverage
+
+### Functional requirements
+
+| Requirement | Tasks |
+|---|---|
+| FR-AUTHZ-1 | T337, T344, T349, T352, T354, T355, T356 |
+| FR-AUTHZ-2 | T335, T344, T349, T354, T355, T356 |
+| FR-AUTHZ-3 | T336, T337, T345, T350, T351, T357, T442 |
+| FR-AUTHZ-4 | T335, T344, T350, T357 |
+| FR-AUTHZ-5 | T441, T442 |
+| FR-AUTHZ-6 | T349, T352, T353, T358 |
+| FR-AUTHZ-7 | T358, T396, T430 |
+| FR-SSRF-1 | T332, T341, T342, T359, T361, T362, T364, T365, T366, T367, T371 |
+| FR-SSRF-2 | T359, T364, T365, T366 |
+| FR-SSRF-3 | T332, T341, T359, T366 |
+| FR-SSRF-4 | T359, T366 |
+| FR-SSRF-5 | T359, T362, T366, T371, T372 |
+| FR-SSRF-6 | T332, T341, T363, T368, T370 |
+| FR-SSRF-7 | T363, T369, T370 |
+| FR-SSRF-8 | T359, T360, T361, T362, T366, T367 |
+| FR-DBROLE-1 | T374, T376, T436, T439 |
+| FR-DBROLE-2 | T334, T339, T340, T346, T348, T430, T436, T438 |
+| FR-DBROLE-3 | T374, T376, T438 |
+| FR-DBROLE-4 | T380, T381, T382 |
+| FR-DBROLE-5 | T375, T378, T379, T440 |
+| FR-DBROLE-6 | T376, T377, T433, T436 |
+| FR-CRED-1 | T383, T385, T386, T387 |
+| FR-CRED-2 | T336, T345, T383, T386, T388 |
+| FR-CRED-3 | T327, T328, T329, T384, T389, T439 |
+| FR-CRED-4 | T383, T385, T386, T388 |
+| FR-CRED-5 | T336, T345, T391, T433, T435 |
+| FR-UPLOAD-1 | T392, T394, T395, T396, T397, T398, T399, T400, T401, T402, T403, T404, T440 |
+| FR-UPLOAD-2 | T392, T395, T398, T401, T402 |
+| FR-UPLOAD-3 | T393, T402 |
+| FR-AUDIT-1 | T333, T336, T338, T343, T345, T350, T357, T406, T409, T410, T411, T412, T413, T414, T442 |
+| FR-AUDIT-2 | T333, T343, T406, T409, T410, T411, T413 |
+| FR-AUDIT-3 | T345, T408, T438 |
+| FR-AUDIT-4 | T407, T414 |
+| FR-RECOV-1 | T415, T416, T417, T418, T419, T420, T421, T422, T423 |
+| FR-RECOV-2 | T416, T417, T418, T420, T421, T422, T423 |
+| FR-MAIL-1 | T424, T425, T427, T429, T439, T443 |
+| FR-MAIL-2 | T424, T427, T429 |
+| FR-MAIL-3 | T348, T426, T428, T429, T439 |
+| FR-DEPLOY-1 | T430, T433, T434, T436, T437, T438, T439, T440, T444, T445 |
+| FR-DEPLOY-2 | T431, T432, T433, T443, T444 |
+| FR-DEPLOY-3 | T433, T435, T443 |
+| FR-PROC-1 | T330, T347, T450 |
+| FR-PROC-2 | T331 |
+| FR-PROC-3 | T447 |
+
+### Success criteria
+
+| Criterion | Tasks |
+|---|---|
+| SC-001 | T349, T350, T351, T358, T443 |
+| SC-002 | T359, T362, T363, T365, T373 |
+| SC-003 | T374, T380, T381, T382, T443 |
+| SC-004 | T383, T384, T390 |
+| SC-005 | T392, T393, T394, T405 |
+| SC-006 | T406, T407, T408, T414 |
+| SC-007 | T415, T416, T417, T418, T423 |
+| SC-008 | T424, T425, T426, T427, T429, T443 |
+| SC-009 | T431, T432, T443, T444 |
+| SC-010 | T446, T448, T449, T450 |
+
+### Entry-point map rows (spec) -> first test and implementation
+
+| Entry-point row | Test that starts there | Implementation |
+|---|---|---|
+| Approve / reject candidate; read validations (operator only) | T349 | T354 |
+| Manual monitoring run (operator only) | T349, T365 | T355 |
+| Read source fetch log (operator only) | T349 | T356 |
+| Grant / revoke operator (CLI) | T350 | T357 |
+| Safe fetch of user URL (`POST /scholarships/match-url`) | T362, T359 | T366, T372 |
+| Safe fetch at source approval; public-domain rule | T363 | T368, T369, T370 |
+| Safe fetch in candidate validation (manual run, scheduler tick) | T365, T364 | T366, T371 |
+| Password / email rules (sign-up, sign-in) | T383 | T386, T387, T388 |
+| Signing-secret check (application start) | T384 | T389 |
+| Upload limits (document upload, CV import) | T392, T393, T394 | T401, T402, T399, T404 |
+| Audit records (sign-up, approve, reject, manual run, submission approval, CLI) | T406, T407 | T409, T410, T412, T413, T357 |
+| Rollback after database error (monitoring run / tick, discovery route, URL match) | T416, T417, T418, T415 | T420, T421, T422 |
+| Email alert delivery (scheduler / manual run) | T424, T425 | T427 |
+| Least-privilege access (whole app under restricted credentials) | T374, T375 | T376, T379, T380, T381 |
+| Deployment and post-deploy checks | T431, T430 | T432, T433, T443 |
+
+**Requirements or criteria without a task: none.**
+
+Notes: FR-AUTHZ-5 (exactly one operator) and FR-DEPLOY-* are satisfied by OWNER tasks (live data and the VM); FR-PROC-3 is satisfied by the read-only verification task because the Blueprint/PRD edits belong to the manager and the ADR work is already done; FR-PROC-2 is a standing checkpoint task.
