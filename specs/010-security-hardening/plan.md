@@ -11,7 +11,7 @@ Nine stories close the gaps the audit found on the public server. The technical 
 2. **Safe fetch** (US2): one rewritten `fetch_url` that resolves, checks every address, **connects to the checked address** (IP in the URL, name kept in `Host` and `sni_hostname`), and follows redirects itself with the same check per hop (5 max). The guard moves out of `candidate_validation` unchanged; approval gets a public-host-name rule and a 409 for duplicates.
 3. **Least privilege** (US3): a SQL-created `scholarship_app` role (script in `contracts/db-role.sql`), a second optional `MIGRATION_DATABASE_URL`, a start-up warning, and CI that migrates as owner and tests as the app role.
 4. **Credentials** (US4): schema validators, case-insensitive email with a `lower(email)` unique index, and a refuse-to-start check on the signing secret.
-5. **Uploads** (US5): a 10 MiB cap at three layers (Caddy, a small ASGI middleware, a bounded read), `%PDF-` content check, `import_cv` becomes a plain `def` so it runs in the thread pool.
+5. **Uploads** (US5): a 10 MiB (10 485 760 bytes) cap at three layers (Caddy, a small ASGI middleware, a bounded read); document upload is PDF only by content; CV import keeps PDF-or-plain-text, with text decoded strictly as UTF-8 (no `errors="ignore"`); `import_cv` becomes a plain `def` so it runs in the thread pool.
 6. **Audit** (US6): an `audit_log` table written in the same transaction as each action; append-only by database privilege; no read route.
 7. **Recovery** (US7): rollback at the four unprotected broad catches plus an AST test that keeps new ones honest.
 8. **Mail** (US8): Gmail over verified STARTTLS (fixes an unverified-TLS defect), log lines, and short reason codes instead of raw errors.
@@ -23,6 +23,10 @@ Nine stories close the gaps the audit found on the public server. The technical 
 
 `GET /monitoring/runs/{run_id}` returns `source_outcomes` built from raw fetch-log rows (`app/api/monitoring.py:55-61`), so it becomes **operator-only** like `GET /sources/{id}/fetch-log`. `GET /monitoring/runs` (the list, which carries no fetch-log rows) stays open to every signed-in user. The operator-only set is therefore: approve, reject, manual run, run detail, source fetch log, candidate validations. This closes the gap found in research (F-4) without any difference from the Blueprint or PRD beyond D-1..D-4; D-2 below includes the run-detail route. `/sp.tasks` is no longer blocked by this item.
 
+## Pre-flight evidence (Blueprint §23 rule 3)
+
+The owner's read-only checks behind this feature: **2026-10-27** VM `.env`, ports and database role facts (the app connects as `neondb_owner`); **2026-10-28** Neon counts unchanged (0 users, 34 scholarships, 4 ACTIVE and 1 FAILING sources); **2026-10-29** VM containers `backend` and `caddy` up, VM at commit `5c1c021`. The deploy tasks re-check the relevant facts before changing anything (T435).
+
 ## Technical Context
 
 **Language/Version**: Python 3.12 (existing)
@@ -33,7 +37,7 @@ Nine stories close the gaps the audit found on the public server. The technical 
 **Project Type**: Backend-only modular monolith.
 **Performance Goals**: one extra indexed read per request is already paid (`get_current_user` loads the user); fetch adds one DNS lookup per hop (previously two, unchecked); upload cap rejects over-size before parsing. No throughput target changes.
 **Constraints**: student features unchanged (FR-AUTHZ-6); every capability has an entry point and a test starting there (FR-PROC-1); no secrets in the repo or logs; owner credentials never in the app container.
-**Scale/Scope**: 0 production users beyond the owner; open sign-up; ~22 broad catches; 5-6 gated routes; 3 upload/fetch entry points.
+**Scale/Scope**: 0 production users beyond the owner; open sign-up; ~22 broad catches; 6 gated routes; 3 upload/fetch entry points.
 
 ## Constitution Check (gate, before Phase 0)
 
@@ -48,7 +52,7 @@ Nine stories close the gaps the audit found on the public server. The technical 
 | Harness discipline / external reach | The fetch tool now enforces the permission wall (no reaching internal systems). | Pass |
 | Stack constraints | FastAPI / PostgreSQL (Neon) / Qdrant / Docker / GitHub Actions unchanged. A second database *role* is not a change of core component. | Pass |
 | Workflow: ADRs on significant decisions | Yes: see "ADR suggestion". Not auto-created. | Pass (action pending) |
-| PHRs | Only on "PHR now"; none requested. | n/a |
+| PHRs | **Conflict:** the constitution requires a PHR per prompt; the owner's standing rule (CLAUDE.md) is PHR only on "PHR now". The owner's rule governs; a constitution amendment is scheduled after 010. | Noted (not changed here) |
 
 **Gate result: pass, no violations; Complexity Tracking not needed.**
 
@@ -85,9 +89,9 @@ File paths are relative to `backend/`. "T:" lists the tests (all start at the en
 - T: `tests/api/test_auth_credentials.py` (0/7/8/72/73 bytes, 25 four-byte characters, case-variant duplicate, old mixed-case account logs in with any case, legacy long-password login), `tests/core/test_config_secret.py` (31/32/placeholder), a two-session concurrent sign-up test.
 
 ### US5 Uploads (FR-UPLOAD-1..3)
-- `app/core/uploads.py`: `read_pdf_upload(file, max_bytes)`; `app/core/body_limit.py`: ASGI middleware for the two paths, registered in `app/main.py` beside the existing middleware; `Caddyfile` `request_body`.
-- `app/api/documents.py:57` and `app/api/profile.py:82-87` use the helper; `import_cv` becomes `def`; `doc_pipeline/graph.py:113-117` stops using the filename.
-- T: `tests/api/test_upload_limits.py` (exact 10 MiB, +1 byte, renamed text file, PDF with an odd name, empty, corrupt, encrypted, truncated; nothing stored, no row), `tests/api/test_import_cv_nonblocking.py` (async client, slow fake extractor, `GET /health` under 1 s), `tests/core/test_body_limit.py` (chunked body without `Content-Length`), Caddyfile assertion in `tests/infra/test_deploy_config.py`.
+- `app/core/uploads.py`: `read_pdf_upload(file, max_bytes)` (documents: `%PDF-` within the first 1024 bytes, else 415) and `read_cv_upload(file, max_bytes)` (PDF by content, else strict `bytes.decode("utf-8")` with no NUL byte, else 415 `Unsupported file: send a PDF or a UTF-8 plain-text file`); both read at most `max_bytes + 1` bytes; `app/core/body_limit.py`: ASGI middleware for the two paths, registered in `app/main.py` beside the existing middleware; `Caddyfile` `request_body` (decimal `11MB` = 11 000 000 bytes leaves room above 10 MiB + the 64 KiB multipart allowance).
+- `app/api/documents.py:57` uses `read_pdf_upload`; `app/api/profile.py:82-87` uses `read_cv_upload`, keeps the text branch of `_extract_text_from_upload` but strict (no `errors="ignore"`), and `import_cv` becomes `def`; `doc_pipeline/graph.py:113-117` stops using the filename.
+- T: `tests/api/test_upload_limits.py` (exact 10 MiB, +1 byte, document upload: renamed text file refused and PDF with an odd name accepted; CV import: valid UTF-8 `.txt` accepted, Latin-1 text and binary refused, PDF recognised by content; empty, corrupt, encrypted, truncated; nothing stored, no row), `tests/api/test_import_cv_nonblocking.py` (async client, slow fake extractor, `GET /health` under 1 s), `tests/core/test_body_limit.py` (chunked body without `Content-Length`), Caddyfile assertion in `tests/infra/test_deploy_config.py`.
 
 ### US6 Audit log (FR-AUDIT-1..4)
 - `app/models/audit.py`, `app/data/repositories/audit_repo.py` (`record(db, user_id, action, entity)`, closed action set), calls at the six points of research R9; `monitoring_repo.create_run_if_none_running(..., actor_id=None)`.
@@ -102,7 +106,7 @@ File paths are relative to `backend/`. "T:" lists the tests (all start at the en
 - T: `tests/services/test_alerts_email.py` (configured → one message and a verifying context passed to `starttls`; unconfigured → alert present and a log line; send failure → alert present, no password in log or `email_error`, run not failed), `tests/test_no_secrets_in_repo.py` extended with an App-Password-shaped pattern.
 
 ### US9 Deploy (FR-DEPLOY-1..3)
-- `docs/operations-hardening.md`: new "Database roles" and "Deploy 010" sections; §13 record; `docs/vm-deployment-notes.md` pointer. `quickstart.md` is the source text. Post-deploy checks 1-6 and 8 as `backend/scripts/post_deploy_check.py` (operator token and a throwaway account via environment variables; prints PASS/FAIL per check); check 7 (email) is manual.
+- `docs/operations-hardening.md`: new "Database roles" and "Deploy 010" sections; §13 record; `docs/vm-deployment-notes.md` pointer. `quickstart.md` is the source text. Post-deploy checks 1-6 and 8 as `backend/scripts/post_deploy_check.py` (operator token and ONE fixed check account via environment variables: it signs up on the first run and logs in on later runs, so no new account is created per run; prints PASS/FAIL per check); check 7 (email) is manual.
 - T: `tests/infra/test_deploy_config.py` additions (compose has no owner URL; Caddyfile has the body limit and still 404s `/metrics`); the checker script has its own unit test against a fake server.
 
 ## Entry-point coverage (FR-PROC-1)

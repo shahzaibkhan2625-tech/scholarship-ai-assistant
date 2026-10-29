@@ -18,9 +18,10 @@ These were decided by the owner before this spec was written. They are requireme
 - There is **one operator: the owner**. Operator status can be granted only by a command run on the server, never through any API.
 - Email alerts go out through the owner's own mail account (Gmail with an App Password), configured on the server.
 - Passwords: minimum 8 characters, reject above 72 bytes (never silently cut), no composition rules. Email addresses are compared case-insensitively.
-- Uploads: PDF only (checked by content), maximum 10 MB.
+- Uploads: document upload accepts PDF only (checked by content); CV import accepts a PDF (checked by content) or plain text that decodes strictly as UTF-8; both are capped at 10 MB, where **10 MB = 10 485 760 bytes** (10 MiB). Plain-text CV import is an existing capability and is kept.
 - `/metrics` stays reachable only from inside the VM (ADR-0011 Q5, unchanged).
 - Out of scope: refresh tokens and password reset (008), per-user LLM limits (003), full roles and review queue (006), closing sign-up, live submission (Phase 6).
+- **Amendment 2026-10-29 (analyze remediation, owner-approved):** (1) Q-1 = A: `GET /monitoring/runs/{run_id}` (run detail, which returns raw per-source fetch-log rows) is operator-only, making **six** operator-only capabilities; the run list stays open. (2) CV import keeps accepting plain text, now decoded strictly as UTF-8.
 
 ## Deviations from the Blueprint, PRD and ADRs (deviation stop rule)
 
@@ -29,7 +30,7 @@ Blueprint §23 rule 2 requires any difference found in research to be put to the
 | # | What the owner decided | What the current documents say | Documents to amend |
 |---|---|---|---|
 | D-1 | The address check applies to **every redirect hop**, including candidate validation. | ADR-0010 (decision 2, negative consequences), ADR-0011 Q4 and ADR-0015 decision 1 accept the redirect risk as a known residual risk and say no redirect-aware fetch is added. Blueprint §19 repeats that the residual risk "stays accepted for candidate validation". | ADR-0010 (amendment), ADR-0011 Q4 (superseded), ADR-0015 (note), Blueprint §19, PRD NFR-SEC-4 (clarify that "reach" includes redirects) |
-| D-2 | Operator-only also covers **reading source fetch logs and candidate-validation results**. | FR-DISC-8, A17 and the §22 010 row restrict only approve/reject (and, in §22, monitoring runs). | PRD FR-DISC-8, Blueprint §22 010 row and A17 |
+| D-2 | Operator-only also covers **reading source fetch logs, a monitoring run's detail (its per-source outcomes) and candidate-validation results**. | FR-DISC-8, A17 and the §22 010 row restrict only approve/reject (and, in §22, monitoring runs). | PRD FR-DISC-8, Blueprint §22 010 row and A17 |
 | D-3 | **Granting operator status** is an audited action. | PRD NFR-SEC-7 lists sign-up, source approval/rejection, manually started runs and submission approvals only. | PRD NFR-SEC-7, Blueprint §14 note |
 | D-4 | Gmail (App Password) is the mail provider. | Blueprint §47 "NOT YET DEFINED" item 5 leaves the SMTP provider to the 010 spec. | Blueprint §47 item 5 (mark decided) |
 
@@ -41,7 +42,7 @@ The "users" are the **operator** (the owner), the **student** (every other signe
 
 ### User Story 1 - Only the operator governs sources (Priority: P1)
 
-Approving or rejecting a candidate source, starting a manual monitoring run, reading a source's fetch log and reading candidate-validation results are operator-only. Any other signed-in user gets a clear "forbidden" response (distinct from "not signed in"). Operator status is granted to the owner by a command run on the server; no API can grant or revoke it. All student features stay available to every signed-in user exactly as today. `/metrics` stays reachable only from inside the VM.
+Approving or rejecting a candidate source, starting a manual monitoring run, reading a monitoring run's detail (its per-source outcomes), reading a source's fetch log and reading candidate-validation results are operator-only (six capabilities; the monitoring run list stays open to signed-in users). Any other signed-in user gets a clear "forbidden" response (distinct from "not signed in"). Operator status is granted to the owner by a command run on the server; no API can grant or revoke it. All student features stay available to every signed-in user exactly as today. `/metrics` stays reachable only from inside the VM.
 
 **Why this priority**: Today any account holder can change which sources the product treats as authoritative (Constitution Principle IV) and burn the daily LLM allowance. Sign-up is open, so this is exploitable by anyone.
 
@@ -50,9 +51,9 @@ Approving or rejecting a candidate source, starting a manual monitoring run, rea
 **Acceptance Scenarios**:
 
 1. **Given** a signed-in non-operator, **When** they approve a candidate source, **Then** they receive a forbidden response and no source is created and no candidate changes status.
-2. **Given** a signed-in non-operator, **When** they reject a candidate source, start a manual monitoring run, read a source fetch log, or read a candidate's validation results, **Then** each returns forbidden and nothing is started, changed or disclosed.
-3. **Given** the operator, **When** they do each of those five things, **Then** they succeed exactly as they do today.
-4. **Given** an unauthenticated caller, **When** they call any of those five capabilities, **Then** the response is the existing "not signed in" response, not "forbidden".
+2. **Given** a signed-in non-operator, **When** they reject a candidate source, start a manual monitoring run, read a monitoring run's detail, read a source fetch log, or read a candidate's validation results, **Then** each returns forbidden and nothing is started, changed or disclosed.
+3. **Given** the operator, **When** they do each of those six things, **Then** they succeed exactly as they do today.
+4. **Given** an unauthenticated caller, **When** they call any of those six capabilities, **Then** the response is the existing "not signed in" response, not "forbidden".
 5. **Given** any signed-in user, **When** they use profile, discovery, matching, Q&A, documents, applications, alerts or coverage, **Then** behaviour is unchanged from `main`.
 6. **Given** any signed-in user, **When** they try to make themselves or anyone else an operator through any API request (including by adding an extra field to sign-up or profile updates), **Then** operator status does not change.
 7. **Given** a user who is not an operator, **When** the owner runs the server command to grant operator status to that user's email, **Then** the user's next request is accepted as operator.
@@ -121,18 +122,18 @@ Passwords must be at least 8 characters and are rejected above 72 bytes (never s
 
 ### User Story 5 - Uploads are limited and safe (Priority: P2)
 
-Document uploads and CV import accept only PDF files (checked by content, not by file name) up to 10 MB. A larger or non-PDF file gets a clear error, never a server error. A CV import must not make other users' requests wait.
+Document uploads accept only PDF files (checked by content, not by file name). CV import accepts a PDF (checked by content) or a plain-text file that decodes strictly as UTF-8 (no invalid bytes are ignored or replaced). Both are capped at 10 MB (10 485 760 bytes). A larger, unsupported, empty or corrupt file gets a clear error, never a server error. A CV import must not make other users' requests wait.
 
 **Why this priority**: An unbounded upload can exhaust memory or disk and a bad PDF currently causes a 500; a slow CV import stalls everyone because the server handles requests with a single worker.
 
-**Independent Test**: Upload files of exactly 10 MB, 10 MB plus one byte, a renamed non-PDF, a PDF renamed to another extension, an empty file, a corrupt PDF and an encrypted PDF to both entry points; while a CV import with a deliberately slow model call is running, time a simple authenticated request from another user.
+**Independent Test**: Upload files of exactly 10 MB, 10 MB plus one byte, a renamed non-PDF, a PDF renamed to another extension, an empty file, a corrupt PDF and an encrypted PDF to both entry points; send CV import a valid UTF-8 `.txt` CV, a Latin-1 (invalid UTF-8) text file and a binary file; while a CV import with a deliberately slow model call is running, time a simple authenticated request from another user.
 
 **Acceptance Scenarios**:
 
-1. **Given** a valid PDF of exactly 10 MB, **When** it is uploaded to a document upload or CV import, **Then** it is accepted.
+1. **Given** a valid PDF of exactly 10 MB, **When** it is uploaded to a document upload or CV import, **Then** it is accepted; and **Given** a valid UTF-8 plain-text CV of up to 10 MB, **When** it is sent to CV import, **Then** it is accepted and processed as today.
 2. **Given** a file of 10 MB plus one byte, **When** it is uploaded, **Then** it is rejected with a clear "file too large" error, nothing is stored and no row is left behind.
-3. **Given** a file that is not a PDF by content (even if named `.pdf`), **When** it is uploaded, **Then** it is rejected with a clear "only PDF files are accepted" error and nothing is stored.
-4. **Given** a real PDF whose file name has another extension, **When** it is uploaded, **Then** it is accepted (content decides).
+3. **Given** a file that is not a PDF by content (even if named `.pdf`), **When** it is sent to a document upload, **Then** it is rejected with a clear "only PDF files are accepted" error and nothing is stored; and **Given** a file that is neither a PDF by content nor plain text that decodes strictly as UTF-8 (a binary file, invalid UTF-8 bytes, or a file containing NUL bytes), **When** it is sent to CV import, **Then** it is rejected with a clear "send a PDF or a UTF-8 plain-text file" error and nothing is processed.
+4. **Given** a real PDF whose file name has another extension, **When** it is uploaded or imported, **Then** it is accepted (content decides, never the name).
 5. **Given** an empty, corrupt or encrypted PDF, **When** it is uploaded or imported, **Then** the user gets a clear error and never a server error.
 6. **Given** a CV import in progress whose model call takes several seconds, **When** another user makes an ordinary authenticated request, **Then** that request is answered without waiting for the import.
 
@@ -204,7 +205,7 @@ Current `main` plus feature 010 is deployed to the VM, with post-deploy checks t
 **Acceptance Scenarios**:
 
 1. **Given** the deploy runbook, **When** the owner follows it in order (owner-credential migrations first, then restart with restricted credentials), **Then** the server reports the deployed commit and it equals `main` plus feature 010.
-2. **Given** the deployed server, **When** the post-deploy checks run, **Then** all of these pass: the site answers over HTTPS; sign-up and sign-in work with the new password rules; a non-operator is forbidden on the five operator-only capabilities and the operator is not; URL match to the metadata address is refused; the app's database credentials cannot create a table; a test alert email reaches the owner; public `/metrics` is refused; and the owner's account is the only operator.
+2. **Given** the deployed server, **When** the post-deploy checks run, **Then** all of these pass: the site answers over HTTPS; sign-up and sign-in work with the new password rules; a non-operator is forbidden on the six operator-only capabilities and the operator is not; URL match to the metadata address is refused; the app's database credentials cannot create a table; a test alert email reaches the owner; public `/metrics` is refused; and the owner's account is the only operator.
 3. **Given** any post-deploy check fails, **When** the owner follows the runbook's rollback step, **Then** the previous version is restored and the failing check and cause are recorded.
 4. **Given** existing accounts that differ only by email case, **When** the owner runs the read-only pre-check before migrating, **Then** collisions are listed and the deploy halts until the owner decides.
 
@@ -216,8 +217,8 @@ Current `main` plus feature 010 is deployed to the VM, with post-deploy checks t
 - **Operator demoted**: The owner revokes operator status with the same server command; the user loses operator access on their very next request (no waiting for the session to expire). A monitoring run the operator started before demotion finishes; its audit record stays.
 - **Redirect chain longer than allowed**: Refused with a clear error; the number of allowed hops is fixed and documented (assumption: 5).
 - **DNS returns several addresses including a private one**: Refused if any address is non-public. The address actually connected to must be one that passed the check (no change between check and connect).
-- **Upload exactly at the limit**: Exactly 10 MB is accepted; one byte more is refused.
-- **Upload with a misleading name**: A non-PDF named `.pdf` is refused; a PDF without a `.pdf` name is accepted.
+- **Upload exactly at the limit**: Exactly 10 MB (10 485 760 bytes) is accepted; one byte more is refused.
+- **Upload with a misleading name**: Content decides, never the name. At document upload a non-PDF named `.pdf` is refused and a PDF without a `.pdf` name is accepted. At CV import a PDF is recognised by content, and any other file is accepted only if it decodes strictly as UTF-8.
 - **Unicode passwords**: The limit counts bytes, so 25 four-byte characters (100 bytes) are refused while 72 ASCII characters are accepted.
 - **Operator grant for a missing email**: The server command reports "no such user" and changes nothing; re-granting an operator is a harmless no-op that is not audited twice.
 - **Two simultaneous sign-ups differing only by email case**: Exactly one succeeds; the other gets the "already registered" response.
@@ -232,8 +233,8 @@ Current `main` plus feature 010 is deployed to the VM, with post-deploy checks t
 
 **Operator-only governance (US1)**
 
-- **FR-AUTHZ-1**: The system MUST allow only an operator to approve a candidate source, reject a candidate source, start a manual monitoring run, read a source's fetch log, and read a candidate's validation results.
-- **FR-AUTHZ-2**: Every signed-in non-operator calling any of those five capabilities MUST receive a clear "forbidden" response that is distinct from the "not signed in" response, with no side effects and no data disclosed.
+- **FR-AUTHZ-1**: The system MUST allow only an operator to approve a candidate source, reject a candidate source, start a manual monitoring run, read a monitoring run's detail (`GET /monitoring/runs/{run_id}`, which returns per-source fetch-log rows), read a source's fetch log, and read a candidate's validation results. The monitoring run list stays open to signed-in users.
+- **FR-AUTHZ-2**: Every signed-in non-operator calling any of those six capabilities MUST receive a clear "forbidden" response that is distinct from the "not signed in" response, with no side effects and no data disclosed.
 - **FR-AUTHZ-3**: Operator status MUST be grantable and revocable only by a command run on the server by the owner. No API route, sign-up field or profile field MAY set or change it.
 - **FR-AUTHZ-4**: An operator change (grant or revoke) MUST take effect on the user's next request without requiring a new sign-in.
 - **FR-AUTHZ-5**: The system MUST have exactly one operator after deployment: the owner's account.
@@ -270,8 +271,8 @@ Current `main` plus feature 010 is deployed to the VM, with post-deploy checks t
 
 **Upload limits (US5)**
 
-- **FR-UPLOAD-1**: Document upload and CV import MUST accept only PDF files, decided by file content and not by name, and no larger than 10 MB (10 MB exactly is accepted).
-- **FR-UPLOAD-2**: A file that is too large, not a PDF, empty, corrupt or encrypted MUST get a clear error, never a server error, and MUST leave nothing stored and no orphan row.
+- **FR-UPLOAD-1**: Document upload MUST accept only PDF files, decided by file content and not by name. CV import MUST accept a PDF (decided by content) or plain text that decodes strictly as UTF-8 (invalid bytes MUST be rejected with a clear error, never ignored or replaced; a file containing NUL bytes is treated as binary and rejected). Both MUST refuse anything larger than 10 MB (10 485 760 bytes exactly is accepted).
+- **FR-UPLOAD-2**: A file that is too large, unsupported, empty, corrupt or encrypted MUST get a clear error, never a server error, and MUST leave nothing stored and no orphan row.
 - **FR-UPLOAD-3**: A CV import MUST NOT delay other users' requests while it runs.
 
 **Audit log (US6)**
@@ -311,6 +312,7 @@ Current `main` plus feature 010 is deployed to the VM, with post-deploy checks t
 | Approve / reject candidate; read validations (operator only) | `/sources/candidates/...` routes | those routes, as operator, non-operator, anonymous |
 | Manual monitoring run (operator only) | `POST /monitoring/runs` | that route |
 | Read source fetch log (operator only) | `GET /sources/{id}/fetch-log` | that route |
+| Read a monitoring run's detail (operator only) | `GET /monitoring/runs/{run_id}` | that route |
 | Grant / revoke operator | operator CLI command on the server | the CLI command |
 | Safe fetch of user URL | `POST /scholarships/match-url` | that route |
 | Safe fetch at source approval; public-domain rule | approve route | that route |
@@ -337,7 +339,8 @@ Current `main` plus feature 010 is deployed to the VM, with post-deploy checks t
 - The owner already has a Gmail account with an App Password and will place it only in the server environment.
 - "Forbidden" is a distinct, documented response class for a signed-in user lacking permission.
 - The fixed redirect limit is 5 hops; the plan may change it only with the owner's agreement.
-- Source fetch logs are read only through the per-source fetch-log route. The monitoring-run list and detail routes and the aggregate source-health route stay open to signed-in users because they expose no raw fetch-log rows. If the plan finds a route that does expose fetch-log rows, it follows FR-PROC-2.
+- Q-1 = A (2026-10-29): the monitoring run detail route is operator-only because it returns per-source fetch-log rows; the monitoring run list (no fetch-log rows) and the aggregate source-health route stay open to signed-in users.
+- "10 MB" means 10 485 760 bytes (10 MiB) everywhere in this spec: exactly that size is accepted, one byte more is refused.
 - For the server command (no signed-in actor), the audit record's user is the person receiving operator status, and the entity says so.
 - Only successful actions are audited; refusals go to the application log.
 - Existing accounts and sessions survive deployment; signed-in sessions need not be invalidated, except that operator status is read fresh on each request (FR-AUTHZ-4).
@@ -359,11 +362,11 @@ Current `main` plus feature 010 is deployed to the VM, with post-deploy checks t
 
 ### Measurable Outcomes
 
-- **SC-001**: For each of the 5 operator-only capabilities, 100% of tests as a non-operator return forbidden with no side effect, and 100% as the operator succeed; the full existing student regression suite passes with no edits to its expectations.
+- **SC-001**: For each of the 6 operator-only capabilities, 100% of tests as a non-operator return forbidden with no side effect, and 100% as the operator succeed; the full existing student regression suite passes with no edits to its expectations.
 - **SC-002**: Across a battery of at least 20 blocked-address cases (loopback, private ranges, link-local, metadata, IPv6 and mapped forms, numeric encodings, `localhost`-style names, multi-address DNS with one private, redirects to a private address at every hop up to the limit), 0 connection attempts reach a non-public address, and 100% return a clear error and a log line.
 - **SC-003**: Under the application's credentials, 0 of 4 attempts (create table, alter table, drop table, create role) succeed, 100% of the existing automated tests and the deep smoke test pass, and migrations succeed with owner credentials.
 - **SC-004**: 100% of passwords under 8 characters or over 72 bytes are rejected; 100% of passwords from 8 to 72 bytes are accepted; 100% of case-variant duplicate emails are rejected; the app refuses to start in 100% of the three bad-secret cases (31 characters, empty, the placeholder) and starts with a 32-character secret.
-- **SC-005**: A 10 MB PDF is accepted and a 10 MB plus one byte file is refused, at both upload entry points; a corpus of at least 8 bad files (non-PDF, renamed, empty, corrupt, encrypted, truncated, oversized, wrong extension) produces 0 server errors; during a CV import with a model call of at least 5 seconds, another user's simple authenticated request is answered in under 1 second.
+- **SC-005**: A 10 MB (10 485 760 byte) PDF is accepted and a file one byte larger is refused, at both upload entry points; a valid UTF-8 plain-text CV is accepted at CV import and an invalid-UTF-8 or binary file is refused; a corpus of at least 8 bad files (non-PDF at document upload, renamed, empty, corrupt, encrypted, truncated, oversized, wrong extension, invalid-UTF-8 and binary at CV import) produces 0 server errors; during a CV import with a model call of at least 5 seconds, another user's simple authenticated request is answered in under 1 second.
 - **SC-006**: Each of the 6 audited actions produces exactly one correct audit record (right user, action, entity, time within 5 seconds of the action); 0 student routes return audit records; 0 refused actions leave a record.
 - **SC-007**: With a database error injected into each broad-catch step found by research, 100% of runs and requests still complete, record their outcome and complete the next write.
 - **SC-008**: With mail configured, a test alert email reaches the owner's inbox within 5 minutes of the alert being created; with mail unconfigured or failing, 100% of alerts still appear in the app and 100% log a reason; the repository contains 0 mail credentials.

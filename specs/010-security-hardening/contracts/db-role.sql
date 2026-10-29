@@ -42,8 +42,13 @@ SELECT format(
   :'migration_role')
 \gexec
 
--- 5. The app never needs the migration bookkeeping table.
-REVOKE ALL ON TABLE alembic_version FROM scholarship_app;
+-- 5. The app never needs the migration bookkeeping table (guarded: on a fresh database, e.g. CI, it does not exist until the first migration).
+DO $$
+BEGIN
+  IF to_regclass('public.alembic_version') IS NOT NULL THEN
+    REVOKE ALL ON TABLE alembic_version FROM scholarship_app;
+  END IF;
+END $$;
 
 -- 6. Append-only audit trail (table exists once the 010 migration has run).
 DO $$

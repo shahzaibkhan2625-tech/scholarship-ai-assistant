@@ -25,7 +25,7 @@ Changes to the existing HTTP API. **No new routes.** Paths, methods and success 
 
 Unchanged and open to every signed-in user: `GET /sources`, `GET /sources/candidates`, `GET /sources/health`, `GET /monitoring/runs`, `GET /coverage`, and every student route. `/metrics` stays answered 404 by the public listener (Caddyfile) and bearer-protected in the app.
 
-OpenAPI: the five routes gain `403` in `responses`. No operator-management route exists (FR-AUTHZ-3); a test asserts no path under the app contains `operator`, `role` or `admin`, and that sign-up/profile bodies ignore an extra `is_operator` field.
+OpenAPI: the six routes gain `403` in `responses`. No operator-management route exists (FR-AUTHZ-3); a test asserts no path under the app contains `operator`, `role` or `admin`, and that sign-up/profile bodies ignore an extra `is_operator` field.
 
 ## 2. `POST /auth/signup`, `POST /auth/login` (FR-CRED-1, -2, -4)
 
@@ -56,7 +56,7 @@ Success and the existing `422 FetchFailure` shape are unchanged. A refused URL (
 | Route | Change |
 |---|---|
 | `POST /applications/{application_id}/documents` | 413 over 10 MiB; 415 if not a PDF by content (first 1024 bytes must contain `%PDF-`); 400 `File is empty`; corrupt/encrypted → existing 422 (unchanged); a real PDF with any file name is accepted |
-| `POST /profile/import-cv` | same 413 / 415 / 400; corrupt or encrypted PDF → **422** (was 500); a non-PDF is no longer decoded as text; runs in the worker thread pool so it never blocks other requests |
+| `POST /profile/import-cv` | 413 over 10 MiB; accepts a PDF (by content) **or plain text that decodes strictly as UTF-8** (existing behaviour kept; `errors="ignore"` is removed, so invalid bytes are rejected, and a file containing a NUL byte is treated as binary); anything else → 415 `Unsupported file: send a PDF or a UTF-8 plain-text file`; 400 `File is empty`; corrupt or encrypted PDF → **422** (was 500); a real PDF with any file name is accepted; runs in the worker thread pool so it never blocks other requests |
 
 Nothing is stored and no row is created when an upload is refused. Exactly 10 MiB (10 485 760 bytes) is accepted; 10 485 761 is refused.
 
