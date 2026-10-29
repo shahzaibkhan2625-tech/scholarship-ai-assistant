@@ -34,3 +34,11 @@ def get_current_user(
         raise credentials_error
 
     return user
+
+
+def require_operator(current_user: User = Depends(get_current_user)) -> User:
+    """Operator-only routes (010 FR-AUTHZ-1/2). Runs after authentication, so a missing or
+    bad token is still 401; the flag is read from the row on every request (FR-AUTHZ-4)."""
+    if not current_user.is_operator:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Operator access required")
+    return current_user

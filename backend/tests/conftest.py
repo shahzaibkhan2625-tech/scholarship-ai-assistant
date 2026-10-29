@@ -25,7 +25,7 @@ from tests.db_guard import require_db_allowed
 # --- --offline mode -------------------------------------------------------------------
 
 # Fixtures through which a test reaches the database.
-_DB_FIXTURES = {"db_session_factory", "client", "authed_user"}
+_DB_FIXTURES = {"db_session_factory", "client", "authed_user", "make_user", "operator_headers", "student_headers"}
 # Modules that touch the database directly (SessionLocal / engine) or through fixtures local to
 # the module; deselected whole, so a missed fixture cannot leak a connection.
 _DIRECT_DB_MODULES = {
@@ -316,6 +316,37 @@ def authed_user(client, db_session_factory):
 
     with db_session_factory() as session:
         _delete_user_cascade(session, user_id)
+
+
+@pytest.fixture
+def make_user(db_session_factory):
+    """Factory: `make_user(is_operator=False)` creates a user inside the test transaction (rolled back
+    at teardown, so no cleanup) and returns `{"id", "email", "headers"}` with a valid bearer token.
+    Operator status is set directly on the row, as the server CLI would (010 FR-AUTHZ-3)."""
+    from app.core.security import create_access_token, hash_password
+    from app.models.user import User
+
+    def _make(is_operator: bool = False) -> dict:
+        email = f"test-{uuid.uuid4().hex}@example.com"
+        with db_session_factory() as session:
+            user = User(email=email, password_hash=hash_password("s3cret-pass"), is_operator=is_operator)  # allow-secret
+            session.add(user)
+            session.commit()
+            user_id = user.id
+        token = create_access_token(str(user_id))
+        return {"id": user_id, "email": email, "headers": {"Authorization": f"Bearer {token}"}}
+
+    return _make
+
+
+@pytest.fixture
+def operator_headers(make_user):
+    return make_user(is_operator=True)["headers"]
+
+
+@pytest.fixture
+def student_headers(make_user):
+    return make_user(is_operator=False)["headers"]
 
 
 @pytest.fixture(autouse=True)

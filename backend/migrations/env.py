@@ -5,7 +5,7 @@ from sqlalchemy import pool
 
 from alembic import context
 
-from app.core.config import settings
+from app.core.config import migration_url, settings
 from app.data.repositories.db import Base
 from app.models import user  # noqa: F401  (registers User with Base.metadata)
 from app.models import profile  # noqa: F401  (registers profile tables with Base.metadata)
@@ -13,6 +13,7 @@ from app.models import scholarship  # noqa: F401  (registers scholarship tables 
 from app.models import requirement  # noqa: F401  (registers requirements with Base.metadata)
 from app.models import funding  # noqa: F401  (registers funding_details with Base.metadata)
 from app.models import match  # noqa: F401  (registers matches with Base.metadata)
+from app.models import audit  # noqa: F401  (registers audit_log with Base.metadata)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -25,7 +26,7 @@ if config.config_file_name is not None:
 
 # Inject the real database URL from our Settings/.env instead of the
 # hardcoded placeholder in alembic.ini.
-config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option("sqlalchemy.url", migration_url(settings))
 
 # add your model's MetaData object here
 # for 'autogenerate' support
