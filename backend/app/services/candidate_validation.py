@@ -27,10 +27,8 @@ blocked, not that the request was never sent (ADR-0010).
 idle-in-transaction across a 15 s fetch; the insert is a short transaction after.
 """
 
-import ipaddress
 import logging
 import re
-import socket
 import uuid
 from datetime import datetime, timezone
 from typing import Callable
@@ -38,6 +36,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
+from app.core.url_safety import _non_public, _resolve_host, unsafe_url_reason  # noqa: F401  (moved to url_safety in 010; names stay importable)
 from app.data.repositories import candidate_validation_repo, source_repo
 from app.models.candidate_validation import CandidateSourceValidation
 from app.tools.extract_listing import ExtractListingOutput, clean_html_to_text, extract_listing_from_page
@@ -60,52 +59,6 @@ _AFFILIATION_RES = {term: re.compile(rf"\b{re.escape(term)}\b") for term in AFFI
 
 # `<gov|edu|ac>.<cc>` second-level patterns (e.g. .ac.uk, .gov.au, .edu.au).
 _SECOND_LEVEL_OFFICIAL = frozenset({"gov", "edu", "ac"})
-
-
-# --- SSRF guard -------------------------------------------------------------
-
-
-def _resolve_host(host: str) -> list[str]:
-    infos = socket.getaddrinfo(host, None)
-    return sorted({info[4][0].split("%")[0] for info in infos})
-
-
-def _non_public(address: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(address)
-    except ValueError:
-        return True  # an address we cannot parse is not one we will connect to
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    return not ip.is_global
-
-
-def unsafe_url_reason(url: str, *, resolve: Callable[[str], list[str]] = _resolve_host) -> str | None:
-    """None if `url` is an http(s) URL whose host is public; otherwise why not.
-    A host that does not resolve is NOT refused here (it is not an SSRF target;
-    the fetch will report it as unreachable)."""
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        return f"scheme {parsed.scheme or '(none)'!r} is not http(s)"
-    host = parsed.hostname
-    if not host:
-        return "URL has no host"
-    host = host.lower()
-    if host == "localhost" or host.endswith(".localhost"):
-        return "host is localhost"
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        try:
-            addresses = resolve(host)
-        except OSError:
-            return None
-    else:
-        addresses = [host]
-    for address in addresses:
-        if _non_public(address):
-            return f"host resolves to non-public address {address}"
-    return None
 
 
 # --- advisory official-source signals ---------------------------------------
