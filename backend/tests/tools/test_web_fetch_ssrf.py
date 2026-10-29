@@ -401,7 +401,7 @@ def test_4xx_after_a_redirect_reports_the_last_logical_url(wire):
 def test_refusal_is_logged_with_host_and_reason_but_no_secrets(wire, caplog):
     wire()
     with caplog.at_level(logging.WARNING, logger="app.tools.web_fetch"):
-        fetch("http://user:hunter2@multi.example.com/path?token=SECRET123")
+        fetch("http://user:hunter2@multi.example.com/path?token=SECRET123")  # allow-secret: deliberate fake credential
     text = caplog.text
     assert "multi.example.com" in text
     assert "non-public address 10.0.0.5" in text
