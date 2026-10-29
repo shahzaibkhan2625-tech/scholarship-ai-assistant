@@ -23,6 +23,7 @@ from app.data.repositories.source_repo import SourceNotApprovedError
 from app.models.source import FetchStatus, SourceRegistry
 from app.schemas.source import SourceFetchLogCreate
 from app.sources.retry_policy import DEFAULT_MAX_ATTEMPTS, run_with_retry
+from app.tools.web_fetch import BlockedFetchError, safe_get
 
 __all__ = ["ApiFetchResult", "fetch_api", "SourceNotApprovedError"]
 
@@ -61,11 +62,12 @@ def _default_client(source: SourceRegistry, query: str) -> ApiRawResponse:
     exercisable without a bespoke client per API."""
 
     try:
-        response = httpx.get(
-            f"https://{source.domain}",
-            params={"q": query},
-            timeout=_TIMEOUT_SECONDS,
+        # 010: the registry domain is checked and the connection pinned like any fetch; no redirects.
+        response, _final_url = safe_get(
+            f"https://{source.domain}", params={"q": query}, timeout=_TIMEOUT_SECONDS, max_redirects=0
         )
+    except BlockedFetchError as exc:
+        return ApiRawResponse(success=False, error=f"blocked: {exc}")
     except httpx.TimeoutException as exc:
         return ApiRawResponse(success=False, error=f"Request timed out: {exc}")
     except httpx.RequestError as exc:
