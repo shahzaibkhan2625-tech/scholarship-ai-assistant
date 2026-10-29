@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     database_url: str = Field(alias="DATABASE_URL")
     jwt_secret_key: str = Field(alias="JWT_SECRET_KEY")
 
+    # 010: optional owner/direct URL used only by Alembic (never set in the app's environment).
+    migration_database_url: str | None = Field(default=None, alias="MIGRATION_DATABASE_URL")
+    # 010: upload cap in bytes (10 MiB) and the redirect-hop limit of the safe fetch.
+    max_upload_bytes: int = Field(default=10485760, ge=1, alias="MAX_UPLOAD_BYTES")
+    max_fetch_redirects: int = Field(default=5, ge=0, alias="MAX_FETCH_REDIRECTS")
+
     # Optional: free-tier external services (Gemini LLM, Qdrant Cloud vectors).
     # Not required so CI (which sets only DATABASE_URL/JWT_SECRET_KEY dummies)
     # can still import the app; code paths that need them raise/skip explicitly
@@ -67,17 +73,31 @@ class Settings(BaseSettings):
             return None
         return value.strip() or None
 
-    @field_validator("database_url")
+    @field_validator("migration_database_url")
     @classmethod
-    def _use_psycopg_driver(cls, value: str) -> str:
+    def _blank_migration_url_to_none(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+    @field_validator("database_url", "migration_database_url")
+    @classmethod
+    def _use_psycopg_driver(cls, value: str | None) -> str | None:
         # We install psycopg (v3), not psycopg2, so make sure SQLAlchemy
         # picks the right driver even when DATABASE_URL uses the plain
         # "postgresql://" / "postgres://" scheme (e.g. as provided by Neon).
+        if value is None:
+            return None
         if value.startswith("postgresql://"):
             return value.replace("postgresql://", "postgresql+psycopg://", 1)
         if value.startswith("postgres://"):
             return value.replace("postgres://", "postgresql+psycopg://", 1)
         return value
+
+
+def migration_url(settings: Settings) -> str:
+    """The URL Alembic connects with: the owner/direct URL when set, else the app URL."""
+    return settings.migration_database_url or settings.database_url
 
 
 def get_settings() -> Settings:
