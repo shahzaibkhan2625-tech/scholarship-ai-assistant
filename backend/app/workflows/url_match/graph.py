@@ -5,6 +5,7 @@ A fetch failure short-circuits every downstream node and is reported
 explicitly (FetchFailure) — never as "not eligible" (US2 Acceptance
 Scenario 4)."""
 
+import logging
 import uuid
 from datetime import date
 from typing import Any, TypedDict
@@ -13,6 +14,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agents.matching.agent import build_verdict, produce_soft_preference_outcomes
 from app.core.llm import LlmNotConfiguredError
+from app.core.logging import log_context
 from app.data.repositories import match_repo, scholarship_repo
 from app.data.vectors.qdrant_client import VectorStoreNotConfiguredError
 from app.models.funding import FundingDetails
@@ -25,6 +27,8 @@ from app.schemas.match import FetchFailure, UrlMatchResult
 from app.services.hard_constraints import evaluate_hard_constraints
 from app.tools.extract_requirements import ExtractedScholarshipData, extract_requirements_from_page
 from app.tools.web_fetch import fetch_url
+
+logger = logging.getLogger(__name__)
 
 
 class UrlMatchState(TypedDict, total=False):
@@ -61,6 +65,10 @@ def _parse_date(value: str | None) -> date | None:
 def _fetch_node(state: UrlMatchState) -> dict:
     result = fetch_url(state["url"])
     if not result.success:
+        if result.blocked:
+            # 010 FR-SSRF-5: user id, entry point and reason only; no URL path, page content or secrets
+            with log_context(user_id=state["user_id"], entry_point="match-url"):
+                logger.warning("URL-match fetch refused: %s", result.error)
         return {"error": result.error}
     return {"fetch_html": result.html}
 
