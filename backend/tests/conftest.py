@@ -36,6 +36,7 @@ _DIRECT_DB_MODULES = {
     "tests/scheduling/test_scheduler.py",
     "tests/services/test_retention.py",
     "tests/sources/test_source_registry_compliance.py",
+    "tests/security/test_db_role.py",
     "tests/test_auth.py",
     "tests/test_db_connection.py",
     "tests/workflows/test_source_monitor.py",

@@ -30,10 +30,11 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """002: configure JSON logging (after uvicorn has set up its own loggers, so ours
-    wins), fail any run left `running` by a crashed process, then
+    wins), warn if the DB role is owner-level (FR-DBROLE-5), fail any run left `running` by a crashed process, then
     start the monitoring scheduler (a no-op when MONITORING_INTERVAL_MINUTES
     <= 0, which is how tests keep it off); stop it on shutdown. Recovery is
     best-effort so an unreachable DB cannot stop the API from booting."""
+    from app.core import db_role_check
     from app.data.repositories import monitoring_repo
     from app.data.repositories.db import SessionLocal
     from app.scheduling.scheduler import start_scheduler, stop_scheduler
@@ -46,6 +47,11 @@ async def lifespan(_app: FastAPI):
             logger.warning("marked %d leftover running monitoring run(s) as failed", recovered)
     except Exception:  # noqa: BLE001
         logger.exception("monitoring crash recovery failed")
+
+    try:
+        db_role_check.check_current_db_role()
+    except Exception:  # noqa: BLE001
+        logger.warning("database role check failed")
 
     start_scheduler()
     try:
