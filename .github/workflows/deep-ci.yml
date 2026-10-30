@@ -29,7 +29,9 @@ jobs:
       # Real Postgres service container above - the DB-backed smoke test runs for real
       # instead of self-skipping. JWT_SECRET_KEY stays a CI-only dummy; nothing reads it
       # as a real secret.
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/scholarship_ci
+      # The app and the tests run as the restricted role; only Alembic uses the owner URL.
+      DATABASE_URL: postgresql+psycopg://scholarship_app:ci-only-not-a-secret@localhost:5432/scholarship_ci # allow-secret: CI-only throwaway password
+      MIGRATION_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/scholarship_ci
       JWT_SECRET_KEY: ci-only-dummy-secret-0123456789abcdef
       QDRANT_URL: ${{ secrets.QDRANT_URL }}
       QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
@@ -49,9 +51,35 @@ jobs:
         working-directory: backend
         run: uv sync
 
-      - name: Run database migrations
+      # Least-privilege role (010 US3, FR-DBROLE-4): migrate as the owner, run everything else as
+      # scholarship_app, so the whole suite proves the app needs no DDL. The role is created before
+      # the first migration (tables then get default privileges) and the script is re-run after it
+      # (grants on existing tables, alembic_version and audit_log). psql is preinstalled on
+      # ubuntu-latest; the version line below makes a missing client obvious on the first run.
+      - name: Create restricted database role
+        run: |
+          psql --version
+          psql -v ON_ERROR_STOP=1 -v migration_role=postgres -v skip_password=1 -f backend/scripts/db/create_app_role.sql
+          psql -v ON_ERROR_STOP=1 -c "ALTER ROLE scholarship_app PASSWORD 'ci-only-not-a-secret'" # allow-secret: CI-only throwaway password
+        env:
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: scholarship_ci
+
+      - name: Run database migrations (as owner)
         working-directory: backend
         run: uv run alembic upgrade head
+
+      - name: Re-run role script after migrations
+        run: >-
+          psql -v ON_ERROR_STOP=1 -v migration_role=postgres -v skip_password=1
+          -f backend/scripts/db/create_app_role.sql
+        env:
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: scholarship_ci
 
       - name: Run live Qdrant + Gemini smoke tests
         working-directory: backend
