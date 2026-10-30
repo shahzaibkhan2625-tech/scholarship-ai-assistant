@@ -8,6 +8,7 @@
 -- server, so the password is not in this file, a psql variable, shell history or the process list.
 -- Idempotent: safe to run again after adding tables. Each run prompts for the password
 -- (use it to rotate; press Ctrl-C at the prompt to keep the current one).
+-- Non-interactive (CI only): add -v skip_password=1 to skip the prompt.
 -- Sources: https://neon.com/docs/manage/roles (roles must be created with SQL to avoid
 -- neon_superuser), https://www.postgresql.org/docs/current/sql-alterdefaultprivileges.html,
 -- https://www.postgresql.org/docs/release/15.0/ (public schema CREATE).
@@ -19,7 +20,11 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scholarship_app')
 \gexec
 
 -- Set the password interactively (prompted twice; sent as a hash, never as plain text).
+-- CI passes -v skip_password=1 (no terminal) and sets a throw-away password with ALTER ROLE instead.
+\if :{?skip_password}
+\else
 \password scholarship_app
+\endif
 
 -- 2. No one may create objects in public (older databases keep the pre-15 default).
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
