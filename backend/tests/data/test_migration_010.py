@@ -1,7 +1,8 @@
 """010 T336: the security-hardening revision, checked against a LOCAL/CI Postgres that has
 been migrated to head (`alembic upgrade head`). Skips without a reachable local database.
-Downgrade is exercised inside a transaction that is rolled back (Postgres DDL is transactional),
-so the shared test database is left at head."""
+Tests that run migration DDL use the owner connection (`migration_url`), exactly as Alembic does in
+production: the app role (`scholarship_app`) has no DDL rights by design. They run inside a
+transaction that is rolled back (Postgres DDL is transactional), so the database is left at head."""
 
 import importlib.util
 import uuid
@@ -36,6 +37,32 @@ def connection(db_session_factory):
             yield conn
         finally:
             outer.rollback()
+
+
+@pytest.fixture
+def owner_connection(db_session_factory):
+    """The migration (owner) URL in a transaction that is always rolled back. Depends on
+    `db_session_factory` so the shared-DB guard, the unreachable-DB skip and --offline deselection
+    apply; the guard is applied to the migration URL as well."""
+    from sqlalchemy import create_engine
+
+    from app.core.config import migration_url, settings
+    from tests.db_guard import shared_db_skip_reason
+
+    url = migration_url(settings)
+    reason = shared_db_skip_reason(url)
+    if reason:
+        pytest.skip(reason)
+    owner_engine = create_engine(url)
+    try:
+        with owner_engine.connect() as conn:
+            outer = conn.begin()
+            try:
+                yield conn
+            finally:
+                outer.rollback()
+    finally:
+        owner_engine.dispose()
 
 
 def _scalar(conn, sql: str, **params):
@@ -127,28 +154,40 @@ def test_audit_log_at_defaults_to_now(connection):
     assert _scalar(connection, "SELECT at IS NOT NULL FROM audit_log WHERE user_id = :u", u=uid) is True
 
 
-def test_conditional_revoke_does_not_fail_when_the_role_is_absent(connection):
+def test_conditional_revoke_does_not_fail_when_the_role_is_absent(owner_connection):
     module = _load_revision()
-    role_exists = _scalar(connection, "SELECT count(*) FROM pg_roles WHERE rolname = 'scholarship_app'")
-    if role_exists:
-        pytest.skip("scholarship_app exists here; the absent-role path is covered where it does not")
-    connection.execute(text(module.REVOKE_AUDIT_LOG_SQL))
+    # Same statement with a role name that cannot exist: exercises the absent-role branch even
+    # where scholarship_app exists (CI), so this never skips.
+    absent_sql = module.REVOKE_AUDIT_LOG_SQL.replace("scholarship_app", "scholarship_absent_role_probe")
+    assert absent_sql != module.REVOKE_AUDIT_LOG_SQL
+    owner_connection.execute(text(absent_sql))
 
 
-def test_downgrade_removes_column_index_and_table_and_upgrade_restores_them(connection):
+def test_conditional_revoke_removes_mutation_rights_when_the_role_exists(owner_connection):
     module = _load_revision()
-    ops = Operations(MigrationContext.configure(connection))
+    # A role created inside the rolled-back transaction when the database has none (plain dev DB).
+    if not _scalar(owner_connection, "SELECT count(*) FROM pg_roles WHERE rolname = 'scholarship_app'"):
+        owner_connection.execute(text("CREATE ROLE scholarship_app"))
+    owner_connection.execute(text("GRANT UPDATE, DELETE, TRUNCATE ON TABLE audit_log TO scholarship_app"))
+    owner_connection.execute(text(module.REVOKE_AUDIT_LOG_SQL))
+    for privilege in ("UPDATE", "DELETE", "TRUNCATE"):
+        assert _scalar(owner_connection, f"SELECT has_table_privilege('scholarship_app', 'audit_log', '{privilege}')") is False
+
+
+def test_downgrade_removes_column_index_and_table_and_upgrade_restores_them(owner_connection):
+    module = _load_revision()
+    ops = Operations(MigrationContext.configure(owner_connection))
     with Operations.context(ops.migration_context):
         module.downgrade()
-    assert _scalar(connection, "SELECT to_regclass('public.audit_log')") is None
+    assert _scalar(owner_connection, "SELECT to_regclass('public.audit_log')") is None
     assert (
         _scalar(
-            connection,
+            owner_connection,
             "SELECT count(*) FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'is_operator'",
         )
         == 0
     )
-    assert _scalar(connection, "SELECT count(*) FROM pg_indexes WHERE tablename = 'users' AND indexdef ILIKE '%lower(%'") == 0
+    assert _scalar(owner_connection, "SELECT count(*) FROM pg_indexes WHERE tablename = 'users' AND indexdef ILIKE '%lower(%'") == 0
     with Operations.context(ops.migration_context):
         module.upgrade()
-    assert _scalar(connection, "SELECT to_regclass('public.audit_log')") is not None
+    assert _scalar(owner_connection, "SELECT to_regclass('public.audit_log')") is not None
