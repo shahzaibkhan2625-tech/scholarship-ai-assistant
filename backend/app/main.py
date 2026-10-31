@@ -18,6 +18,7 @@ from app.api.qa import router as qa_router
 from app.api.scholarships import router as scholarships_router
 from app.api.sources import router as sources_router
 from app.api.url_match import router as url_match_router
+from app.core.body_limit import BodyLimitMiddleware
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.metrics import router as metrics_router
@@ -66,6 +67,7 @@ rate_limiter = TokenBucketLimiter(settings.rate_limit_per_minute)
 # Starlette makes the LAST middleware added the outermost: the limiter is added first so
 # RequestIDMiddleware wraps it and even a 429 carries an X-Request-ID and an access-log line.
 app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
+app.add_middleware(BodyLimitMiddleware)
 app.add_middleware(RequestIDMiddleware)
 
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
