@@ -134,7 +134,7 @@ Document uploads accept only PDF files (checked by content, not by file name). C
 2. **Given** a file of 10 MB plus one byte, **When** it is uploaded, **Then** it is rejected with a clear "file too large" error, nothing is stored and no row is left behind.
 3. **Given** a file that is not a PDF by content (even if named `.pdf`), **When** it is sent to a document upload, **Then** it is rejected with a clear "only PDF files are accepted" error and nothing is stored; and **Given** a file that is neither a PDF by content nor plain text that decodes strictly as UTF-8 (a binary file, invalid UTF-8 bytes, or a file containing NUL bytes), **When** it is sent to CV import, **Then** it is rejected with a clear "send a PDF or a UTF-8 plain-text file" error and nothing is processed.
 4. **Given** a real PDF whose file name has another extension, **When** it is uploaded or imported, **Then** it is accepted (content decides, never the name).
-5. **Given** an empty, corrupt or encrypted PDF, **When** it is uploaded or imported, **Then** the user gets a clear error and never a server error.
+5. **Given** an empty, corrupt or encrypted PDF, **When** it is uploaded or imported, **Then** the user gets a clear error and never a server error; an empty file stores nothing, a corrupt or encrypted PDF at CV import stores nothing, and a corrupt or encrypted PDF at the document upload keeps today's failed-parse row (unchanged in 010; audit P4-SP-2, feature 007).
 6. **Given** a CV import in progress whose model call takes several seconds, **When** another user makes an ordinary authenticated request, **Then** that request is answered without waiting for the import.
 
 ---
@@ -272,7 +272,7 @@ Current `main` plus feature 010 is deployed to the VM, with post-deploy checks t
 **Upload limits (US5)**
 
 - **FR-UPLOAD-1**: Document upload MUST accept only PDF files, decided by file content and not by name. CV import MUST accept a PDF (decided by content) or plain text that decodes strictly as UTF-8 (invalid bytes MUST be rejected with a clear error, never ignored or replaced; a file containing NUL bytes is treated as binary and rejected). Both MUST refuse anything larger than 10 MB (10 485 760 bytes exactly is accepted).
-- **FR-UPLOAD-2**: A file that is too large, unsupported, empty, corrupt or encrypted MUST get a clear error, never a server error, and MUST leave nothing stored and no orphan row.
+- **FR-UPLOAD-2**: A file that is too large, unsupported, empty, corrupt or encrypted MUST get a clear error, never a server error. Refused uploads (too large, empty, not a PDF, invalid CV text) MUST leave nothing stored and no row. A corrupt or encrypted PDF at CV import gets a clear 422 and stores nothing; at the document upload it keeps today's failed-parse row and 422 (unchanged in 010; audit P4-SP-2, feature 007).
 - **FR-UPLOAD-3**: A CV import MUST NOT delay other users' requests while it runs.
 
 **Audit log (US6)**
