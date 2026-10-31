@@ -14,6 +14,7 @@ verdict change alone.
 
 import logging
 import smtplib
+import ssl
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -108,21 +109,23 @@ def _email_body(alert: Alert, context: AlertContext) -> str:
 
 class EmailChannel:
     """stdlib `smtplib` (no new dependency). Every failure — including an unset
-    `SMTP_HOST` — is captured in `email_error`; a later successful send on the
-    same row clears it."""
+    `SMTP_HOST` — is captured in `email_error` as a short reason code (`not_configured`,
+    `no_recipient`, `send_failed`; the field is student-visible, so never raw server text) and
+    logged without secrets; a later successful send on the same row clears it."""
 
     name = "email"
 
+    @staticmethod
+    def _skip(alert: Alert, reason: str) -> bool:
+        logger.warning("email alert %s not sent: %s", alert.id, reason)
+        alert.email_error = reason
+        return False
+
     def send(self, alert: Alert, context: AlertContext) -> bool:
-        if not settings.smtp_host:
-            alert.email_error = "SMTP_HOST is not configured; email alert was not sent"
-            return False
+        if not settings.smtp_host or not getattr(settings, "alerts_from_email", None):
+            return self._skip(alert, "not_configured")
         if not context.recipient_email:
-            alert.email_error = "recipient has no email address"
-            return False
-        if not getattr(settings, "alerts_from_email", None):
-            alert.email_error = "ALERTS_FROM_EMAIL is not configured; email alert was not sent"
-            return False
+            return self._skip(alert, "no_recipient")
 
         message = EmailMessage()
         message["Subject"] = f"Scholarship alert: {context.scholarship_name}"
@@ -131,12 +134,18 @@ class EmailChannel:
         message.set_content(_email_body(alert, context))
         try:
             with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=_SMTP_TIMEOUT_SECONDS) as smtp:
-                smtp.starttls()
+                smtp.starttls(context=ssl.create_default_context())  # verifies the certificate and host name
                 if settings.smtp_username:
-                    smtp.login(settings.smtp_username, settings.smtp_password or "")
+                    # Google prints an App Password in four groups of four; it is used without the spaces.
+                    smtp.login(settings.smtp_username, (settings.smtp_password or "").replace(" ", ""))
                 smtp.send_message(message)
         except Exception as exc:  # noqa: BLE001 - delivery failure is data, never an exception
-            alert.email_error = f"{type(exc).__name__}: {exc}"[:500]
+            # Type and SMTP reply code only: the message text can echo the account name or password.
+            logger.warning(
+                "email alert %s not sent: send_failed (%s, smtp_code=%s)",
+                alert.id, type(exc).__name__, getattr(exc, "smtp_code", None),
+            )
+            alert.email_error = "send_failed"
             return False
         alert.delivered_email_at = datetime.now(timezone.utc)
         alert.email_error = None

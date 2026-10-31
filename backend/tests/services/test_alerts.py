@@ -233,7 +233,7 @@ def test_unset_smtp_host_records_explicit_email_error_and_never_raises(svc, monk
     svc.process([_new(scholarship)], channels={"in_app": InAppChannel(), "email": EmailChannel()})
 
     alert = _alert_for(svc, owner, scholarship)
-    assert "SMTP_HOST" in alert.email_error
+    assert alert.email_error == "not_configured"  # 010: a short code, never server text
     assert alert.delivered_email_at is None
     assert alert.delivered_in_app_at is not None
 
@@ -259,7 +259,7 @@ def test_email_failure_is_stored_and_retry_updates_the_same_row(svc, monkeypatch
         def __exit__(self, *a):
             return False
 
-        def starttls(self):
+        def starttls(self, context=None):
             pass
 
         def login(self, *a):
