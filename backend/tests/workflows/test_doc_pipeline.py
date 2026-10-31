@@ -137,6 +137,40 @@ def test_scanned_pdf_is_needs_ocr_not_failure_or_empty(pipeline_fixture) -> None
     assert not any(flag["type"] == "parse_error" for flag in document.inconsistency_flags)
 
 
+def test_pdf_is_recognised_by_content_not_by_file_name(pipeline_fixture) -> None:
+    session, profile, scholarship, make_document = pipeline_fixture
+    document = make_document()
+
+    with patch("app.workflows.doc_pipeline.graph.extract_document_fields", return_value=ExtractedDocumentFields()):
+        final_state = run_doc_pipeline(
+            session,
+            document=document,
+            file_bytes=_text_pdf_bytes("GPA: 3.2/4.0"),
+            filename="transcript.bin",
+            declared_type="transcript",
+            profile=profile,
+            scholarship=scholarship,
+        )
+
+    assert final_state.get("error") is None
+
+
+def test_non_pdf_content_is_refused_even_when_named_pdf(pipeline_fixture) -> None:
+    session, profile, scholarship, make_document = pipeline_fixture
+
+    final_state = run_doc_pipeline(
+        session,
+        document=make_document(),
+        file_bytes=b"plain text, not a PDF",
+        filename="transcript.pdf",
+        declared_type="transcript",
+        profile=profile,
+        scholarship=scholarship,
+    )
+
+    assert "only PDF files" in final_state["error"]
+
+
 def test_profile_document_inconsistency_is_flagged_not_resolved(pipeline_fixture) -> None:
     session, profile, scholarship, make_document = pipeline_fixture
     profile.education_records.append(EducationRecord(gpa=3.5, gpa_scale=4.0))

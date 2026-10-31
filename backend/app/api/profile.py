@@ -6,6 +6,7 @@ from pypdf import PdfReader
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.uploads import is_pdf, read_cv_upload
 from app.data.repositories.db import get_db
 from app.models.user import User
 from app.schemas.profile import Profile as ProfileSchema
@@ -17,11 +18,19 @@ from app.tools.extract_profile import extract_profile_from_text
 router = APIRouter()
 
 
-def _extract_text_from_upload(file: UploadFile, raw_bytes: bytes) -> str:
-    if (file.content_type or "").endswith("pdf") or (file.filename or "").lower().endswith(".pdf"):
+def _extract_text_from_upload(raw_bytes: bytes) -> str:
+    """`raw_bytes` come from `read_cv_upload`: a PDF (by content) or strictly valid UTF-8 text."""
+    if not is_pdf(raw_bytes):
+        return raw_bytes.decode("utf-8")
+    try:
         reader = PdfReader(io.BytesIO(raw_bytes))
+        if reader.is_encrypted or not reader.pages:
+            raise ValueError("encrypted or empty PDF")
         return "\n".join(page.extract_text() or "" for page in reader.pages)
-    return raw_bytes.decode("utf-8", errors="ignore")
+    except Exception as exc:  # pypdf raises many types for damaged files; all mean "unreadable"
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="We could not read this PDF"
+        ) from exc
 
 
 @router.get("", response_model=ProfileSchema)
@@ -79,11 +88,13 @@ def post_criteria(
 
 
 @router.post("/import-cv", response_model=ProfileUpdateRequest)
-async def import_cv(
+def import_cv(
     file: UploadFile,
     current_user: User = Depends(get_current_user),
 ) -> ProfileUpdateRequest:
-    raw_bytes = await file.read()
-    text = _extract_text_from_upload(file, raw_bytes)
+    # A plain `def` runs in the thread pool, so parsing and the (blocking) extraction never stall
+    # the event loop and other users' requests (FR-UPLOAD-3).
+    raw_bytes = read_cv_upload(file)
+    text = _extract_text_from_upload(raw_bytes)
     # Suggestions only — never auto-saved; the user must confirm via PUT /profile.
     return extract_profile_from_text(text)

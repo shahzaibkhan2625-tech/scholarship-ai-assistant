@@ -43,6 +43,7 @@ from google.genai import errors as genai_errors
 from langgraph.graph import END, START, StateGraph
 
 from app.core.llm import LlmNotConfiguredError
+from app.core.uploads import is_pdf
 from app.data.repositories import document_repo
 from app.models.document import ApplicationDocument, DocumentType
 from app.models.requirement import Requirement, RequirementCategory
@@ -111,8 +112,9 @@ def _receive_node(state: DocPipelineState) -> dict:
 
 
 def _identify_type_node(state: DocPipelineState) -> dict:
+    # Content decides, not the file name: a real PDF with any name is accepted (FR-UPLOAD-1).
     filename = state.get("filename") or ""
-    if not filename.lower().endswith(".pdf"):
+    if not is_pdf(state.get("file_bytes") or b""):
         return {"error": f"Unsupported file format for {filename!r}: only PDF files are currently supported."}
     return {}
 

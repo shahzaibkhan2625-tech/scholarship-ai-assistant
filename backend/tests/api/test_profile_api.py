@@ -97,3 +97,26 @@ def test_import_cv_returns_suggestions_without_persisting(authed_user) -> None:
     # Confirm nothing was auto-saved to the actual profile.
     profile_response = client.get("/profile", headers=headers)
     assert profile_response.json()["nationality"] is None
+
+
+def test_import_cv_accepts_a_small_pdf_without_persisting(authed_user) -> None:
+    import pymupdf
+
+    client, headers = authed_user["client"], authed_user["headers"]
+    pdf = pymupdf.open()
+    pdf.new_page().insert_text((72, 72), "John Doe, Pakistani, applying for MS.")
+    data = pdf.tobytes()
+    pdf.close()
+    suggested = ProfileUpdateRequest(nationality="Pakistani")
+
+    with patch("app.api.profile.extract_profile_from_text", return_value=suggested) as extractor:
+        response = client.post(
+            "/profile/import-cv",
+            headers=headers,
+            files={"file": ("cv.pdf", io.BytesIO(data), "application/pdf")},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["nationality"] == "Pakistani"
+    assert "John Doe" in extractor.call_args.args[0]
+    assert client.get("/profile", headers=headers).json()["nationality"] is None

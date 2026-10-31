@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.uploads import read_pdf_upload
 from app.data.files.storage import StorageError, get_storage
 from app.data.repositories import application_repo, document_repo, scholarship_repo
 from app.data.repositories.db import get_db
@@ -54,7 +55,8 @@ def upload_document(
     if application is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
 
-    file_bytes = file.file.read()
+    # Refused (too large, empty, not a PDF) before anything is stored or any row is created.
+    file_bytes = read_pdf_upload(file)
     try:
         file_ref = get_storage().save(current_user.id, file.filename or "upload", file_bytes)
     except (StorageError, OSError):
