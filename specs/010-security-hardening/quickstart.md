@@ -12,11 +12,12 @@ Two audiences: a developer verifying the feature locally/CI, and the owner deplo
    ```
 3. **Create the role, migrate as owner, test as the app role** (this is also the CI sequence):
    ```text
-   psql "<owner url>" -v migration_role='postgres' -f ../specs/010-security-hardening/contracts/db-role.sql   # prompts for the app role's password (\password)
+   psql "<owner url>" -v migration_role='postgres' -f scripts/db/create_app_role.sql   # prompts for the app role's password (\password)
    uv run alembic upgrade head          # uses MIGRATION_DATABASE_URL
-   psql "<owner url>" -v migration_role='postgres' -f ../specs/010-security-hardening/contracts/db-role.sql   # re-run: picks up new tables, locks audit_log (prompt again; Ctrl-C keeps the password)
+   psql "<owner url>" -v migration_role='postgres' -f scripts/db/create_app_role.sql   # re-run: picks up new tables, locks audit_log (prompt again; Ctrl-C keeps the password)
    uv run pytest                        # uses DATABASE_URL (restricted)
    ```
+   Without a terminal (CI, `docker exec`) `\password` cannot prompt: add `-v skip_password=1` to both script runs and set a throw-away password once with `ALTER ROLE scholarship_app PASSWORD '<throw-away>'`, as `ci.yml` does. Run from `backend/` (the `psql` path above is relative to it).
 4. **Operator**: `uv run python -m app.services.operator grant --email you@example.com`, then sign in and call `POST /monitoring/runs` (202); a second account gets 403.
 
 ### Acceptance walk-through (maps to the spec's stories)
@@ -51,7 +52,7 @@ Roll-out:
 1. **Create the role** (from an interactive terminal on a machine with psql). Read the owner **direct** URL silently into a shell variable, run the script, then unset it; no secret is typed in a command:
    ```text
    read -rs OWNER_DIRECT_URL
-   psql "$OWNER_DIRECT_URL" -v migration_role='neondb_owner' -f contracts/db-role.sql   # \password prompts for the new app password
+   psql "$OWNER_DIRECT_URL" -v migration_role='neondb_owner' -f backend/scripts/db/create_app_role.sql   # \password prompts for the new app password
    unset OWNER_DIRECT_URL
    ```
    Put the app password you typed at the prompt into the VM `.env` (step 4) and nowhere else.
@@ -64,7 +65,7 @@ Roll-out:
    sudo --preserve-env=MIGRATION_DATABASE_URL podman run --rm --env-file .env -e MIGRATION_DATABASE_URL <new image> uv run alembic current   # shows the new head
    unset MIGRATION_DATABASE_URL
    ```
-   (`sudo` resets the environment by default, hence `--preserve-env` for that one variable. `-e NAME` without a value makes podman copy it from the caller's environment.) Then re-run `db-role.sql` as in step 1 so the new tables are granted and `audit_log` is append-only.
+   (`sudo` resets the environment by default, hence `--preserve-env` for that one variable. `-e NAME` without a value makes podman copy it from the caller's environment.) Then re-run `create_app_role.sql` as in step 1 so the new tables are granted and `audit_log` is append-only.
 4. **Edit `.env`**: `DATABASE_URL` = `scholarship_app` on the **pooled** (`-pooler`) host; `JWT_SECRET_KEY` already set in pre-flight step 4 (keep it); `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_USERNAME`, `SMTP_PASSWORD` (Google App Password, requires 2-Step Verification), `ALERTS_FROM_EMAIL` (same Gmail). `chmod 600 .env`.
 5. **Caddy**: `request_body { max_size 11MB }` is in the repo `Caddyfile`; validate with `caddy validate` as in the runbook, then recreate containers (runbook §10 step 3 order: stop/remove Caddy, then backend, then `up -d`).
 6. **Owner account, then operator.** The production database has 0 users, so first **the owner signs up their own account through the API** (`POST /auth/signup` with the owner's email and a password of 8 to 72 bytes). Then grant: `sudo podman exec scholarship-ai-assistant_backend_1 uv run python -m app.services.operator grant --email <owner>` (expect `granted operator status to <owner>`; `no such user` means the sign-up was not done).
@@ -74,9 +75,11 @@ Post-deploy checks (record the result in runbook §13; any failure → rollback)
 2. Password rules with the ONE fixed check account (`CHECK_ACCOUNT_EMAIL`/`CHECK_ACCOUNT_PASSWORD`): a 7-character password → 422; the fixed account signs up on the first run (201) and on later runs sign-up returns 409 and the script logs in instead, so no new account is created per run.
 3. The fixed check account (a non-operator) `POST /monitoring/runs` and `GET /monitoring/runs/{run_id}` → 403; owner account `POST /monitoring/runs` → 202 (then no second run needed). `GET /monitoring/runs` (list) → 200 for both.
 4. `POST /scholarships/match-url` with the metadata address → 422 `blocked`.
-5. As `scholarship_app`: `CREATE TABLE zz_check(a int)` → permission denied. Startup log has no "owner-level credentials" warning.
+5. As `scholarship_app`: `CREATE TABLE zz_check(a int)` → permission denied. Startup log has no "owner-level rights" warning (`database credentials have owner-level rights: ...`).
 6. `curl -sk https://<site>/metrics` → 404.
-7. Trigger or wait for one alert for the owner's profile (or use the runbook's test-alert command) → email in the owner's inbox within 5 minutes.
+7. Trigger or wait for one alert for the owner's profile (there is no test-alert command) → email in the owner's inbox within 5 minutes.
 8. Exactly one operator, the owner (owner credentials): `SELECT email FROM users WHERE is_operator;` → exactly one row, the owner's email. Zero rows (grant skipped) or more than one → fail.
+
+Checks 1-6 and 8 are run by `backend/scripts/post_deploy_check.py` (environment variables and the container command are in runbook §15, "Post-deploy checks"); check 7 is manual.
 
 Rollback: restore `.env.pre-010`, `sudo podman tag <previous image id> localhost/scholarship-ai-assistant_backend:latest`, recreate the containers. The 010 migration is additive, so the previous code runs against the new schema; no downgrade is needed.
