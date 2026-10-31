@@ -19,6 +19,7 @@ ALLOW_LIST = {
     "app/api/monitoring.py:_execute_run": "own `with SessionLocal()` block; the session is closed on exit and never reused",
     "app/api/profile.py:_extract_text_from_upload": "import_cv PDF parsing only (pypdf); touches no database",
     "app/core/db_role_check.py:check_db_role": "one read-only SELECT on its own start-up connection, closed on exit; returns without writing",
+    "app/data/repositories/db.py:safe_rollback": "the handler for a failing rollback itself; it issues no further statement on the session",
     "app/main.py:lifespan": "start-up/shutdown hooks; each runs on its own connection or session that is closed on exit",
     "app/scheduling/scheduler.py:_run_scheduled_monitor": "own `with SessionLocal()` block; the session is closed on exit and never reused",
     "app/scheduling/scheduler.py:_run_scheduled_retention": "own `with SessionLocal()` block; the session is closed on exit and never reused",

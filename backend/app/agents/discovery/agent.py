@@ -74,6 +74,7 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from app.data.repositories import source_repo
+from app.data.repositories.db import safe_rollback
 from app.models.source import AccessMethod
 from app.schemas.discovery import DiscoveryResult, DiscoveryResultItem
 from app.services.coverage import get_coverage_summary
@@ -283,6 +284,7 @@ def _run_step(
                 step_label=step_label,
             )
     except Exception as exc:  # noqa: BLE001 - one tool's failure must never crash the whole discovery run
+        safe_rollback(db)  # a database error here would otherwise break every later step and the summary
         # This is the only place a tool-call exception (e.g. a provider error
         # surfacing unhandled from listing extraction) is observed at all --
         # previously it only reached `fetch_errors`, which `app.api.discovery`

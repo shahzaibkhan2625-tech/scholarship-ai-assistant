@@ -18,7 +18,7 @@ from app.models.source import FetchStatus
 from app.schemas.source import SourceRegistryCreate
 from app.sources.connectors import official_fetch
 from app.tools.detect_candidate_links import CandidateLinkSignal
-from app.tools.extract_listing import ExtractListingOutput
+from app.tools.extract_listing import ExtractedListingCandidate, ExtractListingOutput
 from app.tools.web_fetch import FetchResult
 from app.workflows.source_monitor.graph import run_source_monitor
 
@@ -57,7 +57,14 @@ def _run(session):
         trigger=MonitoringTrigger.MANUAL,
         fetch=lambda url: FetchResult(url=url, success=True, status_code=200, html="<html>listing</html>"),
         extract_listing=lambda html, *, source_url: ExtractListingOutput(
-            candidates=[], accepted_count=0, rejected_count=0
+            candidates=[
+                ExtractedListingCandidate(
+                    name="Detection Rollback Scholarship", degree_level="PhD",
+                    funding_status="fully_funded", deadline="2027-03-01",
+                )
+            ],
+            accepted_count=1,
+            rejected_count=0,
         ),
         sleep=lambda _delay: None,
     )
@@ -72,6 +79,7 @@ def test_a_database_error_in_candidate_detection_does_not_fail_the_source_or_the
     )
     monkeypatch.setattr(official_fetch, "find_candidate_links", lambda *a, **k: [signal])
     monkeypatch.setattr(source_repo, "record_or_bump_candidate_source", _fail_inside_postgres)
+    monkeypatch.setattr("app.workflows.source_monitor.graph.run_ingestion", lambda *a, **k: {})  # not under test
 
     with caplog.at_level(logging.WARNING):
         run = _run(session)

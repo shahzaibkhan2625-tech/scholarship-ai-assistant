@@ -37,6 +37,7 @@ from typing import Any, Callable, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from app.data.repositories import scholarship_repo, source_repo
+from app.data.repositories.db import safe_rollback
 from app.models.funding import FundingDetails
 from app.models.requirement import Requirement
 from app.models.scholarship import (
@@ -126,11 +127,13 @@ def _run_stage(state: IngestionState, stage: str, fn: Callable[[], dict], *, ret
         outcome = run_with_retry(fn, max_attempts=DEFAULT_MAX_ATTEMPTS, sleep=lambda _delay: None)
         if outcome.succeeded:
             return outcome.result
+        safe_rollback(state["db"])  # a failed retryable stage may have aborted the transaction
         error_message = str(outcome.last_error)
     else:
         try:
             return fn()
         except Exception as exc:  # noqa: BLE001 - converted into a logged, flagged failure
+            safe_rollback(state["db"])  # so _log_failure below can write its row
             error_message = str(exc)
 
     _log_failure(state["db"], state["source_id"], stage, error_message)

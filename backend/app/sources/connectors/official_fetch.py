@@ -43,6 +43,7 @@ from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 from app.data.repositories import source_repo
+from app.data.repositories.db import safe_rollback
 from app.data.repositories.source_repo import SourceNotApprovedError
 from app.models.source import FetchStatus, VerificationStatus
 from app.schemas.source import SourceFetchLogCreate
@@ -305,8 +306,11 @@ def _detect_and_record_candidate_sources(db: Session, url: str, html: str) -> No
                 discovered_from=url,
                 matched_keyword=signal.matched_keyword,
             )
-    except Exception:  # noqa: BLE001 - detection is best-effort, never allowed to break extraction
-        pass
+    except Exception as exc:  # noqa: BLE001 - detection is best-effort, never allowed to break extraction
+        # A database error here leaves the transaction aborted; end it so the fetch outcome and the
+        # rest of the run can still be written (010 FR-RECOV-1). Type only: never the message.
+        safe_rollback(db)
+        logger.warning("candidate detection failed for %s: %s", urlparse(url).hostname, type(exc).__name__)
 
 
 def fetch_and_extract_listing(
