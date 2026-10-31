@@ -205,3 +205,80 @@ def test_checker_flags_a_missing_redirect_and_missing_tls_internal():
     problems = caddyfile_problems("{$SITE_ADDRESS} {\n reverse_proxy 127.0.0.1:8000\n}\n")
     assert any("tls internal" in p for p in problems)
     assert any("redirect" in p for p in problems)
+
+
+# -- 010 US9 (T430): no owner credentials in the repo, CI runs as the restricted role ----------
+
+WORKFLOW_PATHS = [REPO_ROOT / ".github/workflows/ci.yml", REPO_ROOT / ".github/workflows/deep-ci.yml"]
+DEPLOY_TEXT_PATHS = [
+    COMPOSE_PATH,
+    REPO_ROOT / "docker-compose.yml",
+    CADDYFILE_PATH,
+    REPO_ROOT / ".env.example",
+    REPO_ROOT / "docs/operations-hardening.md",
+    REPO_ROOT / "docs/vm-deployment-notes.md",
+]
+_URL_WITH_PASSWORD = re.compile(r"postgres(?:ql)?(?:\+\w+)?://(?!user:password@)[^\s:/@<>]+:[^\s@<>]+@", re.I)
+_OWNER_VALUE = re.compile(r"MIGRATION_DATABASE_URL[ \t]*[=:][ \t]*[\"']?([^\s\"']*)")
+
+
+def owner_credential_problems(text: str) -> list[str]:
+    """A database URL with a password, or a MIGRATION_DATABASE_URL given a literal value."""
+    problems: list[str] = []
+    if _URL_WITH_PASSWORD.search(text):
+        problems.append("a database URL with a password is written out")
+    for match in _OWNER_VALUE.finditer(text):
+        value = match.group(1)
+        if value and not value.startswith(("$", "<", "...")):
+            problems.append("MIGRATION_DATABASE_URL has a literal value")
+    return problems
+
+
+def workflow_role_problems(workflow: dict) -> list[str]:
+    problems: list[str] = []
+    for name, job in (workflow.get("jobs") or {}).items():
+        env = job.get("env") or {}
+        if "scholarship_app" not in str(env.get("DATABASE_URL", "")):
+            problems.append(f"{name}: DATABASE_URL must use scholarship_app")
+        if len(str(env.get("JWT_SECRET_KEY", ""))) < 32:
+            problems.append(f"{name}: JWT_SECRET_KEY must be at least 32 characters")
+    return problems
+
+
+def test_compose_files_never_mention_the_migration_url_or_the_jwt_secret():
+    for path in (COMPOSE_PATH, REPO_ROOT / "docker-compose.yml"):
+        text = path.read_text(encoding="utf-8")
+        assert "MIGRATION_DATABASE_URL" not in text, path.name
+    podman = COMPOSE_PATH.read_text(encoding="utf-8")
+    assert "DATABASE_URL" not in podman and "JWT_SECRET_KEY" not in podman
+
+
+def test_deploy_files_and_docs_hold_no_owner_database_url_or_value():
+    for path in DEPLOY_TEXT_PATHS:
+        assert owner_credential_problems(path.read_text(encoding="utf-8")) == [], path.name
+
+
+def test_owner_credential_checker_flags_real_looking_values_and_allows_placeholders():
+    assert owner_credential_problems("MIGRATION_DATABASE_URL=postgresql://o:pw@h/db")  # allow-secret: fake value fed to the checker
+    assert owner_credential_problems("psql postgresql://owner:secret@host/db")  # allow-secret: fake value fed to the checker
+    assert owner_credential_problems("MIGRATION_DATABASE_URL: abc")
+    assert owner_credential_problems("-e MIGRATION_DATABASE_URL\nMIGRATION_DATABASE_URL=\n") == []
+    assert owner_credential_problems("DATABASE_URL=postgresql://scholarship_app:<password>@<host>/db") == []
+    assert owner_credential_problems('read -rs MIGRATION_DATABASE_URL; export MIGRATION_DATABASE_URL="$X"') == []
+
+
+def test_both_ci_workflows_run_as_scholarship_app_with_a_32_character_secret():
+    for path in WORKFLOW_PATHS:
+        assert workflow_role_problems(yaml.safe_load(path.read_text(encoding="utf-8"))) == [], path.name
+
+
+def test_workflow_checker_flags_the_owner_role_and_a_short_secret():
+    bad = {"jobs": {"t": {"env": {"DATABASE_URL": "postgresql://postgres:x@h/db", "JWT_SECRET_KEY": "short"}}}}  # allow-secret: fake value fed to the checker
+    assert len(workflow_role_problems(bad)) == 2
+
+
+def test_caddyfile_keeps_body_limit_and_metrics_404_above_the_proxy():
+    assert caddyfile_problems(_caddyfile()) == []
+    body = _strip_comments(_caddyfile())
+    assert body.index("request_body") < body.index("reverse_proxy")
+    assert body.index("respond @metrics 404") < body.index("reverse_proxy")
