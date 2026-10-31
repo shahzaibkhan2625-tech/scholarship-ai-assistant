@@ -20,6 +20,13 @@
 	@metrics path /metrics /metrics/*
 	respond @metrics 404
 
+	# Upload limit: files are capped at 10 MiB (10 485 760 bytes) by the app. Caddy's `11MB` is
+	# decimal (11 000 000 bytes), which leaves room above that file plus the 64 KiB of multipart
+	# overhead the app allows; every other API body is small JSON. Caddy answers 413 past this.
+	request_body {
+		max_size 11MB
+	}
+
 	# Caddy replaces any client-supplied X-Forwarded-For, which is what makes uvicorn's
 	# --forwarded-allow-ips=127.0.0.1 safe for the per-IP rate limiter.
 	reverse_proxy 127.0.0.1:8000

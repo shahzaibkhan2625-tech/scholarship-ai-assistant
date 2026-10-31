@@ -102,6 +102,11 @@ def caddyfile_problems(text: str) -> list[str]:
         problems.append("Caddyfile must answer /metrics with 404")
     elif proxy and respond.start() > proxy.start():
         problems.append("the /metrics block must come before reverse_proxy")
+    limit = re.search(r"^\s*request_body\s*\{[^}]*max_size\s+11MB[^}]*\}", body, re.M | re.S)
+    if not limit:
+        problems.append("Caddyfile must set `request_body { max_size 11MB }` in the site block")
+    elif proxy and limit.start() > proxy.start():
+        problems.append("request_body must come before reverse_proxy")
     return problems
 
 
@@ -142,6 +147,23 @@ def test_caddy_mounts_the_caddyfile_read_only_and_selinux_labelled():
 
 def test_caddyfile_redirects_proxies_and_hides_metrics():
     assert caddyfile_problems(_caddyfile()) == []
+
+
+def test_caddyfile_caps_request_bodies_above_the_proxy():
+    body = _strip_comments(_caddyfile())
+    limit = re.search(r"request_body\s*\{[^}]*max_size\s+11MB", body, re.S)
+    assert limit, "request_body { max_size 11MB } is missing"
+    assert limit.start() < body.index("reverse_proxy")
+    assert body.index('respond @metrics 404') < body.index("reverse_proxy")
+
+
+def test_checker_flags_a_missing_or_misplaced_body_limit():
+    text = _caddyfile()
+    stripped = re.sub(r"request_body\s*\{[^}]*\}", "", text)
+    assert any("request_body" in p for p in caddyfile_problems(stripped))
+    block = re.search(r"request_body\s*\{[^}]*\}", text).group(0)
+    moved = text.replace(block, "").replace("reverse_proxy 127.0.0.1:8000", "reverse_proxy 127.0.0.1:8000\n" + block)
+    assert any("before reverse_proxy" in p for p in caddyfile_problems(moved))
 
 
 def test_site_address_is_parameterised_not_hardcoded():
