@@ -158,7 +158,7 @@ The first deliverable slice is **T349 - T382** (Phases 3-5), on top of Setup and
 - [X] T411 [P] [US6] Add optional `actor_id: uuid.UUID | None = None` to `create_run_if_none_running`/`create_run`; when given, `db.flush()` the run and record `monitoring.run.manual` (entity `monitoring_run:<id>`) before the commit; the scheduler and recovery paths pass none - `backend/app/data/repositories/monitoring_repo.py` (EXTENDED) - Depends: T406 - Satisfies: FR-AUDIT-1, FR-AUDIT-2
 - [X] T412 [US6] `trigger_monitoring_run` passes `actor_id=current_user.id` - `backend/app/api/monitoring.py` (EXTENDED) - Depends: T411, T355 - Satisfies: FR-AUDIT-1
 - [X] T413 [P] [US6] In `create_submission_approval` record `submission.approve` (actor `user_id`, entity `submission_approval:<id>` after `flush`) before the existing commit - `backend/app/data/repositories/application_repo.py` (EXTENDED) - Depends: T406 - Satisfies: FR-AUDIT-1, FR-AUDIT-2
-- [ ] T414 [US6] Run the US6 tests and `backend/tests/api/test_no_live_submission.py`; confirm the constitution Principle III test still passes untouched - `backend/tests/api/` (EXTENDED) - Depends: T409, T410, T412, T413, T407, T408 - Satisfies: FR-AUDIT-1, FR-AUDIT-4, SC-006
+- [X] T414 [US6] Run the US6 tests and `backend/tests/api/test_no_live_submission.py`; confirm the constitution Principle III test still passes untouched - `backend/tests/api/` (EXTENDED) - Depends: T409, T410, T412, T413, T407, T408 - Satisfies: FR-AUDIT-1, FR-AUDIT-4, SC-006
 
 ## Phase 9: User Story 7 - The app recovers after a database error (P2)
 
@@ -173,7 +173,7 @@ The first deliverable slice is **T349 - T382** (Phases 3-5), on top of Setup and
 - [X] T420 [P] [US7] Call `safe_rollback(db)` in the `except Exception: pass` of candidate detection (line 308) and log the exception TYPE only - `backend/app/sources/connectors/official_fetch.py` (EXTENDED) - Depends: T416, T419 - Satisfies: FR-RECOV-1, FR-RECOV-2
 - [X] T421 [P] [US7] Call `safe_rollback(db)` in the discovery step handler (line 285) before appending to `fetch_errors` - `backend/app/agents/discovery/agent.py` (EXTENDED) - Depends: T417, T419 - Satisfies: FR-RECOV-1, FR-RECOV-2
 - [X] T422 [P] [US7] In `_run_stage` call `safe_rollback(state["db"])` on BOTH failure paths (the non-retryable `except` at line 133 and the `run_with_retry` failure result) before `_log_failure` - `backend/app/workflows/ingestion/graph.py` (EXTENDED) - Depends: T418, T419 - Satisfies: FR-RECOV-1, FR-RECOV-2
-- [ ] T423 [US7] Run the US7 tests and `backend/tests/security/test_broad_catch_rollback.py` must be green with no entry missing from the allow-list - `backend/tests/security/` (EXTENDED) - Depends: T420, T421, T422 - Satisfies: FR-RECOV-1, FR-RECOV-2, SC-007
+- [X] T423 [US7] Run the US7 tests and `backend/tests/security/test_broad_catch_rollback.py` must be green with no entry missing from the allow-list - `backend/tests/security/` (EXTENDED) - Depends: T420, T421, T422 - Satisfies: FR-RECOV-1, FR-RECOV-2, SC-007
 
 ## Phase 10: User Story 8 - Email alerts are delivered (P3)
 
@@ -185,7 +185,7 @@ The first deliverable slice is **T349 - T382** (Phases 3-5), on top of Setup and
 - [X] T426 [P] [US8] Extend the repository secret scan FIRST with an App-Password-shaped pattern (four groups of four lowercase letters, with or without spaces) and a check that `.env.example` mail values are empty placeholders - `backend/tests/test_no_secrets_in_repo.py` (EXTENDED) - Depends: T330 - Satisfies: FR-MAIL-3, SC-008
 - [X] T427 [US8] In `EmailChannel.send`: `smtp.starttls(context=ssl.create_default_context())`; strip spaces from the configured password; set `email_error` to the short codes `not_configured`, `no_recipient`, `send_failed`; add `logger.warning` for each (reason code, exception TYPE and SMTP reply code only; never the password or full message); `delivered_email_at` behaviour unchanged - `backend/app/services/alerts.py` (EXTENDED) - Depends: T424, T425 - Satisfies: FR-MAIL-1, FR-MAIL-2, SC-008
 - [X] T428 [US8] Document the Gmail values as comments next to the existing empty `SMTP_*` / `ALERTS_FROM_EMAIL` lines (host `smtp.gmail.com`, port 587, STARTTLS, App Password requires 2-Step Verification); values stay empty - `.env.example` (EXTENDED) - Depends: T348, T426 - Satisfies: FR-MAIL-3
-- [ ] T429 [US8] Run the US8 tests plus `backend/tests/services/test_alerts.py`, `backend/tests/api/test_alerts_api.py`, `backend/tests/integration/test_monitoring_alert_flow.py` - `backend/tests/services/` (EXTENDED) - Depends: T427, T428 - Satisfies: FR-MAIL-1, FR-MAIL-2, FR-MAIL-3, SC-008
+- [X] T429 [US8] Run the US8 tests plus `backend/tests/services/test_alerts.py`, `backend/tests/api/test_alerts_api.py`, `backend/tests/integration/test_monitoring_alert_flow.py` - `backend/tests/services/` (EXTENDED) - Depends: T427, T428 - Satisfies: FR-MAIL-1, FR-MAIL-2, FR-MAIL-3, SC-008
 
 ## Phase 11: User Story 9 - The server runs the current code (P3, last)
 
