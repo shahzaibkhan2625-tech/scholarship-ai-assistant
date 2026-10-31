@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token, hash_password, verify_password
@@ -16,13 +18,19 @@ router = APIRouter()
     responses={409: {"description": "Email already registered"}},
 )
 def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> User:
-    existing = db.query(User).filter(User.email == payload.email).first()
+    already_registered = HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+    existing = db.query(User).filter(func.lower(User.email) == payload.email).first()
     if existing is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+        raise already_registered
 
     user = User(email=payload.email, password_hash=hash_password(payload.password))
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        # A concurrent sign-up won the lower(email) unique index between the check and the insert.
+        db.rollback()
+        raise already_registered from exc
     db.refresh(user)
     return user
 
@@ -38,7 +46,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
         detail="Incorrect email or password",
     )
 
-    user = db.query(User).filter(User.email == payload.email).first()
+    user = db.query(User).filter(func.lower(User.email) == payload.email).first()
     if user is None or not verify_password(payload.password, user.password_hash):
         raise invalid_credentials
 

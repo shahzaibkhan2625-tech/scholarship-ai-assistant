@@ -7,11 +7,15 @@ from app.core.config import settings
 
 _ALGORITHM = "HS256"
 _ACCESS_TOKEN_EXPIRE_MINUTES = 60
+_MAX_PASSWORD_BYTES = 72
 
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def hash_password(password: str) -> str:
+    # bcrypt silently ignores bytes past 72; refuse instead of storing a cut password.
+    if len(password.encode("utf-8")) > _MAX_PASSWORD_BYTES:
+        raise ValueError(f"Password must be at most {_MAX_PASSWORD_BYTES} bytes")
     return _pwd_context.hash(password)
 
 
