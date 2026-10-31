@@ -47,7 +47,7 @@ with these B4 differences:
    ```
 4. **Start:** `sudo /usr/local/bin/podman-compose -f docker-compose.podman.yml up -d --build`,
    removing the old container first as the notes describe.
-5. **Migrations** (`sudo podman exec scholarship-ai-assistant_backend_1 uv run alembic current`, then `upgrade head` if behind).
+5. **Migrations.** For release 010 use the two-database-URL migration in "Deploy 010" (§15), not the `podman exec ... alembic upgrade head` below. Earlier releases (`sudo podman exec scholarship-ai-assistant_backend_1 uv run alembic current`, then `upgrade head` if behind).
    The expected head is `f2b8d4a6c1e3` (composite index `ix_source_fetch_log_source_started`, added in
    US8 B2). It was generated without being applied by the build; as of the B4 verification it
    was found already applied to the development Neon database, so on the VM just confirm
@@ -227,6 +227,7 @@ Backup recovery is demonstrated by you, not by the build (SC-009).
   `scholarship-ai-assistant_caddy_1` first, then `scholarship-ai-assistant_backend_1` (Caddy
   depends on the backend), then `podman-compose up -d` (no `--build`). Done 2026-10-24.
 - `.env` file mode on the VM should be `600`, owned by the deploying user.
+- **Gmail App Password rotation** (alert mail, feature 010). Create a new App Password in the Google account (2-Step Verification must be on), put it in `SMTP_PASSWORD` in `.env`, recreate the containers in the same order as §10 step 3 (the environment is read at start), then revoke the old App Password in the Google account. Google revokes every App Password when the account password changes, and App Passwords are unavailable with Advanced Protection or work/school accounts; alert mail then stops, the in-app alert is still recorded, and the log carries a short reason code (never the password). Keep the App Password in `.env` only.
 
 ## 10. Persistent-volume redeploy check
 
@@ -261,7 +262,8 @@ changes.
 
 | Item | Status | Source |
 |---|---|---|
-| **SSRF guard is not airtight.** Candidate validation follows redirects inside `fetch_url`, so a redirect to a non-public address is *requested* before the final URL is checked; its content is discarded, not mined. DNS rebinding between guard and fetch is also possible. Fix needs a redirect-aware fetch in the shared `web_fetch` tool. | Accepted, out of scope | ADR-0010, ADR-0011 Q4 |
+| **Fetched response size is not capped.** The safe fetch pins the checked address and checks every redirect hop (feature 010), but the size of a fetched page is not limited. | Accepted, deferred | ADR-0016 |
+| **Single operator, single point of failure.** One operator (the owner), granted only from the server command. If the owner loses access, recovery needs server access. Revocation is logged but not audited. There is no route to read `audit_log`; read it as the database owner. | Accepted | ADR-0016 |
 | `tls internal` certificate is not publicly trusted | Accepted until a domain exists | ADR-0011 Q2, §4 |
 | Rate-limit state is per process and lost on restart | Accepted (one worker) | ADR-0011, §5 |
 | `/metrics` has no role gate (any account can read it, from the VM only) | Accepted | ADR-0011 Q5 |
@@ -293,6 +295,7 @@ changes.
 | `podman rm scholarship-ai-assistant_backend_1` says "has dependent containers" | Caddy was created depending on the backend | Stop and remove `scholarship-ai-assistant_caddy_1` first, then the backend (section 10 step 3) |
 | SSH to the VM times out intermittently (port 22 only; 80/443 stay up) while a series of connections is being made | Observed three times for 2-5 minutes on 2026-10-22, each time self-recovering; cause unknown (network path or an upstream rate limit; not the VM's firewalld) | Wait a few minutes; batch commands into one SSH session; if it persists check the Oracle security list rule for 22 and the instance console |
 | Caddy exits immediately | cannot bind 80/443 (rootless podman, or port taken) or Caddyfile invalid | `sudo podman logs scholarship-ai-assistant_caddy_1`; §2 step 3 |
+| Start-up log: `database credentials have owner-level rights` | `DATABASE_URL` is an owner-level role | Use `scholarship_app` on the pooled host; §14 |
 | Browser certificate warning | expected with `tls internal` | §4 |
 | Browser warning *reappeared* after a redeploy | `caddy_data` volume was deleted, new CA | re-trust the root CA |
 | `/metrics` is 404 from outside | expected | read it from the VM, §6 |
@@ -353,3 +356,131 @@ the document-persistence redeploy check (§10), and the first production retenti
 - **Live smoke tests after the Gemini quota reset:** `test_gemini_generation_reachable` **PASS**. The discovery
   live-extraction test **FAILED again**, but on substance (0 candidates, expected ≥2), not quota/429 — a real
   regression or environment issue, still open (see `docs/t-002-verification-log.md` open item 1).
+
+### 010 deployment record (blank; the owner fills it in, Claude commits it on the feature branch)
+
+| | |
+|---|---|
+| Deployed | `<date, UTC time>` |
+| Branch / commit | `main` @ `<commit>` |
+| Previous image id (rollback) | `<image id>` |
+| `.env` backup | `.env.pre-010` kept on the VM |
+| Alembic head after migration | `<revision>` |
+| App role flags verified | `<yes / no>` |
+| Start-up log without the owner-level warning | `<yes / no>` |
+
+| Post-deploy check | Result | Notes |
+|---|---|---|
+| 1. `/health` 200 | `<PASS / FAIL>` | |
+| 2. Password rules; fixed check account | `<PASS / FAIL>` | |
+| 3. Operator boundary (check account 403, owner 202, lists 200) | `<PASS / FAIL>` | |
+| 4. match-url metadata address 422 `blocked` | `<PASS / FAIL>` | |
+| 5. App role cannot `CREATE TABLE` | `<PASS / FAIL>` | |
+| 6. `/metrics` 404 | `<PASS / FAIL>` | |
+| 7. Alert e-mail within 5 minutes (manual) | `<PASS / FAIL>` | |
+| 8. Exactly one operator | `<PASS / FAIL>` | |
+| Live sources still fetch (manual run detail) | `<PASS / FAIL>` | |
+
+## 14. Database roles
+
+Two database roles, two URLs (feature 010, ADR-0016, FR-DBROLE-1..6). The app never holds owner rights.
+
+| Role | Used by | Where its URL lives |
+|---|---|---|
+| Owner (the Neon project's owner role, `neondb_owner`) | Alembic migrations, `create_app_role.sql`, the single-operator query in the post-deploy check | **Nowhere on disk.** Read with `read -rs` into one shell variable for one command, then `unset`. Never in `.env`, never in a compose file, never in this repo. |
+| `scholarship_app` (LOGIN; no superuser, createdb, createrole, replication or bypassrls; no `CREATE` on `public`) | The running backend and the test suite in CI | `DATABASE_URL` in the VM `.env` (mode 600) |
+
+**Direct vs pooled URLs.** Run the role script and migrations over the owner **direct** (non-pooled) URL. The running app uses the **pooled** (`-pooler`) host with `scholarship_app`. The Neon pooler is not suited to session-level DDL work.
+
+**Create or rotate the app role** (interactive terminal on a machine with `psql`; run from the repo root):
+
+```
+read -rs OWNER_DIRECT_URL
+psql "$OWNER_DIRECT_URL" -v migration_role='neondb_owner' -f backend/scripts/db/create_app_role.sql
+unset OWNER_DIRECT_URL
+```
+
+- The script creates the role **without a password**, then runs psql's `\password`, which prompts twice and sends only a hash. The password is not in the file, in a psql variable, in shell history or in the process list. Put the password you typed into the VM `.env` (as part of `DATABASE_URL`) and nowhere else.
+- Verify the printed role flags: `rolcanlogin` true, every other flag false, and `can_create_in_public` false.
+- **Default privileges** are set `FOR ROLE <migration_role>` (the `migration_role` variable above), so tables the migration role creates later are usable by `scholarship_app` without a manual grant. `alembic_version` is revoked from the app role; `audit_log` is append-only for it (no UPDATE, DELETE or TRUNCATE).
+- **Re-run the script after every migration run** (it is idempotent; press Ctrl-C at the `\password` prompt to keep the current password). CI does the same after `alembic upgrade head`.
+- Rotating the password: run the script, type the new password at the prompt, update `DATABASE_URL` in `.env`, recreate the containers in the §10 step 3 order.
+- If the start-up log shows `database credentials have owner-level rights`, the backend is connected as an owner-level role: stop and fix `DATABASE_URL`.
+
+## 15. Deploy 010
+
+Mirrors `specs/010-security-hardening/quickstart.md` section B and tasks T435-T444. **Owner-run.** No secret is typed in a command and none is written into this file; `<placeholders>` are filled in by the owner at the terminal. Run from the repo checkout on the VM unless a step says otherwise.
+
+### Pre-flight (read-only)
+
+1. **Branch and commit.** `git -C <repo> branch --show-current` must print `main`, with the merged feature present: `git -C <repo> log -1 --oneline`.
+2. **Email-collision query** (FR-CRED-5), with owner credentials: `SELECT lower(email), count(*) FROM users GROUP BY 1 HAVING count(*) > 1;` must return no rows (the production database has 0 users). Any row: stop and tell the manager.
+3. **Rollback material.** `cp .env .env.pre-010`, then note the current image id with `sudo podman images`.
+4. **Signing secret, BEFORE the migration.** The new image's Alembic and CLI refuse to start on a weak secret. Check the length only, never the value: `awk -F= '/^JWT_SECRET_KEY=/{print length($2)}' .env` must print 32 or more, and the value must not be `change-me-to-a-random-secret`. If not, put a new random value in `.env` now (for example `openssl rand -hex 32`). Changing it signs out existing sessions; there are 0 users, so nothing is lost.
+
+### Roll-out
+
+1. **Create the role** with `\password`: the three commands in §14, using the owner **direct** URL. Check the printed flags.
+2. **Build, do not swap:** `sudo /usr/local/bin/podman-compose -f docker-compose.podman.yml build backend`. The running containers are untouched.
+3. **Migrate as the owner**, passing the URL by variable name only (it exists only in this shell and the `--rm` container, is never typed into a command and never written to `.env`):
+   ```
+   read -rs MIGRATION_DATABASE_URL            # owner DIRECT url, not echoed
+   export MIGRATION_DATABASE_URL
+   sudo --preserve-env=MIGRATION_DATABASE_URL podman run --rm --env-file .env -e MIGRATION_DATABASE_URL <new image> uv run alembic upgrade head
+   sudo --preserve-env=MIGRATION_DATABASE_URL podman run --rm --env-file .env -e MIGRATION_DATABASE_URL <new image> uv run alembic current   # the new head
+   unset MIGRATION_DATABASE_URL
+   ```
+   `sudo` resets the environment, hence `--preserve-env` for that one variable; `-e NAME` without a value makes podman copy it from the caller's environment. Then **re-run the role script** (§14) so the new tables are granted and `audit_log` is append-only.
+4. **Edit `.env`** (`chmod 600 .env`): `DATABASE_URL` = `scholarship_app` on the **pooled** (`-pooler`) host; keep the `JWT_SECRET_KEY` set in pre-flight step 4; `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_USERNAME` and `ALERTS_FROM_EMAIL` set to the same Gmail address, `SMTP_PASSWORD` set to a Google App Password (the Google account needs 2-Step Verification). Do **not** add `MIGRATION_DATABASE_URL`.
+5. **Caddy and containers.** `request_body { max_size 11MB }` is in the repo `Caddyfile`; validate it with `caddy validate` (§2 step 3), then recreate the containers in the §10 step 3 order (stop and remove Caddy, then the backend, then `sudo /usr/local/bin/podman-compose -f docker-compose.podman.yml up -d`, no `--build`). Confirm the start-up log has no `owner-level rights` warning: `sudo podman logs scholarship-ai-assistant_backend_1`.
+6. **The owner signs up** their own account through the API: `POST https://<site>/auth/signup` with the owner's email and a password of 8 to 72 bytes (the database has 0 users, so this is the first account).
+7. **Grant operator:** `sudo podman exec scholarship-ai-assistant_backend_1 uv run python -m app.services.operator grant --email <owner>`. Expect `granted operator status to <owner>`; `no such user` means step 6 was skipped.
+8. **Post-deploy checks** (below). Any FAIL: roll back.
+9. **Record the results** in §13 (the "010 deployment record" tables): deployed commit, the eight check results, rollback material.
+
+### Post-deploy checks
+
+`backend/scripts/post_deploy_check.py` runs checks 1-6 and 8 and prints `PASS` / `FAIL` / `MANUAL` per check (exit code 1 on any FAIL, 2 if a variable is missing). It reads these environment variables and prints none of their values:
+
+| Variable | Value |
+|---|---|
+| `SITE_URL` | `https://<site>` |
+| `OPERATOR_TOKEN` | access token of the owner's account (from `POST /auth/login`) |
+| `CHECK_ACCOUNT_EMAIL`, `CHECK_ACCOUNT_PASSWORD` | the ONE fixed non-operator check account: signed up (201) on the first run; on later runs sign-up returns 409 and the script logs in, so no account is created per run |
+| `APP_DATABASE_URL` | the `scholarship_app` URL (taken from `DATABASE_URL` in `.env`, see below) |
+| `OWNER_DATABASE_URL` | owner URL, used for a read-only query |
+| `SITE_VERIFY_TLS` | optional; `0` skips certificate verification (the site uses `tls internal`) |
+
+Run it in a throw-away container of the deployed image, so the Python dependencies are present and the app URL comes from `.env` without being typed:
+
+```
+read -rp 'Owner email: ' OWNER_EMAIL; read -rs OWNER_PASSWORD
+export SITE_URL='https://<site>' SITE_VERIFY_TLS=0
+export OPERATOR_TOKEN=$(printf '{"email":"%s","password":"%s"}' "$OWNER_EMAIL" "$OWNER_PASSWORD" \
+  | curl -sk -X POST "$SITE_URL/auth/login" -H 'Content-Type: application/json' --data @- \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+unset OWNER_PASSWORD OWNER_EMAIL
+read -rp 'Check account email: ' CHECK_ACCOUNT_EMAIL; read -rs CHECK_ACCOUNT_PASSWORD   # 8-72 bytes, not the owner's
+read -rs OWNER_DATABASE_URL                                                              # owner URL, not echoed
+export CHECK_ACCOUNT_EMAIL CHECK_ACCOUNT_PASSWORD OWNER_DATABASE_URL
+sudo --preserve-env=SITE_URL,SITE_VERIFY_TLS,OPERATOR_TOKEN,CHECK_ACCOUNT_EMAIL,CHECK_ACCOUNT_PASSWORD,OWNER_DATABASE_URL \
+  podman run --rm --network host --env-file .env \
+  -e SITE_URL -e SITE_VERIFY_TLS -e OPERATOR_TOKEN -e CHECK_ACCOUNT_EMAIL -e CHECK_ACCOUNT_PASSWORD -e OWNER_DATABASE_URL \
+  <new image> sh -c 'APP_DATABASE_URL="$DATABASE_URL" uv run python scripts/post_deploy_check.py'
+unset OPERATOR_TOKEN CHECK_ACCOUNT_EMAIL CHECK_ACCOUNT_PASSWORD OWNER_DATABASE_URL
+```
+
+(The login in the snippet breaks if the password contains `"` or `\`; use a password without them.) The eight checks:
+
+1. `GET /health` returns 200.
+2. A 7-character password is refused (422); the fixed check account signs up (201) or, after a 409, logs in.
+3. The check account (a non-operator) gets 403 on `POST /monitoring/runs` and `GET /monitoring/runs/{id}` and 200 on the list; the owner's account gets 202 on `POST /monitoring/runs` (this starts one real run, so no second run is needed) and 200 on the list.
+4. `POST /scholarships/match-url` with the metadata address returns 422 with an error that says `blocked`.
+5. As `scholarship_app`, `CREATE TABLE zz_check` is refused (permission denied); nothing is created.
+6. `GET /metrics` through Caddy returns 404.
+7. **MANUAL:** trigger or wait for one alert for the owner's profile; the e-mail must reach the owner's inbox within 5 minutes (there is no test-alert command). Also confirm the two live monitored sources still fetch: read the owner's manual run from check 3 with `GET /monitoring/runs/{run_id}`.
+8. `SELECT email FROM users WHERE is_operator;` returns exactly one row, the owner's. Zero rows (grant skipped) or more than one: FAIL.
+
+### Rollback
+
+Any FAIL, or a start-up problem: restore `.env.pre-010` over `.env`, retag the previous image with `sudo podman tag <previous image id> localhost/scholarship-ai-assistant_backend:latest`, and recreate the containers in the §10 step 3 order (no `--build`). The 010 migration is additive, so the previous code runs against the new schema; no downgrade is needed. Record the failing check and its cause in §13.

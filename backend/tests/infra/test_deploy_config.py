@@ -282,3 +282,62 @@ def test_caddyfile_keeps_body_limit_and_metrics_404_above_the_proxy():
     body = _strip_comments(_caddyfile())
     assert body.index("request_body") < body.index("reverse_proxy")
     assert body.index("respond @metrics 404") < body.index("reverse_proxy")
+
+
+# -- the runbook's "Deploy 010" section keeps the quickstart/tasks order (T433, T435-T444) ------
+
+RUNBOOK_PATH = REPO_ROOT / "docs/operations-hardening.md"
+DEPLOY_010_ORDER = [
+    "branch --show-current",
+    "HAVING count(*) > 1",
+    "cp .env .env.pre-010",
+    "length($2)",
+    "### Roll-out",
+    "\password",
+    "build backend",
+    "read -rs MIGRATION_DATABASE_URL",
+    "--preserve-env=MIGRATION_DATABASE_URL",
+    "alembic current",
+    "re-run the role script",
+    "-pooler",
+    "SMTP_PASSWORD",
+    "caddy validate",
+    "owner-level rights",
+    "signs up",
+    "app.services.operator grant",
+    "### Post-deploy checks",
+    "post_deploy_check.py",
+    "### Rollback",
+]
+
+
+def deploy_010_order_problems(runbook: str, order: list[str] = DEPLOY_010_ORDER) -> list[str]:
+    if "## 15. Deploy 010" not in runbook:
+        return ["section 'Deploy 010' is missing"]
+    section = runbook.split("## 15. Deploy 010", 1)[1]
+    problems, position = [], 0
+    for marker in order:
+        found = section.find(marker, position)
+        if found < 0:
+            problems.append(f"{marker!r} is missing or out of order")
+        else:
+            position = found
+    return problems
+
+
+def test_runbook_deploy_010_steps_are_in_the_quickstart_order():
+    assert deploy_010_order_problems(RUNBOOK_PATH.read_text(encoding="utf-8")) == []
+
+
+def test_runbook_order_checker_flags_a_swapped_step():
+    text = "## 15. Deploy 010\n" + "\n".join(reversed(DEPLOY_010_ORDER))
+    assert deploy_010_order_problems(text)
+    assert deploy_010_order_problems("no section here")
+
+
+def test_runbook_has_the_database_roles_section_and_the_vm_notes_point_to_both():
+    runbook = RUNBOOK_PATH.read_text(encoding="utf-8")
+    notes = (REPO_ROOT / "docs/vm-deployment-notes.md").read_text(encoding="utf-8")
+    assert "## 14. Database roles" in runbook and "read -rs OWNER_DIRECT_URL" in runbook
+    assert "SSRF guard is not airtight" not in runbook
+    assert "Deploy 010" in notes and "Database roles" in notes
