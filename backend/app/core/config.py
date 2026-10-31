@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _REPO_ROOT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
@@ -12,6 +12,8 @@ class Settings(BaseSettings):
         env_file=_REPO_ROOT_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
+        # A validation error must never echo the input: it can hold the signing secret.
+        hide_input_in_errors=True,
     )
 
     database_url: str = Field(alias="DATABASE_URL")
@@ -94,6 +96,20 @@ class Settings(BaseSettings):
             return value.replace("postgres://", "postgresql+psycopg://", 1)
         return value
 
+    @model_validator(mode="after")
+    def _require_strong_signing_secret(self) -> "Settings":
+        # The message names the rule only; the value must never appear in it (FR-CRED-3).
+        if len(self.jwt_secret_key) < _MIN_JWT_SECRET_CHARS or self.jwt_secret_key == _PLACEHOLDER_JWT_SECRET:
+            raise ValueError(
+                f"JWT_SECRET_KEY must be at least {_MIN_JWT_SECRET_CHARS} characters long "
+                "and must not be the placeholder value; set a long random value"
+            )
+        return self
+
+
+_MIN_JWT_SECRET_CHARS = 32
+_PLACEHOLDER_JWT_SECRET = "change-me-to-a-random-secret"  # allow-secret
+
 
 def migration_url(settings: Settings) -> str:
     """The URL Alembic connects with: the owner/direct URL when set, else the app URL."""
@@ -104,7 +120,12 @@ def get_settings() -> Settings:
     try:
         return Settings()
     except ValidationError as exc:
-        missing = ", ".join(str(error["loc"][0]) for error in exc.errors())
+        errors = exc.errors()
+        # Whole-model rules (the signing-secret check) carry no field name; report the rule text only.
+        rules = [error["msg"].removeprefix("Value error, ") for error in errors if not error["loc"]]
+        if rules:
+            raise RuntimeError(f"Invalid setting: {'; '.join(rules)}.") from None
+        missing = ", ".join(str(error["loc"][0]) for error in errors)
         raise RuntimeError(
             f"Missing required setting(s): {missing}. Define them in the "
             f"environment or in {_REPO_ROOT_ENV_FILE} before starting the app."
