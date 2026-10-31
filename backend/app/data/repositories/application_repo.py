@@ -15,6 +15,7 @@ from datetime import date
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.data.repositories import audit_repo
 from app.models.application import Application, ReadinessLabel, SubmissionApproval, Task
 
 
@@ -135,6 +136,8 @@ def create_submission_approval(
         notes=notes,
     )
     db.add(approval)
+    db.flush()  # assigns approval.id for the audit entity
+    audit_repo.record(db, user_id, "submission.approve", f"submission_approval:{approval.id}")
     db.commit()
     db.refresh(approval)
     return approval

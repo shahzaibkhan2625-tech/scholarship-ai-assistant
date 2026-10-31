@@ -16,6 +16,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.data.repositories import audit_repo
 from app.models.source import (
     CandidateSource,
     CandidateSourceStatus,
@@ -256,6 +257,7 @@ def approve_candidate_source(
     candidate.reviewed_at = datetime.now()
 
     try:
+        audit_repo.record(db, reviewed_by, "source.approve", f"candidate_source:{candidate_id}")
         db.commit()
     except IntegrityError as exc:
         db.rollback()  # the candidate stays pending
@@ -282,6 +284,7 @@ def reject_candidate_source(
     candidate.reviewed_at = datetime.now()
     candidate.signals = {**candidate.signals, "rejection_reason": reason}
 
+    audit_repo.record(db, reviewed_by, "source.reject", f"candidate_source:{candidate_id}")
     db.commit()
     db.refresh(candidate)
     return candidate

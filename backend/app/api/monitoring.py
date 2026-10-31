@@ -79,7 +79,7 @@ def trigger_monitoring_run(
     current_user: User = Depends(require_operator),
     db: Session = Depends(get_db),
 ) -> MonitoringRunRead:
-    run = monitoring_repo.create_run_if_none_running(db, MonitoringTrigger.MANUAL)
+    run = monitoring_repo.create_run_if_none_running(db, MonitoringTrigger.MANUAL, actor_id=current_user.id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A monitoring run is already in progress")
     background_tasks.add_task(_execute_run, run.id)

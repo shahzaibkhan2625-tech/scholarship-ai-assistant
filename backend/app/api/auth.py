@@ -4,6 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token, hash_password, verify_password
+from app.data.repositories import audit_repo
 from app.data.repositories.db import get_db
 from app.models.user import User
 from app.schemas.auth import LoginRequest, SignupRequest, TokenResponse, UserResponse
@@ -26,6 +27,8 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> User:
     user = User(email=payload.email, password_hash=hash_password(payload.password))
     db.add(user)
     try:
+        db.flush()  # assigns user.id and takes the unique-email check before the audit row is written
+        audit_repo.record(db, user.id, "user.signup", f"user:{user.id}")
         db.commit()
     except IntegrityError as exc:
         # A concurrent sign-up won the lower(email) unique index between the check and the insert.

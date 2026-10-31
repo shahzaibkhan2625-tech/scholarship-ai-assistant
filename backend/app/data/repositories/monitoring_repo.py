@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
+from app.data.repositories import audit_repo
 from app.models.monitoring import MonitoringRun, MonitoringStatus, MonitoringTrigger
 from app.models.source import SourceFetchLog
 
@@ -15,9 +16,14 @@ from app.models.source import SourceFetchLog
 _RUN_CREATE_LOCK_KEY = 0x4D4F4E52554E  # "MONRUN"
 
 
-def create_run(db: Session, trigger: MonitoringTrigger) -> MonitoringRun:
+def create_run(db: Session, trigger: MonitoringTrigger, actor_id: uuid.UUID | None = None) -> MonitoringRun:
+    """`actor_id` is the operator who started a MANUAL run (010 FR-AUDIT-1): the run and its
+    `monitoring.run.manual` audit row commit together. Scheduler and recovery paths pass none."""
     run = MonitoringRun(trigger=trigger, status=MonitoringStatus.RUNNING)
     db.add(run)
+    if actor_id is not None:
+        db.flush()  # assigns run.id for the audit entity
+        audit_repo.record(db, actor_id, "monitoring.run.manual", f"monitoring_run:{run.id}")
     db.commit()
     db.refresh(run)
     return run
@@ -28,7 +34,9 @@ def has_running_run(db: Session) -> bool:
     return db.execute(stmt).first() is not None
 
 
-def create_run_if_none_running(db: Session, trigger: MonitoringTrigger) -> MonitoringRun | None:
+def create_run_if_none_running(
+    db: Session, trigger: MonitoringTrigger, actor_id: uuid.UUID | None = None
+) -> MonitoringRun | None:
     """Atomic check-then-create: takes a TRANSACTION-scoped advisory lock on a
     constant key, checks for a running run, inserts if none, and commits (the
     commit releases the lock). A concurrent caller blocks on the lock until
@@ -37,7 +45,7 @@ def create_run_if_none_running(db: Session, trigger: MonitoringTrigger) -> Monit
     if has_running_run(db):
         db.rollback()  # ends the transaction, releasing the lock
         return None
-    return create_run(db, trigger)
+    return create_run(db, trigger, actor_id)
 
 
 def get_run(db: Session, run_id: uuid.UUID) -> MonitoringRun | None:
