@@ -32,6 +32,16 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         "secret literal",
         re.compile(r"""(?i)\b\w*(?:password|passwd|secret|api_?key|token)\w*\s*[=:]\s*["'][^"'\s]{8,}["']"""),
     ),
+    # Google App Password: 16 lowercase letters shown as four groups of four (spaces optional). Bare
+    # 16-letter words are common in code, so it needs a password-like name in front, or the spaced
+    # form in quotes.
+    (
+        "Google App Password",
+        re.compile(
+            r"""\b\w*(?i:pass|pwd|smtp)\w*\s*[=:]\s*["']?[a-z]{4}(?: ?[a-z]{4}){3}["']?(?![A-Za-z0-9_])"""
+            r"""|["'][a-z]{4}(?: [a-z]{4}){3}["']"""
+        ),
+    ),
 ]
 
 # DSN passwords that are obviously placeholders, not credentials.
@@ -123,6 +133,41 @@ def test_scanner_catches_planted_secrets(tmp_path):
     labels = " ".join(findings)
     for expected in ("Google API key", "credential-bearing DSN", "secret literal", "private key block"):
         assert expected in labels
+
+
+MAIL_ENV_KEYS = ("SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "ALERTS_FROM_EMAIL")
+
+
+def test_env_example_mail_values_are_empty_placeholders():
+    """FR-MAIL-3: credentials come only from the server environment; the sample file ships blanks."""
+    values = {}
+    for line in (REPO_ROOT / ".env.example").read_text(encoding="utf-8").splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key.strip() in MAIL_ENV_KEYS:
+            values[key.strip()] = value.strip()
+    assert set(values) == set(MAIL_ENV_KEYS), "every mail setting must be listed in .env.example"
+    assert {key: value for key, value in values.items() if value} == {}
+
+
+def test_scanner_catches_an_app_password_in_every_written_form(tmp_path):
+    (tmp_path / "mail.py").write_text(
+        'SMTP_PASSWORD = "abcd efgh ijkl mnop"\n'  # allow-secret: planted fake
+        "SMTP_PASSWORD=abcdefghijklmnop\n"  # allow-secret: planted fake
+        "app_password: wxyz wxyz wxyz wxyz\n"  # allow-secret: planted fake
+        'note = "abcd efgh ijkl mnop"\n'  # allow-secret: planted fake
+    )
+    (tmp_path / "ok.py").write_text(
+        "SMTP_PASSWORD=\n"
+        "smtp_password = settings.smtp_password.replace(' ', '')\n"
+        'text = "this line has four short words"\n'
+        "smtp_host = deterministicallyx\n"
+    )
+
+    findings = scan(tmp_path)
+
+    assert {entry.split(":")[0] for entry in findings} == {"mail.py"}
+    assert sorted(int(entry.split(":")[1]) for entry in findings) == [1, 2, 3, 4]
+    assert all("Google App Password" in entry for entry in findings)
 
 
 def test_scanner_skips_virtualenv_and_git_directories(tmp_path):
