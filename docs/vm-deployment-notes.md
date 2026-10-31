@@ -130,6 +130,11 @@ Since the 002 deployment the backend listens on `127.0.0.1:8000` only and Caddy 
 
 The exact sequence that worked, in order, with what to check after each step.
 
+> **Release 010 differs.** It adds a restricted database role and needs two database URLs, so step 5
+> below (`podman exec ... alembic upgrade head`) is replaced for that release by the one-off migration
+> container in `docs/operations-hardening.md` "Deploy 010" (§15). The role itself is described in
+> "Database roles" (§14). Follow §15 for the whole 010 deployment.
+
 1. **Confirm branch**
    ```
    git -C <repo-path> branch --show-current
@@ -165,6 +170,7 @@ The exact sequence that worked, in order, with what to check after each step.
    sudo podman exec scholarship-ai-assistant_backend_1 uv run alembic upgrade head
    ```
    Check: `alembic current` reports the expected head revision.
+   For release 010 do not use this step: see "Deploy 010" and "Database roles" in `docs/operations-hardening.md`.
 
 6. **Confirm the port is actually served by the new container**
    ```
