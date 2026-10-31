@@ -1,4 +1,5 @@
-"""010 US8 T425 (FR-MAIL-1, SC-008): started at the scheduler tick `_run_scheduled_monitor`.
+"""010 US8 T425 (FR-MAIL-1, SC-008): started at the scheduler tick `_run_scheduled_monitor` and at the
+manual run route `POST /monitoring/runs`.
 
 A changed fixture source and a user with email alerts on produce one email through a fake SMTP and
 one alert visible through `GET /alerts`. No real mail server, network or LLM. Real (rolled-back) DB."""
@@ -36,10 +37,10 @@ class FakeSMTP:
         FakeSMTP.sent.append(message)
 
 
-def test_scheduler_tick_sends_one_email_and_the_alert_is_listed(client, db_session_factory, monkeypatch):
-    from app.core.security import create_access_token
+def _arrange(db_session_factory, monkeypatch):
+    """A changed fixture source, a user with email alerts on, a recording fake SMTP, and the monitor's
+    fetch/LLM seams injected into the workflow function the entry point calls."""
     from app.data.repositories import db as db_mod
-    from app.scheduling import scheduler
     from app.workflows.source_monitor import graph as monitor_graph
 
     env = build_monitor_env(db_session_factory, monkeypatch)
@@ -57,21 +58,23 @@ def test_scheduler_tick_sends_one_email_and_the_alert_is_listed(client, db_sessi
     source = env.make_source()
     env.listing.by_host[source.domain] = [cand(env.name("Alpha"), deadline=FUTURE_2)]
 
-    # The tick opens its own session and calls the real monitor with the real fetch and LLM seams:
-    # point the session at the test transaction and inject the fixture seams.
+    # The entry points open their own session and call the real monitor with the real fetch and LLM
+    # seams: point the session at the test transaction and inject the fixture seams.
     monkeypatch.setattr(db_mod, "SessionLocal", db_session_factory)
-    monkeypatch.setattr(
-        monitor_graph,
-        "run_source_monitor",
-        partial(
-            monitor_graph.run_source_monitor,
-            fetch=lambda url: FetchResult(url=url, success=True, status_code=200, html="<html>listing</html>"),
-            extract_listing=env.listing,
-            sleep=lambda _delay: None,
-        ),
+    seamed = partial(
+        monitor_graph.run_source_monitor,
+        fetch=lambda url: FetchResult(url=url, success=True, status_code=200, html="<html>listing</html>"),
+        extract_listing=env.listing,
+        sleep=lambda _delay: None,
     )
+    monkeypatch.setattr(monitor_graph, "run_source_monitor", seamed)
+    monkeypatch.setattr("app.api.monitoring.run_source_monitor", seamed)
+    monkeypatch.setattr("app.api.monitoring.SessionLocal", db_session_factory)
+    return env, owner
 
-    scheduler._run_scheduled_monitor()
+
+def _assert_one_email_and_one_listed_alert(client, env, owner):
+    from app.core.security import create_access_token
 
     assert [m["To"] for m in FakeSMTP.sent] == [owner.email]
     (context,) = FakeSMTP.contexts
@@ -82,3 +85,31 @@ def test_scheduler_tick_sends_one_email_and_the_alert_is_listed(client, db_sessi
     (listed,) = response.json()
     assert listed["email_error"] is None and listed["delivered_email_at"] is not None
     env.session.close()
+
+
+def test_scheduler_tick_sends_one_email_and_the_alert_is_listed(client, db_session_factory, monkeypatch):
+    from app.scheduling import scheduler
+
+    env, owner = _arrange(db_session_factory, monkeypatch)
+
+    scheduler._run_scheduled_monitor()  # first call: the tick
+
+    _assert_one_email_and_one_listed_alert(client, env, owner)
+
+
+def test_manual_run_route_sends_one_email_and_the_alert_is_listed(client, make_user, db_session_factory, monkeypatch):
+    import app.api.monitoring as monitoring_api
+
+    env, owner = _arrange(db_session_factory, monkeypatch)
+    operator = make_user(is_operator=True)
+    started = []
+    real_execute_run = monitoring_api._execute_run
+    # run the real background body (its own session, as in production) after the response
+    monkeypatch.setattr(monitoring_api, "_execute_run", started.append)
+
+    response = client.post("/monitoring/runs", headers=operator["headers"])  # first call: the route
+
+    assert response.status_code == 202
+    (run_id,) = started
+    real_execute_run(run_id)
+    _assert_one_email_and_one_listed_alert(client, env, owner)

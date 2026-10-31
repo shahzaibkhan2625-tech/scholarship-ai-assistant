@@ -15,6 +15,7 @@ from app.agents.discovery import agent as discovery_agent
 from app.data.repositories import source_repo
 from app.models.source import FetchStatus
 from app.schemas.source import SourceFetchLogCreate, SourceRegistryCreate
+from app.services.profile import get_or_create_profile
 from app.tools.api_connector import ApiConnectorOutput
 
 
@@ -54,8 +55,10 @@ def test_database_error_in_one_discovery_step_is_skipped_and_the_route_still_ans
 
     monkeypatch.setattr("app.api.discovery.run_discovery", run_discovery)
     student = make_user()
-    put = client.put("/profile", headers=student["headers"], json={"target_countries": [country]})
-    assert put.status_code == 200
+    # precondition seeded in the database so the route is the first call under test
+    with db_session_factory() as seed:
+        get_or_create_profile(seed, student["id"]).target_countries = [country]
+        seed.commit()
 
     response = client.post("/discovery", headers=student["headers"])
 
