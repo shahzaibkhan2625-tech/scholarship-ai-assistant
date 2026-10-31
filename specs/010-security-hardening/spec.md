@@ -321,7 +321,7 @@ Current `main` plus feature 010 is deployed to the VM, with post-deploy checks t
 | Signing-secret check | application start | starting the app |
 | Upload limits | document upload route; CV import route | those routes |
 | Audit records | sign-up, approve, reject, manual run, submission-approval routes; operator CLI command | those entry points |
-| Rollback after database error | scheduler/manual monitoring run; discovery route; URL match route | those entry points with an injected database error |
+| Rollback after database error | manual monitoring run; scheduler tick; discovery route | those entry points with an injected database error |
 | Email alert delivery | scheduler / manual monitoring run | the run, with a fake mail server |
 | Least-privilege access | whole app | automated suite and smoke test under restricted credentials |
 | Deployment and post-deploy checks | runbook executed on the VM | the post-deploy check list |
