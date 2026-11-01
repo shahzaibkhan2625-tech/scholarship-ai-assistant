@@ -288,12 +288,13 @@ def test_caddyfile_keeps_body_limit_and_metrics_404_above_the_proxy():
 
 RUNBOOK_PATH = REPO_ROOT / "docs/operations-hardening.md"
 DEPLOY_010_ORDER = [
+    "git pull --ff-only",
     "branch --show-current",
     "HAVING count(*) > 1",
     "cp .env .env.pre-010",
     "length($2)",
     "### Roll-out",
-    "\password",
+    r"\password",
     "build backend",
     "read -rs MIGRATION_DATABASE_URL",
     "--preserve-env=MIGRATION_DATABASE_URL",

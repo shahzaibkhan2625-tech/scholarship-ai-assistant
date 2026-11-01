@@ -413,7 +413,7 @@ Mirrors `specs/010-security-hardening/quickstart.md` section B and tasks T435-T4
 
 ### Pre-flight (read-only)
 
-1. **Branch and commit.** `git -C <repo> branch --show-current` must print `main`, with the merged feature present: `git -C <repo> log -1 --oneline`.
+1. **Bring the merged code onto the VM, then check branch and commit.** `cd <repo>; git fetch origin; git switch main; git pull --ff-only` (the VM checkout must be on `main` at the merged commit). Then `git -C <repo> branch --show-current` must print `main`, with the merged feature present: `git -C <repo> log -1 --oneline`.
 2. **Email-collision query** (FR-CRED-5), with owner credentials: `SELECT lower(email), count(*) FROM users GROUP BY 1 HAVING count(*) > 1;` must return no rows (the production database has 0 users). Any row: stop and tell the manager.
 3. **Rollback material.** `cp .env .env.pre-010`, then note the current image id with `sudo podman images`.
 4. **Signing secret, BEFORE the migration.** The new image's Alembic and CLI refuse to start on a weak secret. Check the length only, never the value: `awk -F= '/^JWT_SECRET_KEY=/{print length($2)}' .env` must print 32 or more, and the value must not be `change-me-to-a-random-secret`. If not, put a new random value in `.env` now (for example `openssl rand -hex 32`). Changing it signs out existing sessions; there are 0 users, so nothing is lost.

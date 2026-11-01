@@ -42,7 +42,7 @@ Two audiences: a developer verifying the feature locally/CI, and the owner deplo
 ## B. Deploy to the VM (owner, in this order)
 
 Pre-flight (read-only):
-1. `git -C <repo> branch --show-current` → `main`; merged feature present; `git log -1 --oneline`.
+1. `cd <repo>; git fetch origin; git switch main; git pull --ff-only` (VM checkout on `main` at the merged commit); then `git -C <repo> branch --show-current` → `main`; merged feature present; `git log -1 --oneline`.
 2. Email collision check (FR-CRED-5), with owner credentials:
    `SELECT lower(email), count(*) FROM users GROUP BY 1 HAVING count(*) > 1;` → must return no rows. Any row → stop and tell the manager.
 3. Keep rollback material: `cp .env .env.pre-010`; note the current image id (`sudo podman images`).
