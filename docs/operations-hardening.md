@@ -305,6 +305,10 @@ changes.
 | Logs show 5xx with a `request_id` | app error | grep that id in `sudo podman logs scholarship-ai-assistant_backend_1` |
 | A source reads `failing` with fewer failures than `HEALTH_WINDOW_N` | discovery flips on first failure; monitoring recovers it next run | ADR-0008 |
 | `pytest -k qdrant` (or any `-k` filter) on the smoke tests silently selects nothing | `pyproject.toml`'s `addopts = "-m 'not smoke'"` deselects them by default; `-k` doesn't override a marker exclusion | add `-m smoke`, e.g. `pytest -m smoke -k qdrant tests/smoke/` |
+| `psql`: `channel binding required but not supported by server's authentication request`, then `Endpoint ID is not specified ... upgrade the postgres client library (libpq) for SNI support` | The VM's psql 13 is too old for Neon | `sudo dnf module switch-to postgresql:16/client -y` (Oracle Linux 9); psql 14+ is required |
+| `ERROR: Received HTTP code 400 from control plane: ... "Neon only supports being given plaintext passwords"` | psql's `\password` sends a SCRAM hash; Neon rejects it | Set the password with `ALTER ROLE scholarship_app WITH PASSWORD '<pw>';` piped into psql on stdin (§14) |
+| Gmail login fails although the App Password looks right; the stripped password is 19 characters instead of 16 | The copy from Google's page contains non-breaking spaces (U+00A0), not only normal spaces | Fixed in code (all whitespace is removed before login). Older images: retype the password by hand without spaces |
+| On the VM `podman ps` shows nothing, `podman inspect` says "no such object", `docker compose` is not found, plain `python` in the container lacks the dependencies, or every podman command prints `retrieving lock 0 for pod ...: file exists` | The containers are **rootful**: every podman command needs `sudo`. There is no `docker compose`; use `sudo /usr/local/bin/podman-compose`. In the backend container the dependency Python is `/app/.venv/bin/python`. The lock message comes from an orphaned empty pod in `opc`'s rootless store | Prefix with `sudo`; use the full podman-compose path and `/app/.venv/bin/python` (or `uv run`); for the lock message, as `opc`: `podman pod ps`, then `podman pod rm -f <pod id>` (it has 0 containers) |
 | `/metrics` through Caddy returns 200 instead of the expected 404 | Tested with `Host: 127.0.0.1` (e.g. `curl https://127.0.0.1/metrics`), which doesn't match the Caddyfile's site block (keyed on `$SITE_ADDRESS`, the public IP); the request falls through to Caddy's unmatched default instead of hitting the `@metrics` guard | use the public IP as the Host, e.g. `curl https://<public-ip>/metrics`, or pass `-H "Host: <public-ip>"` |
 
 ## 13. Deployment record
@@ -357,29 +361,32 @@ the document-persistence redeploy check (§10), and the first production retenti
   live-extraction test **FAILED again**, but on substance (0 candidates, expected ≥2), not quota/429 — a real
   regression or environment issue, still open (see `docs/t-002-verification-log.md` open item 1).
 
-### 010 deployment record (blank; the owner fills it in, Claude commits it on the feature branch)
+### 010 deployment record
 
 | | |
 |---|---|
-| Deployed | `<date, UTC time>` |
-| Branch / commit | `main` @ `<commit>` |
-| Previous image id (rollback) | `<image id>` |
-| `.env` backup | `.env.pre-010` kept on the VM |
-| Alembic head after migration | `<revision>` |
-| App role flags verified | `<yes / no>` |
-| Start-up log without the owner-level warning | `<yes / no>` |
+| Deployed | 2026-11-20, about 21:25 UTC (container start); finished 2026-11-21 |
+| Branch / commit | `main` @ `33eeabd` |
+| Previous image id (rollback) | `2f3928ac078d`, also tagged `localhost/scholarship-ai-assistant_backend:pre-010` before the build |
+| New image id | `3381b6011c53` |
+| `.env` backup | `.env.backup.20261101210339` on the VM (taken during pre-flight; plays the role of `.env.pre-010`) |
+| Alembic | `f2b8d4a6c1e3` -> `a807daf8460e` (head) |
+| App role flags verified | yes: login/super/createdb/createrole/bypassrls = t/f/f/f/f; `can_create_in_public` f; `audit_log` insert t, update f, delete f |
+| Start-up log without the owner-level warning | yes |
 
 | Post-deploy check | Result | Notes |
 |---|---|---|
-| 1. `/health` 200 | `<PASS / FAIL>` | |
-| 2. Password rules; fixed check account | `<PASS / FAIL>` | |
-| 3. Operator boundary (check account 403, owner 202, lists 200) | `<PASS / FAIL>` | |
-| 4. match-url metadata address 422 `blocked` | `<PASS / FAIL>` | |
-| 5. App role cannot `CREATE TABLE` | `<PASS / FAIL>` | |
-| 6. `/metrics` 404 | `<PASS / FAIL>` | |
-| 7. Alert e-mail within 5 minutes (manual) | `<PASS / FAIL>` | |
-| 8. Exactly one operator | `<PASS / FAIL>` | |
-| Live sources still fetch (manual run detail) | `<PASS / FAIL>` | |
+| 1. `/health` 200 | PASS | |
+| 2. Password rules; fixed check account | PASS | |
+| 3. Operator boundary (check account 403, owner 202, lists 200) | PASS | Owner signed up (201) and was granted operator with the CLI. |
+| 4. match-url metadata address 422 `blocked` | PASS | |
+| 5. App role cannot `CREATE TABLE` | PASS | Also checked by hand: `permission denied for schema public`. |
+| 6. `/metrics` 404 | PASS | |
+| 7. Alert e-mail within 5 minutes (manual) | PASS (2026-11-21) | `EmailChannel` sent a test alert; the owner confirmed it reached the inbox. Delayed one day by the non-breaking-space defect in the App Password (see §12). |
+| 8. Exactly one operator | PASS | |
+| Live sources still fetch (manual run detail) | PASS | Three scheduled runs after the deploy each processed 2 sources with 0 failures. |
+
+Defects found in production, both fixed on `fix/010-post-deploy`: Neon rejects `\password` (§12, §14, spec deviation D-5); Google's App Password can contain non-breaking spaces (§12).
 
 ## 14. Database roles
 
@@ -392,19 +399,26 @@ Two database roles, two URLs (feature 010, ADR-0016, FR-DBROLE-1..6). The app ne
 
 **Direct vs pooled URLs.** Run the role script and migrations over the owner **direct** (non-pooled) URL. The running app uses the **pooled** (`-pooler`) host with `scholarship_app`. The Neon pooler is not suited to session-level DDL work.
 
-**Create or rotate the app role** (interactive terminal on a machine with `psql`; run from the repo root):
+**The owner direct URL.** In the Neon console press **Connect**, switch **Connection pooling** OFF, pick the owner role: the host must have no `-pooler`. Paste it at the `read -rs` prompt below.
+
+**psql 14 or newer is required** (Neon needs channel binding and SNI; psql 13 fails, see §12). On the VM (Oracle Linux 9): `sudo dnf module switch-to postgresql:16/client -y`.
+
+**Create or rotate the app role** (terminal on a machine with `psql` 14+; run from the repo root). Step 1 creates the role and its grants; step 2 sets the password:
 
 ```
 read -rs OWNER_DIRECT_URL
-psql "$OWNER_DIRECT_URL" -v migration_role='neondb_owner' -f backend/scripts/db/create_app_role.sql
-unset OWNER_DIRECT_URL
+psql "$OWNER_DIRECT_URL" -v ON_ERROR_STOP=1 -v migration_role='neondb_owner' -f backend/scripts/db/create_app_role.sql
+
+read -rs APP_ROLE_PASSWORD     # letters and digits only, 24+ characters
+printf "ALTER ROLE scholarship_app WITH PASSWORD '%s';\n" "$APP_ROLE_PASSWORD" | psql "$OWNER_DIRECT_URL" -v ON_ERROR_STOP=1
+unset APP_ROLE_PASSWORD OWNER_DIRECT_URL
 ```
 
-- The script creates the role **without a password**, then runs psql's `\password`, which prompts twice and sends only a hash. The password is not in the file, in a psql variable, in shell history or in the process list. Put the password you typed into the VM `.env` (as part of `DATABASE_URL`) and nowhere else.
+- The script creates the role **without a password**; step 2 sets it. `printf` is a shell builtin, so the password is not in the process list; it travels over TLS and Neon hashes it. It is not in a file, in a psql variable or in shell history. Never put it on a command line. Put the password in the VM `.env` (as part of `DATABASE_URL`) and nowhere else. The script no longer sets a password, and `-v skip_password=1` is accepted as a no-op.
 - Verify the printed role flags: `rolcanlogin` true, every other flag false, and `can_create_in_public` false.
 - **Default privileges** are set `FOR ROLE <migration_role>` (the `migration_role` variable above), so tables the migration role creates later are usable by `scholarship_app` without a manual grant. `alembic_version` is revoked from the app role; `audit_log` is append-only for it (no UPDATE, DELETE or TRUNCATE).
-- **Re-run the script after every migration run** (it is idempotent; press Ctrl-C at the `\password` prompt to keep the current password). CI does the same after `alembic upgrade head`.
-- Rotating the password: run the script, type the new password at the prompt, update `DATABASE_URL` in `.env`, recreate the containers in the §10 step 3 order.
+- **Re-run the script after every migration run** (it is idempotent and does not touch the password). CI does the same after `alembic upgrade head`.
+- Rotating the password: run only the `ALTER ROLE` step above with a new password, update `DATABASE_URL` in `.env`, recreate the containers in the §10 step 3 order.
 - If the start-up log shows `database credentials have owner-level rights`, the backend is connected as an owner-level role: stop and fix `DATABASE_URL`.
 
 ## 15. Deploy 010
@@ -415,12 +429,12 @@ Mirrors `specs/010-security-hardening/quickstart.md` section B and tasks T435-T4
 
 1. **Bring the merged code onto the VM, then check branch and commit.** `cd <repo>; git fetch origin; git switch main; git pull --ff-only` (the VM checkout must be on `main` at the merged commit). Then `git -C <repo> branch --show-current` must print `main`, with the merged feature present: `git -C <repo> log -1 --oneline`.
 2. **Email-collision query** (FR-CRED-5), with owner credentials: `SELECT lower(email), count(*) FROM users GROUP BY 1 HAVING count(*) > 1;` must return no rows (the production database has 0 users). Any row: stop and tell the manager.
-3. **Rollback material.** `cp .env .env.pre-010`, then note the current image id with `sudo podman images`.
+3. **Rollback material.** `cp .env .env.pre-010`, then note the current image id with `sudo podman images` and **tag the running image before building**: `sudo podman tag <current image id> localhost/scholarship-ai-assistant_backend:pre-010` (the build moves `:latest`; Rollback uses this tag).
 4. **Signing secret, BEFORE the migration.** The new image's Alembic and CLI refuse to start on a weak secret. Check the length only, never the value: `awk -F= '/^JWT_SECRET_KEY=/{print length($2)}' .env` must print 32 or more, and the value must not be `change-me-to-a-random-secret`. If not, put a new random value in `.env` now (for example `openssl rand -hex 32`). Changing it signs out existing sessions; there are 0 users, so nothing is lost.
 
 ### Roll-out
 
-1. **Create the role** with `\password`: the three commands in §14, using the owner **direct** URL. Check the printed flags.
+1. **Create the role and set its password** with `ALTER ROLE scholarship_app WITH PASSWORD` over stdin: the commands in §14, using the owner **direct** URL (psql 14+). Check the printed flags.
 2. **Build, do not swap:** `sudo /usr/local/bin/podman-compose -f docker-compose.podman.yml build backend`. The running containers are untouched.
 3. **Migrate as the owner**, passing the URL by variable name only (it exists only in this shell and the `--rm` container, is never typed into a command and never written to `.env`):
    ```
@@ -483,4 +497,4 @@ unset OPERATOR_TOKEN CHECK_ACCOUNT_EMAIL CHECK_ACCOUNT_PASSWORD OWNER_DATABASE_U
 
 ### Rollback
 
-Any FAIL, or a start-up problem: restore `.env.pre-010` over `.env`, retag the previous image with `sudo podman tag <previous image id> localhost/scholarship-ai-assistant_backend:latest`, and recreate the containers in the §10 step 3 order (no `--build`). The 010 migration is additive, so the previous code runs against the new schema; no downgrade is needed. Record the failing check and its cause in §13.
+Any FAIL, or a start-up problem: restore `.env.pre-010` over `.env`, retag the previous image with `sudo podman tag localhost/scholarship-ai-assistant_backend:pre-010 localhost/scholarship-ai-assistant_backend:latest`, and recreate the containers in the §10 step 3 order (no `--build`). The 010 migration is additive, so the previous code runs against the new schema; no downgrade is needed. Record the failing check and its cause in §13.

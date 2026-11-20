@@ -23,6 +23,8 @@ Every answer cites a file:line in this repository (paths relative to `backend/` 
 
 **Alternatives**: (a) console-created role + `REVOKE` of `neon_superuser`: Neon documents no supported revoke path, and the page says the Console grants it; rejected. (b) Postgres row-level security per table: wrong tool, the app has no per-role policy model; rejected. (c) One shared role for app and migrations: that is today's exposure.
 
+**Correction 2026-11-20 (found in production, spec deviation D-5):** Neon rejects psql's `\password`: `ERROR: Received HTTP code 400 from control plane: {..."error":"Neon only supports being given plaintext passwords"}`; `\password` sends a SCRAM hash. Neon accepts `ALTER ROLE ... WITH PASSWORD '<plaintext>'` and hashes it on the server (https://neon.com/faqs/reset-database-password). The role script therefore creates the role without a password, and the password is set in a separate step over stdin: `read -rs APP_ROLE_PASSWORD`, then `printf "ALTER ROLE scholarship_app WITH PASSWORD '%s';\n" "$APP_ROLE_PASSWORD" | psql "$OWNER_DIRECT_URL" -v ON_ERROR_STOP=1`, then `unset APP_ROLE_PASSWORD`. `printf` is a shell builtin, so the password is not in the process list; it travels over TLS. The original text above is kept as written.
+
 ---
 
 ## R2 Redirect-aware, rebinding-safe fetch with httpx

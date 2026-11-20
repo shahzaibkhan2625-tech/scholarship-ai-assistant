@@ -33,6 +33,7 @@ Blueprint §23 rule 2 requires any difference found in research to be put to the
 | D-2 | Operator-only also covers **reading source fetch logs, a monitoring run's detail (its per-source outcomes) and candidate-validation results**. | FR-DISC-8, A17 and the §22 010 row restrict only approve/reject (and, in §22, monitoring runs). | PRD FR-DISC-8, Blueprint §22 010 row and A17 |
 | D-3 | **Granting operator status** is an audited action. | PRD NFR-SEC-7 lists sign-up, source approval/rejection, manually started runs and submission approvals only. | PRD NFR-SEC-7, Blueprint §14 note |
 | D-4 | Gmail (App Password) is the mail provider. | Blueprint §47 "NOT YET DEFINED" item 5 leaves the SMTP provider to the 010 spec. | Blueprint §47 item 5 (mark decided) |
+| D-5 | The app-role password is set with `ALTER ROLE ... WITH PASSWORD` piped over stdin, not with psql's `\password`. Neon rejects hashed passwords ("Neon only supports being given plaintext passwords"). Found in production 2026-11-20; manager decision. | ADR-0016 decision 3, research R1, `create_app_role.sql` and the runbook said `\password` (prompted, sent as a hash). | ADR-0016 and research R1 (correction notes), `create_app_role.sql`, `db-role.sql`, runbook sections 14-15, quickstart |
 
 Nothing else in the owner's brief differs from the Blueprint, PRD or ADRs.
 

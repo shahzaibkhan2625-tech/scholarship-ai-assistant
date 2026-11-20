@@ -12,12 +12,15 @@ Two audiences: a developer verifying the feature locally/CI, and the owner deplo
    ```
 3. **Create the role, migrate as owner, test as the app role** (this is also the CI sequence):
    ```text
-   psql "<owner url>" -v migration_role='postgres' -f scripts/db/create_app_role.sql   # prompts for the app role's password (\password)
+   psql "<owner url>" -v ON_ERROR_STOP=1 -v migration_role='postgres' -f scripts/db/create_app_role.sql   # creates the role, no password
+   read -rs APP_ROLE_PASSWORD     # letters and digits only, 24+ characters
+   printf "ALTER ROLE scholarship_app WITH PASSWORD '%s';\n" "$APP_ROLE_PASSWORD" | psql "$OWNER_DIRECT_URL" -v ON_ERROR_STOP=1
+   unset APP_ROLE_PASSWORD
    uv run alembic upgrade head          # uses MIGRATION_DATABASE_URL
-   psql "<owner url>" -v migration_role='postgres' -f scripts/db/create_app_role.sql   # re-run: picks up new tables, locks audit_log (prompt again; Ctrl-C keeps the password)
+   psql "<owner url>" -v ON_ERROR_STOP=1 -v migration_role='postgres' -f scripts/db/create_app_role.sql   # re-run: picks up new tables, locks audit_log (does not touch the password)
    uv run pytest                        # uses DATABASE_URL (restricted)
    ```
-   Without a terminal (CI, `docker exec`) `\password` cannot prompt: add `-v skip_password=1` to both script runs and set a throw-away password once with `ALTER ROLE scholarship_app PASSWORD '<throw-away>'`, as `ci.yml` does. Run from `backend/` (the `psql` path above is relative to it).
+   `printf` is a shell builtin, so the password is not in the process list; it travels over TLS and the server hashes it. Neon rejects psql's `\password` (it sends a hash; deviation D-5). CI passes `-v skip_password=1` (accepted, a no-op) and sets a throw-away password with `ALTER ROLE scholarship_app PASSWORD '<throw-away>'`, as `ci.yml` does. Run from `backend/` (the `psql` path above is relative to it).
 4. **Operator**: `uv run python -m app.services.operator grant --email you@example.com`, then sign in and call `POST /monitoring/runs` (202); a second account gets 403.
 
 ### Acceptance walk-through (maps to the spec's stories)
@@ -45,17 +48,19 @@ Pre-flight (read-only):
 1. `cd <repo>; git fetch origin; git switch main; git pull --ff-only` (VM checkout on `main` at the merged commit); then `git -C <repo> branch --show-current` → `main`; merged feature present; `git log -1 --oneline`.
 2. Email collision check (FR-CRED-5), with owner credentials:
    `SELECT lower(email), count(*) FROM users GROUP BY 1 HAVING count(*) > 1;` → must return no rows. Any row → stop and tell the manager.
-3. Keep rollback material: `cp .env .env.pre-010`; note the current image id (`sudo podman images`).
+3. Keep rollback material: `cp .env .env.pre-010`; note the current image id (`sudo podman images`) and tag it before building: `sudo podman tag <image id> localhost/scholarship-ai-assistant_backend:pre-010`.
 4. **Signing secret (before the migration step)**: the new image's Alembic and CLI refuse to start on a weak secret. Check the length only, never the value: `awk -F= '/^JWT_SECRET_KEY=/{print length($2)}' .env` must print 32 or more, and the value must not be `change-me-to-a-random-secret`. If not, put a new random value in `.env` now (for example `openssl rand -hex 32`). Changing it signs out existing sessions; there are 0 users, so nothing is lost.
 
 Roll-out:
-1. **Create the role** (from an interactive terminal on a machine with psql). Read the owner **direct** URL silently into a shell variable, run the script, then unset it; no secret is typed in a command:
+1. **Create the role and set its password** (psql 14 or newer; on the VM `sudo dnf module switch-to postgresql:16/client -y`). Get the owner **direct** URL from the Neon console (**Connect**, connection pooling OFF, no `-pooler` in the host). Read it silently into a shell variable; no secret is typed in a command:
    ```text
    read -rs OWNER_DIRECT_URL
-   psql "$OWNER_DIRECT_URL" -v migration_role='neondb_owner' -f backend/scripts/db/create_app_role.sql   # \password prompts for the new app password
-   unset OWNER_DIRECT_URL
+   psql "$OWNER_DIRECT_URL" -v ON_ERROR_STOP=1 -v migration_role='neondb_owner' -f backend/scripts/db/create_app_role.sql
+   read -rs APP_ROLE_PASSWORD     # letters and digits only, 24+ characters
+   printf "ALTER ROLE scholarship_app WITH PASSWORD '%s';\n" "$APP_ROLE_PASSWORD" | psql "$OWNER_DIRECT_URL" -v ON_ERROR_STOP=1
+   unset APP_ROLE_PASSWORD OWNER_DIRECT_URL
    ```
-   Put the app password you typed at the prompt into the VM `.env` (step 4) and nowhere else.
+   `printf` is a shell builtin, so the password is not in the process list; it travels over TLS and Neon hashes it. (Neon rejects psql's `\password`; deviation D-5.) Put the app password into the VM `.env` (step 4) and nowhere else.
 2. **Build, do not swap**: `sudo /usr/local/bin/podman-compose -f docker-compose.podman.yml build backend`.
 3. **Migrate as the owner, passing the URL by variable name only** (the value is never typed into a command, never written to `.env`, and exists only in this shell and the `--rm` container):
    ```text

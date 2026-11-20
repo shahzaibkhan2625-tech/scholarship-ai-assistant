@@ -294,7 +294,7 @@ DEPLOY_010_ORDER = [
     "cp .env .env.pre-010",
     "length($2)",
     "### Roll-out",
-    r"\password",
+    "ALTER ROLE scholarship_app WITH PASSWORD",
     "build backend",
     "read -rs MIGRATION_DATABASE_URL",
     "--preserve-env=MIGRATION_DATABASE_URL",
