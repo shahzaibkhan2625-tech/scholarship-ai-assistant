@@ -382,11 +382,11 @@ the document-persistence redeploy check (§10), and the first production retenti
 | 4. match-url metadata address 422 `blocked` | PASS | |
 | 5. App role cannot `CREATE TABLE` | PASS | Also checked by hand: `permission denied for schema public`. |
 | 6. `/metrics` 404 | PASS | |
-| 7. Alert e-mail within 5 minutes (manual) | PASS (2026-11-21) | `EmailChannel` sent a test alert; the owner confirmed it reached the inbox. Delayed one day by the non-breaking-space defect in the App Password (see §12). |
+| 7. Alert e-mail within 5 minutes (manual) | PASS | Run on 2026-11-21, the session after the deploy: `EmailChannel` sent a test alert and the owner confirmed it reached the inbox. |
 | 8. Exactly one operator | PASS | |
 | Live sources still fetch (manual run detail) | PASS | Three scheduled runs after the deploy each processed 2 sources with 0 failures. |
 
-Defects found in production, both fixed on `fix/010-post-deploy`: Neon rejects `\password` (§12, §14, spec deviation D-5); Google's App Password can contain non-breaking spaces (§12).
+Defects found in production: Neon rejects `\password` (§12, §14, spec deviation D-5), fixed on `fix/010-post-deploy`; Google's App Password can contain non-breaking spaces (§12), caught during the deploy before it caused a failure and fixed in code on this branch.
 
 ## 14. Database roles
 
@@ -413,6 +413,8 @@ read -rs APP_ROLE_PASSWORD     # letters and digits only, 24+ characters
 printf "ALTER ROLE scholarship_app WITH PASSWORD '%s';\n" "$APP_ROLE_PASSWORD" | psql "$OWNER_DIRECT_URL" -v ON_ERROR_STOP=1
 unset APP_ROLE_PASSWORD OWNER_DIRECT_URL
 ```
+
+**From Windows.** From a Windows PowerShell session, pasting into the SSH terminal can corrupt a URL (bracketed paste; characters like `&` and quotes). What worked on 2026-11-20: hold each secret in a PowerShell variable, then send it to the VM over ssh stdin (for example pipe the `ALTER ROLE` statement into `psql`), never typed into the remote shell. Clear the secrets from PSReadLine history afterwards.
 
 - The script creates the role **without a password**; step 2 sets it. `printf` is a shell builtin, so the password is not in the process list; it travels over TLS and Neon hashes it. It is not in a file, in a psql variable or in shell history. Never put it on a command line. Put the password in the VM `.env` (as part of `DATABASE_URL`) and nowhere else. The script no longer sets a password, and `-v skip_password=1` is accepted as a no-op.
 - Verify the printed role flags: `rolcanlogin` true, every other flag false, and `can_create_in_public` false.
