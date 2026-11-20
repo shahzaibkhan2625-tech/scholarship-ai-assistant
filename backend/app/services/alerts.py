@@ -136,8 +136,9 @@ class EmailChannel:
             with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=_SMTP_TIMEOUT_SECONDS) as smtp:
                 smtp.starttls(context=ssl.create_default_context())  # verifies the certificate and host name
                 if settings.smtp_username:
-                    # Google prints an App Password in four groups of four; it is used without the spaces.
-                    smtp.login(settings.smtp_username, (settings.smtp_password or "").replace(" ", ""))
+                    # Google prints an App Password in four groups of four, separated by spaces
+                    # (sometimes non-breaking ones when copied); it is used without any whitespace.
+                    smtp.login(settings.smtp_username, "".join((settings.smtp_password or "").split()))
                 smtp.send_message(message)
         except Exception as exc:  # noqa: BLE001 - delivery failure is data, never an exception
             # Type and SMTP reply code only: the message text can echo the account name or password.

@@ -114,6 +114,16 @@ def test_app_password_is_sent_without_the_spaces_google_prints(env):
     assert smtp.login_args == ("alerts@example.test", APP_PASSWORD)
 
 
+def test_app_password_is_sent_without_non_breaking_spaces(env, monkeypatch):
+    monkeypatch.setattr(alerts, "settings", _settings(smtp_password="abcd efgh ijkl mnop"))  # allow-secret: fake
+    env.add_owner()
+
+    env.run()
+
+    (smtp,) = FakeSMTP.instances
+    assert smtp.login_args == ("alerts@example.test", "abcdefghijklmnop")  # allow-secret: fake
+
+
 @pytest.mark.parametrize("missing", [{"smtp_host": None}, {"alerts_from_email": None}])
 def test_unconfigured_keeps_the_in_app_alert_and_logs_the_reason(env, monkeypatch, caplog, missing):
     monkeypatch.setattr(alerts, "settings", _settings(**missing))
