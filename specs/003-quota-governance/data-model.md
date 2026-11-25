@@ -1,6 +1,6 @@
 # Data Model: LLM Quota Governance & Cheap Monitoring (003)
 
-All changes are **additive**. No existing column is altered, widened, renamed or dropped; no existing row is rewritten. Table and column names below are proposals for the migration; types follow existing conventions (UUID keys, timezone-aware timestamps, non-native enums stored as short strings).
+(updated 2026-11-26, post-audit/post-010): no table or column changed in this update; the privilege rule and the migration parent were added below. All changes are **additive**. No existing column is altered, widened, renamed or dropped; no existing row is rewritten. Table and column names below are proposals for the migration; types follow existing conventions (UUID keys, timezone-aware timestamps, non-native enums stored as short strings).
 
 ## New table: `llm_budget_ledger`
 
@@ -81,10 +81,17 @@ Readers that must change behaviour (code, not schema): the shared failure-streak
 
 Both are metadata-only additions on current PostgreSQL (constant default), so there is no table rewrite.
 
+## Privileges and migration parent (updated 2026-11-26, post-audit/post-010)
+
+- The revision is run as the owner with `down_revision = a807daf8460e` (010's head). It contains no GRANT. The role script `backend/scripts/db/create_app_role.sql` is re-run after the migration; its default privileges (`FOR ROLE <owner>`) give `scholarship_app` SELECT, INSERT, UPDATE and DELETE on all three new tables, which is all they need (increment, upsert, prune by retention).
+- No new role, no DDL right for the application, no change to `audit_log` or `alembic_version` rules.
+- `source_fetch_log` rows written by ingestion for a single record (`items_found = 1`, no fetched URL) are not extraction rows; FR-SKIP-8 reads only rows that have a fetched URL (research R-15). No column is added for this.
+
 ## No schema change needed
 
 - **Per-source interval override and deterministic rules**: stored in the existing `source_registry.extraction_rules` JSONB under namespaced keys (`check_interval_minutes`, `deterministic`), validated by the registry write schema. Human-governed configuration stays on the registry row (constitution Principle IV).
 - **Last checked and last success**: already on `source_registry` (`last_checked_at`, `last_success_at`).
+- **Model names** (updated 2026-11-26, post-audit/post-010): new settings (`llm_generation_model`, `llm_embedding_model`) with today's values as defaults; the embedding size stays a constant.
 - **Allowance, reserve, ladder offsets, backfill share, cadence defaults, forced-recheck days, back-off base, noise threshold, anomaly thresholds, budget timezone**: new settings in `core/config.py`, no storage.
 
 ## Entity map to the spec

@@ -2,14 +2,25 @@
 
 **Feature Branch**: `003-quota-governance`
 **Created**: 2026-10-25
-**Status**: Draft
+**Status**: Draft; spec, plan and tasks brought up to date with the 2026-10-26 audit and the code after feature 010 on 2026-11-26. Every change below is marked (updated 2026-11-26, post-audit/post-010).
 **Input**: User description: "LLM quota governance and cheap monitoring for the Scholarship AI Assistant. Keep within the Gemini free tier (observed 20 requests/day for gemini-2.5-flash, per ADR-0012). Central LLM budget with priorities and 429 back-off; content-hash skip and conditional GET so unchanged pages cost no LLM call; per-source check cadence driven by update_frequency; provider errors recorded in source_fetch_log; deterministic extraction rules first with the LLM as fallback; budget visible in metrics; log the monitoring interval at scheduler startup. Grounded in docs/blueprint-gap-analysis.md (M-36, M-35, M-23, M-33), ADR-0012 and the Blueprint."
 
-**Source of truth**: `docs/blueprint-gap-analysis.md` (M-36 monitoring cost and cadence, M-35 change detection, M-23 failure handling, M-33 per-source freshness, §5 quota model, §6 feature 003), `adr/0012-free-tier-stance-and-source-expansion-priority.md` (stay on the free tier; 003 is mandatory and built first), `specs/scholarship-ai-assistant-master-blueprint-v1.md` (§33 Failure & Retry, §35 Continuous Monitoring, §25.1 Evals) and `specs/scholarship-ai-assistant-prd-v1.md` (NFR-REL-1, NFR-REL-2, NFR-REL-3, FR-VERIFY-6, KPI-3, KPI-9), plus the project constitution (Principles I, IV, V). This spec layers on `specs/001-scholarship-mvp/` and `specs/002-source-monitoring-hardening/` without modifying either, and it does not change what any scholarship record means (that is ADR-0013 and feature 004).
+**Source of truth**: `docs/blueprint-gap-analysis.md` (M-36 monitoring cost and cadence, M-35 change detection, M-23 failure handling, M-33 per-source freshness, §5 quota model, §6 feature 003), `adr/0012-free-tier-stance-and-source-expansion-priority.md` (stay on the free tier; 003 is mandatory and built first), `specs/scholarship-ai-assistant-master-blueprint-v1.md` (§33 Failure & Retry, §35 Continuous Monitoring, §25.1 Evals) and `specs/scholarship-ai-assistant-prd-v1.md` (NFR-REL-1, NFR-REL-2, NFR-REL-3, FR-VERIFY-6, KPI-3, KPI-9), plus the project constitution (Principles I, IV, V). (updated 2026-11-26, post-audit/post-010): also `docs/full-project-audit.md` rows B-25, B-55, B-57, B-176, B-177, V-12, T-05, BR-02, P4-OF-2, P4-OF-3, P4-NZ-1 and the section 7 "Error taxonomy: provider failure" row, `specs/010-security-hardening/spec.md` (operator role, redirect-safe fetch, least-privilege database role), ADR-0015, ADR-0016, Blueprint v1.9 §22 (003 row of the 2026-10-27 table) and PRD v1.3 (NFR-REL-4..6, FR-VERIFY-9). This spec layers on `specs/001-scholarship-mvp/` and `specs/002-source-monitoring-hardening/` without modifying either, and it does not change what any scholarship record means (that is ADR-0013 and feature 004).
 
 ## Why this feature exists
 
-The product depends on a free LLM allowance of roughly 20 requests per day (observed for the current model). Scheduled monitoring alone is estimated to need about 48 requests per day (2 monitored sources checked 24 times a day, each check calling the LLM even when the page has not changed). A real quota-exhausted error from the provider was recorded in production on 2026-10-24. Any feature added after this one (record backfill, source expansion, matching, drafting) adds more LLM load, so quota must be governed before anything else is built. Today nothing counts requests, nothing separates urgent work from background work, nothing skips unchanged pages, and provider failures inside discovery are only logged rather than recorded against the source.
+The product depends on a free LLM allowance of roughly 20 requests per day (observed for the current model). Scheduled monitoring alone is estimated to need about 48 requests per day (2 monitored sources checked 24 times a day, each check calling the LLM even when the page has not changed). A real quota-exhausted error from the provider was recorded in production on 2026-10-24. Any feature added after this one (record backfill, source expansion, matching, drafting) adds more LLM load, so quota must be governed before anything else is built.
+
+(updated 2026-11-26, post-audit/post-010) Facts as of 2026-11-26, from the audit and the code after feature 010:
+
+- Feature 010 is built and deployed (merged to `main` 2026-11-02, deployed 2026-11-20, eight of eight post-deploy checks passed). Next in the build order is this feature (Blueprint v1.9 §22). Nothing in 003 is implemented: no `llm_gate.py`, no budget, no cadence (B-25).
+- Monitoring is still on the **360-minute stopgap** set on 2026-10-25 and still calls the LLM for every source on every tick, unchanged page or not (B-177). The estimate of about 48 requests a day is for the old 60-minute tick; on the stopgap it is about 8 (estimate), and it returns to about 48 the moment the interval is shortened.
+- Monitoring and discovery do not spend the allowance on extraction alone: every newly ingested candidate also goes through `classify`, which makes **about one more LLM call per new candidate** because funding and several other dimensions rarely resolve by rules (T-05; BR-02 measured one call for each of three realistic candidates under mocks, not on real pages). `classify` swallows an LLM failure silently (`tools/classify.py:140`).
+- The cross-run extraction cache meant to protect the allowance almost never hits: ingestion writes its own `source_fetch_log` rows after the extraction row and they defeat the cache, so each `POST /discovery` re-fetches and re-extracts every discovery source (P4-OF-3).
+- Nothing counts requests, nothing separates urgent work from background work, nothing skips unchanged pages. An LLM failure inside discovery leaves no trace at all: the exception is caught into `fetch_errors`, which the API drops (P4-OF-2); in monitoring it is recorded as a failed site fetch and counts toward the source's failure streak (V-12, B-176).
+- Every LLM route except document upload lets a provider error escape as an HTTP 500 (B-57, section 7 "Error taxonomy: provider failure"). `doc_pipeline` is the only code that catches the provider's error type.
+- The model names are constants in `core/llm.py` (B-55). Changing the model stays a feature 006 decision (ADR-0012).
+- Since 010, starting a monitoring run and reading a run or a source's fetch log are operator-only; the redirect-safe fetch (`safe_get`) is the only fetch path; the application and the tests run as the least-privilege role `scholarship_app` and migrations as the owner.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -31,6 +42,7 @@ When monitoring re-checks a source and its page has not meaningfully changed sin
 4. **Given** a source that has never been successfully extracted, **When** it is first checked, **Then** extraction is performed (there is no baseline to compare against).
 5. **Given** a source whose server supports conditional requests and reports the page unmodified, **When** monitoring checks it, **Then** the page is not re-downloaded and the outcome is recorded as unchanged.
 6. **Given** a page that is unchanged but whose last extraction attempt failed (provider error or zero grounded candidates), **When** monitoring checks it, **Then** the failure is not mistaken for "unchanged success": the extraction is retried, but with bounded back-off so a permanently unextractable page does not consume the allowance every check.
+7. **Given** a discovery source that was extracted within its freshness interval and whose ingestion has since written its own log rows, **When** a student runs discovery again, **Then** the earlier extraction still counts: no re-fetch and no LLM request (updated 2026-11-26, post-audit/post-010) (FR-SKIP-8, P4-OF-3).
 
 ---
 
@@ -87,6 +99,7 @@ When an LLM request fails during extraction or candidate validation (quota exhau
 3. **Given** the same failures occur on the discovery path, **When** discovery completes, **Then** they are recorded the same way, not only logged.
 4. **Given** any such failure, **When** records are evaluated, **Then** no existing scholarship is closed, expired, overwritten with empty data, or marked source-unavailable because of it.
 5. **Given** the health view, **When** a source has recent provider-side failures, **Then** they are shown separately from site fetch failures.
+6. **Given** any LLM-backed route (match-url, match, Q&A, discovery, CV/SOP generation, CV import, documents), **When** the provider fails for any reason (quota, outage, unparseable response, not configured), **Then** the student gets the same clear temporary-unavailable response as in story 2, never HTTP 500 (updated 2026-11-26, post-audit/post-010) (FR-ERR-6, B-57).
 
 ---
 
@@ -122,6 +135,7 @@ The operator can see at any time how much of today's allowance has been used, by
 2. **Given** the scheduler starts, **When** the startup log is read, **Then** it states the monitoring tick interval, the per-frequency cadence defaults, the allowance, the reserve and the day boundary, and no secret value.
 3. **Given** a source that "changes" at almost every check, **When** the operator reviews the metrics, **Then** it is flagged as noisy so its change detection can be tuned.
 4. **Given** a later change of allowance (for example after a paid-tier decision at feature 006), **When** the configuration is updated, **Then** the budget and metrics follow without code changes.
+5. **Given** the operator-only budget and cadence view, **When** a signed-in non-operator asks for it, **Then** the answer is 403; an anonymous caller gets 401; an operator gets the numbers (updated 2026-11-26, post-audit/post-010) (FR-OBS-5).
 
 ---
 
@@ -137,7 +151,8 @@ The operator can see at any time how much of today's allowance has been used, by
 - **Budget exhausted mid-run**: the run records which sources were checked and which were deferred, marks itself partial rather than failed, and the next run starts with the deferred ones.
 - **Conditional-request mismatch**: a server that claims "not modified" while the content has changed is caught by the periodic forced full check described in the requirements.
 - **Records going stale**: a long cadence combined with deferrals must not cause records to become stale before their freshness window; the system flags the risk rather than letting it happen silently.
-- **Manual runs and discovery**: on-demand monitoring runs and student-triggered discovery draw from the same budget as scheduled work, in their own priority class.
+- **Manual runs and discovery**: on-demand monitoring runs and student-triggered discovery draw from the same budget as scheduled work, in their own priority class. (updated 2026-11-26, post-audit/post-010): since 010 only an operator can start a manual run; discovery stays open to any signed-in user.
+- **Classification spends the allowance too** (updated 2026-11-26, post-audit/post-010): a first run or a changed page that yields N new candidates costs up to N more `classify` requests (T-05, BR-02). They pass the same gate under the caller's class, so a deferred or refused classify call is counted and is no longer silent; what a record stores when classify gets no LLM answer is today's behaviour and is not changed here (plan.md, open question OQ-1).
 - **Paid tier later**: a much larger allowance must work with no code change; the guard simply has more headroom.
 
 ## Requirements *(mandatory)*
@@ -155,6 +170,7 @@ The operator can see at any time how much of today's allowance has been used, by
 - **FR-BUDGET-9**: If the budget state cannot be read or written, background LLM work MUST pause rather than proceed unbudgeted.
 - **FR-BUDGET-10**: One-off backfill work MUST be able to drain over several days within a per-day share, without ever consuming the user-facing reserve.
 - **FR-BUDGET-11**: The allowance, reserve and day boundary MUST be changeable by configuration alone, so a future paid-tier decision (ADR-0012, feature 006) needs no code change.
+- **FR-BUDGET-12** (updated 2026-11-26, post-audit/post-010): The generation and embedding model names MUST come from configuration, with defaults equal to today's names (`models/gemini-2.5-flash`, `models/gemini-embedding-001`), so nothing changes unless an operator sets them. Changing the model is NOT part of this feature; ADR-0012 keeps that decision at feature 006. The embedding vector size stays fixed (768) because stored vectors depend on it. *(Traced to audit B-55.)*
 
 ### Functional Requirements: Change detection (FR-SKIP)
 
@@ -165,6 +181,7 @@ The operator can see at any time how much of today's allowance has been used, by
 - **FR-SKIP-5**: The system MUST periodically force a full re-extraction of a source regardless of fingerprint (an operator-configurable interval, bounded by the source's freshness window) so that a wrong "unchanged" signal cannot hide a change indefinitely.
 - **FR-SKIP-6**: A skipped check MUST NOT alter any scholarship record, lifecycle state, or alert, and MUST NOT produce spurious change records.
 - **FR-SKIP-7**: A source whose fingerprint changes at almost every check MUST be flagged as noisy in the metrics.
+- **FR-SKIP-8** (updated 2026-11-26, post-audit/post-010): The cross-run extraction cache (the "extracted recently, answer from the stored extraction" check used by discovery) MUST be driven by the source's own listing-extraction rows, so that rows ingestion writes for individual records (success rows with a record count but no fetched URL) cannot defeat it. After one extraction, any number of ingestion rows MUST NOT turn a later discovery call within the freshness interval into a re-fetch or a new LLM request. *(Traced to audit P4-OF-3.)*
 
 ### Functional Requirements: Per-source cadence (FR-CADENCE)
 
@@ -182,6 +199,7 @@ The operator can see at any time how much of today's allowance has been used, by
 - **FR-ERR-3**: A provider-side failure MUST NOT modify, close, expire or empty any existing scholarship record, and MUST NOT be presented as "no scholarships found" (PRD FR-VERIFY-6).
 - **FR-ERR-4**: Recorded reasons MUST be short and MUST NOT contain secrets, credentials, or page content.
 - **FR-ERR-5**: The health view MUST show provider-side failures separately from site fetch failures.
+- **FR-ERR-6** (updated 2026-11-26, post-audit/post-010): Every route that reaches the LLM (match-url, match, Q&A, discovery, CV and SOP generation, CV import, documents) MUST answer ANY provider failure (quota, outage, unparseable response, provider not configured) with the same clear temporary-unavailable response as FR-BUDGET-5 (HTTP 503, a retry time and a short non-secret reason; shape in `contracts/api-delta.md`), never HTTP 500. Document upload keeps its existing result for this case (HTTP 201 with `extraction_unavailable`, the upload fix), which is also a clear temporary-unavailable answer and never a 500. *(Traced to audit B-57 and the section 7 "Error taxonomy: provider failure" row.)*
 
 ### Functional Requirements: Deterministic extraction (FR-RULES)
 
@@ -196,7 +214,33 @@ The operator can see at any time how much of today's allowance has been used, by
 - **FR-OBS-1**: The system MUST expose, to the operator, for the current budget day: requests used and remaining by priority class and request type, the reserve, deferred count, skipped-unchanged count, provider-exhaustion count, local-versus-provider discrepancies, and the reset time.
 - **FR-OBS-2**: At scheduler startup the system MUST log the effective monitoring tick interval, the per-frequency cadence defaults and any per-source overrides, and the budget settings (allowance, reserve, day boundary), without logging any secret.
 - **FR-OBS-3**: Each monitoring run's summary MUST state how many sources were checked, skipped as unchanged, deferred for budget, and failed, so the cost of a run is explainable after the fact.
-- **FR-OBS-4**: Metrics access control MUST NOT be weakened by this feature.
+- **FR-OBS-4**: Metrics access control MUST NOT be weakened by this feature. (updated 2026-11-26, post-audit/post-010): today `/metrics` needs the metrics bearer token and is not exposed through Caddy (010 post-deploy check 6); both stay as they are.
+- **FR-OBS-5** (updated 2026-11-26, post-audit/post-010): The budget and cadence view (the FR-OBS-1 numbers plus each source's interval, last check, next due time, noisy flag and rules-review flag) MUST be available to an operator through an API route that uses the existing `require_operator` dependency from feature 010: a signed-in non-operator gets 403 and an anonymous caller 401. It is read-only. *(Owner decision 2026-11-26.)*
+
+### Process rules (Blueprint §23) (updated 2026-11-26, post-audit/post-010)
+
+- **FR-PROC-1 (entry-point rule)**: Every capability in this feature MUST be reachable from an API route, the scheduler, application start or an operator CLI command, and MUST have a test that starts from that entry point (map below). No capability may exist only as an internal helper.
+- **FR-PROC-2 (deviation stop rule)**: If implementation finds anything that differs from the Blueprint, the PRD or an ADR, work MUST stop and the owner MUST decide, with the decision recorded in both.
+
+#### Entry-point map (FR-PROC-1) (updated 2026-11-26, post-audit/post-010)
+
+| Capability | Entry point | Test starts at |
+|---|---|---|
+| Budget gate admits or refuses every LLM call (FR-BUDGET-1..11) | every LLM route, the scheduler tick, the operator CLI `record-snapshot` | those entry points with a fake gate and fake provider |
+| Temporary-unavailable answer on LLM routes; provider failure never 500 (FR-BUDGET-5, FR-ERR-6) | the eight routes: `POST /profile/import-cv`, `/scholarships/match-url`, `/scholarships/{id}/match`, `/scholarships/{id}/qa`, `/discovery`, `/applications/{id}/documents`, `/applications/{id}/generate/cv`, `/applications/{id}/generate/sop` | each route, per failure kind |
+| Unchanged-page skip, forced re-check, back-off (FR-SKIP-1..7) | scheduler tick; `POST /monitoring/runs` (operator) | the tick function; the route as operator |
+| Cross-run extraction cache survives ingestion rows (FR-SKIP-8) | `POST /discovery` | the route, after ingestion has written its rows |
+| Per-source cadence and cheap tick (FR-CADENCE-1..6) | scheduler tick; `POST /monitoring/runs` | the tick function; the route |
+| Provider failures recorded, kept out of health (FR-ERR-1..5) | scheduler tick, manual run, `POST /discovery`, candidate validation inside the run | those entry points with an injected provider failure |
+| Provider-failure fields in the health views (FR-ERR-5) | `GET /sources/health`, `GET /sources/{id}/fetch-log` | those routes |
+| Run counters (FR-OBS-3) | `GET /monitoring/runs`, `GET /monitoring/runs/{id}` | those routes |
+| Budget metrics and noisy-source gauge (FR-OBS-1, FR-SKIP-7) | `GET /metrics` | the route with and without the token |
+| Operator-only budget and cadence view (FR-OBS-5) | `GET /monitoring/budget` (provisional name) | the route as operator, non-operator and anonymous |
+| Startup log (FR-OBS-2) | application start (`start_scheduler`) | starting the app |
+| Ledger pruning | the daily retention job | the scheduled job function |
+| Model names from configuration (FR-BUDGET-12) | application start, then a gated call | building `Settings`, then `generate_text` |
+| Extraction rules: set, parity, diff, record-snapshot (FR-RULES-1..5) | operator CLI `python -m app.services.source_rules` | the CLI `main` |
+| Deploy of 003 and its post-deploy checks | runbook section 16 on the VM | the post-deploy check list |
 
 ### Out of scope
 
@@ -207,6 +251,8 @@ The operator can see at any time how much of today's allowance has been used, by
 - Detecting changes to scholarship requirements (feature 004 and later).
 - A dashboard (frontend is deferred); this feature exposes numbers, not a screen.
 - Per-student quotas or billing (SaaS, deferred by PRD §30).
+- (updated 2026-11-26, post-audit/post-010): Making manual monitoring runs operator-only, the redirect-safe fetch and the least-privilege database role (all delivered by 010; this feature only builds on them).
+- (updated 2026-11-26, post-audit/post-010): Reducing the number of `classify` calls per new candidate (rules-first or batched classification) and fixing what `classify` stores when it gets no LLM answer (P4-NZ-1, P4-CT-3: data-quality work for features 004 and 006); 003 only gates and counts those calls (plan.md, OQ-1).
 
 ### Key Entities
 
@@ -227,6 +273,8 @@ The operator can see at any time how much of today's allowance has been used, by
 - Embedding requests are counted and visible, but their provider limit is not assumed to equal the generation limit; the default allowance applies to generation only until an embedding limit is measured.
 - Tests and CI for this feature use recorded or fake provider responses and make no live provider calls (constitution Principle V).
 - Live smoke tests and developer use of the same key remain outside the local count; the provider's exhaustion signal covers them.
+- (updated 2026-11-26, post-audit/post-010): The new tables work as the least-privilege role `scholarship_app`: migrations run as the owner, the role script (`backend/scripts/db/create_app_role.sql`) is re-run after them, and its default privileges grant the application SELECT, INSERT, UPDATE and DELETE on tables the owner creates (010, runbook section 14). No new database role and no DDL right for the application.
+- (updated 2026-11-26, post-audit/post-010): Classification calls are part of the load this feature governs. The default allowance of 20 a day is unchanged; whether it is enough once classify and feature 004's re-extraction run is measured after deploy (SC-014), not assumed.
 
 ### Defaults chosen for your review
 
@@ -252,3 +300,8 @@ These are the places where I picked a reasonable default instead of asking. Chan
 - **SC-008**: The operator can read today's used, remaining, deferred and skipped counts at any time, and the startup log of every restart states the monitoring interval, cadence defaults and budget settings.
 - **SC-009**: A page whose only change is non-content noise triggers no extraction in 100% of fixture cases, and a real content change triggers extraction within one due check in 100% of cases.
 - **SC-010**: At least one currently monitored source runs in normal operation on deterministic extraction with zero LLM requests when its rules match, and falls back to the LLM exactly once and flags itself when they stop matching.
+- **SC-011** (updated 2026-11-26, post-audit/post-010): On each of the eight LLM-backed student routes, a simulated quota error, outage, unparseable response and missing key each produce the temporary-unavailable answer (503 with a retry time; 201 `extraction_unavailable` for document upload) and 0 responses of HTTP 500 (FR-ERR-6).
+- **SC-012** (updated 2026-11-26, post-audit/post-010): After one extraction and any number of ingestion rows, a second discovery call within the freshness interval makes 0 fetches and 0 LLM requests in 100% of fixture cases (FR-SKIP-8).
+- **SC-013** (updated 2026-11-26, post-audit/post-010): The budget and cadence view returns 403 to a signed-in non-operator, 401 to an anonymous caller and the numbers to an operator, in 100% of cases (FR-OBS-5).
+- **SC-014** (updated 2026-11-26, post-audit/post-010): After deploy, the 7-day measurement behind SC-001 reports background requests per day next to the number of new candidates ingested that day (two read-only queries), so the share caused by classify calls is visible and not assumed.
+- **SC-015** (updated 2026-11-26, post-audit/post-010): Every capability of this feature appears in the entry-point map with a test whose first call is its entry point (FR-PROC-1), and the tasks audit confirms it.

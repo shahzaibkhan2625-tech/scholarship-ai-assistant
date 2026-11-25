@@ -1,18 +1,18 @@
 # Research: LLM Quota Governance & Cheap Monitoring (003)
 
-Phase 0 output for `specs/003-quota-governance/plan.md`. Each entry is Decision, Rationale, Alternatives, and where the evidence came from. Everything marked **measured** was observed on 2026-10-25 by read-only probes (plain HTTP GETs, read-only SQL, source reading); nothing here called the LLM.
+Phase 0 output for `specs/003-quota-governance/plan.md`. (updated 2026-11-26, post-audit/post-010): R-01, R-06, R-09, R-11 to R-14 were amended and R-15 to R-19 added; each amendment says why. The probes dated 2026-10-25 are not re-run (no live services in this update). Each entry is Decision, Rationale, Alternatives, and where the evidence came from. Everything marked **measured** was observed on 2026-10-25 by read-only probes (plain HTTP GETs, read-only SQL, source reading); nothing here called the LLM.
 
 ## R-01 Where the budget lives and how priority reaches it
 
 **Decision.** Put the enforcement point inside `app/core/llm.py` (the only module that talks to the provider: `generate_text` line 33, `embed_texts` line 48), but keep `core` free of database imports. `core` defines a small gate interface in a new `app/core/llm_gate.py` (priority and request-type enums, the refusal exceptions, a context variable holding the current priority, and a registry for the installed gate). The database-backed gate lives in `app/services/llm_budget.py` and is installed at application start, in the scheduler process, and in CLI entry points. With no gate installed, calls are refused (fail closed), which also satisfies "a call without a class is refused" (FR-BUDGET-3) for scripts.
 
-Priority is declared with a scoped context manager at the entry points, not by adding a parameter to the roughly twelve call sites:
+Priority is declared with a scoped context manager at the entry points, not by adding a parameter to the eleven call sites of `generate_text`/`embed_texts` (updated 2026-11-26, post-audit/post-010) (`git grep` on 2026-11-26: matching, research_qa, classify, embed, extract_document_fields, extract_listing, extract_profile, extract_requirements, cv_gen, and two in sop_gen; `app/tools/embed.py` is the only caller of `embed_texts`):
 - HTTP requests: a middleware sets `user-facing` for every request by default.
 - `run_source_monitor` and the alert re-match step: `scheduled monitoring`.
 - candidate validation step: `candidate validation`.
 - one-off jobs (feature 004's re-extraction): `one-off backfill`.
 
-**Rationale.** One choke point means no LLM call can bypass the budget (FR-BUDGET-1). A context variable keeps tool and workflow signatures unchanged. The context must be set in the async middleware, not in a sync dependency, because sync dependencies and endpoints each run in their own copied thread context and a value set in one is not visible in the other.
+**Rationale.** One choke point means no LLM call can bypass the budget (FR-BUDGET-1). A context variable keeps tool and workflow signatures unchanged. The middleware is added inside 010's body-limit and rate-limit middleware (a refused or oversized request never reaches the gate) (updated 2026-11-26, post-audit/post-010). The context must be set in the async middleware, not in a sync dependency, because sync dependencies and endpoints each run in their own copied thread context and a value set in one is not visible in the other.
 
 **Alternatives.** An explicit `priority=` argument on every tool (clearer, but touches many signatures and tests). A decorator on each caller (easy to forget on new code). A global counter inside `llm.py` with no priorities (does not meet FR-BUDGET-3/4).
 
@@ -74,6 +74,8 @@ How long to pause matters, and the real error shows why. The 2026-10-24 06:54 UT
 
 **Decision.** Fingerprint = SHA-256 of the page's normalised visible text, using the existing `clean_html_to_text` in `tools/extract_listing.py` (it already strips scripts, styles and tags and collapses whitespace). Never fingerprint raw bytes: for HEC that would report "changed" on every check and save nothing. Conditional requests (`If-None-Match` / `If-Modified-Since`) are implemented opportunistically and stay off unless the server proves it honours them (a stable ETag, or a `Last-Modified` that has stayed constant across checks with an unchanged fingerprint). **For the two current sources conditional requests give no benefit**, so they are the lowest-value, last-built part of story 1; the saving comes entirely from the fingerprint.
 
+(updated 2026-11-26, post-audit/post-010) **Fetch path.** 010 rewrote `web_fetch`: `safe_get` re-checks every redirect hop and pins the connection to a validated address. Conditional headers are added as an optional argument applied to the first request only and never forwarded across a redirect, so a validator is never sent to another host and the per-hop check is untouched. A refused (`blocked`) fetch is a site-side failure, never a provider outcome.
+
 **Known limit.** A visible-text fingerprint does not see a link-only change (same names, new `href`). The forced full re-check (R-07) bounds how long that can go unnoticed.
 
 **Alternatives.** Hash raw HTML (useless for HEC). Hash extracted items (requires the LLM first). Compare the DOM structure (over-engineered).
@@ -99,6 +101,8 @@ On the first run after deployment there is no state row, which would restart EAC
 ## R-09 Per-source cadence and the scheduler tick
 
 **Decision.** Keep the APScheduler interval job, but make it cheap: each tick loads the monitorable sources and their state, selects the ones that are due, orders them stalest-first, and returns without creating a `monitoring_runs` row when nothing is due and no pending candidate needs validation (manual runs always create a row). Every tick, idle or not, logs one structured line with sources due, checked, skipped and deferred (owner decision 2026-10-25), so an idle scheduler is distinguishable from a dead one. Due = `max(next_attempt_at, last_checked_at + interval)`; `last_checked_at` already exists on `source_registry` and is updated by `touch_source_check` (`source_repo.py:287`), so no new schedule column is needed.
+
+(updated 2026-11-26, post-audit/post-010) A manual run: since 010 only an operator can start one (`POST /monitoring/runs`, audited), and the route takes no source list by 002's design. Story 3 scenario 6 and T296 speak of "naming sources"; that would add a request body and is left to the manager (analysis finding A1). The scheduled tick is unaffected.
 
 Interval = operator override if set, else by `update_frequency`: weekly 1 day; monthly, quarterly, annual 7 days; none 1 day (approved defaults). It is capped by the freshness window so schedule alone cannot make a record stale (FR-CADENCE-4). The override lives under a namespaced key (`check_interval_minutes`) in the existing `extraction_rules` JSON, validated on write.
 
@@ -154,7 +158,7 @@ The provider-failure rows are `fail`, which the failure-streak definition would 
 
 **EACEA: not feasible now.** The earlier read-only GET showed substantial server-rendered text (~47 K visible characters, 60 `ecl-card` elements) dominated by an alphabetical university/institution list, with programme names not cleanly separable, and 136 of 136 recent LLM extractions grounded nothing. Rules for it belong to feature 004 once the page structure is understood. Under 003 EACEA benefits instead from the unextractable-page back-off (R-08).
 
-**Operator path, and a hazard found while planning.** There is no API to edit a registry entry. The only write path is the seed loader, `upsert_source_by_domain` (`source_repo.py:169`), which fully replaces every field except `listing_page_url` and `freshness_window_days` (`_PRESERVE_IF_OMITTED`, line 31). Re-running the seed on production would reset EACEA's `status` from `failing` back to `active` and replace `extraction_rules` wholesale. So the plan adds a small dedicated command that validates and sets only the new rule and cadence keys on one source, and the HEC rule set is also written into `seed_sources.yaml` so a fresh database has it. Production is never re-seeded for this feature.
+**Operator path, and a hazard found while planning.** (updated 2026-11-26, post-audit/post-010): still true after 010 (it added approve/reject routes, not an edit route); the command runs inside the container as `scholarship_app`, which may UPDATE `source_registry`. There is no API to edit a registry entry. The only write path is the seed loader, `upsert_source_by_domain` (`source_repo.py:169`), which fully replaces every field except `listing_page_url` and `freshness_window_days` (`_PRESERVE_IF_OMITTED`, line 31). Re-running the seed on production would reset EACEA's `status` from `failing` back to `active` and replace `extraction_rules` wholesale. So the plan adds a small dedicated command that validates and sets only the new rule and cadence keys on one source, and the HEC rule set is also written into `seed_sources.yaml` so a fresh database has it. Production is never re-seeded for this feature.
 
 ## R-12 Observability
 
@@ -162,16 +166,48 @@ The provider-failure rows are `fail`, which the failure-streak definition would 
 - Prometheus: a collector that reads the ledger and pause rows at scrape time, so values persist across restarts and workers. Gauges: allowance, used, remaining, reserve, seconds until reset, provider-pause deadline; counters (as gauges of the ledger totals): deferred, denied, provider-exhausted, discrepancy, avoided-unchanged, avoided-rules, by request type and priority class. Existing `/metrics` authentication is unchanged (FR-OBS-4).
 - Per-source: `checks` and `changed` over the last N checks (state table) produce a `noisy` flag exposed as a gauge (FR-SKIP-7).
 - Startup log: one structured line from `start_scheduler` (`scheduling/scheduler.py:80`) with the tick interval, cadence defaults, per-source overrides (best-effort DB read), and budget settings. This is the owner's note from the Task B review.
+- (updated 2026-11-26, post-audit/post-010) Operator view: a read-only route `GET /monitoring/budget` (name provisional) behind `require_operator`, returning the FR-OBS-1 numbers and, per monitored source, interval, last check, next due, noisy flag and rules-review flag. `/metrics` is unchanged (bearer token; not exposed through Caddy, 010 check 6).
 - Run summary: add skipped and deferred counters to `monitoring_runs` and to the run-finished log line (currently `_record_run_end`, `source_monitor/graph.py:525`, reports processed/failed/changes only).
 
 ## R-13 Test strategy without live calls
 
 - Unit: gate admission (ladder, reserve, share cap, pause, day boundary, fail-closed/fail-safe), error classification (including the real daily-quota error shape captured above as a fixture), fingerprint normalisation, cadence selection and back-off, rule extraction against a trimmed copy of the real HEC markup.
 - Integration: monitoring run twice on an unchanged fixture (second makes zero provider calls), changed fixture (one call), deferred extraction leaves records untouched, provider failure does not move health, discovery path records outcomes, `503` with `Retry-After` for user-facing refusal.
+- (updated 2026-11-26, post-audit/post-010) CI runs the whole suite as `scholarship_app` (migrations as the owner, role script re-run). The gate's advisory lock (`pg_advisory_xact_lock`) needs no special right; a test creates and reads each new table as that role so a missing grant fails in CI, not on the VM.
 - DB-touching gate tests use the existing per-test rollback fixture by injecting its session factory, because the real gate opens its own short transaction and would otherwise write to the shared Neon database.
 - One new scored eval case (`quota_governance`, threshold 1.0) simulating a day of mixed traffic with a fake provider and asserting the invariants: never above allowance, reserve honoured, no background call below the floor, no provider call after a quota pause. This follows constitution Principle V.
 - CI makes no live provider calls; the existing smoke tests stay deselected.
 
 ## R-14 Migration and rollout
 
-See `plan.md` for the migration statement. In short: one additive revision; old code runs unchanged on the new schema, so migrate first, then deploy, then (optionally) set the tick back to 60 minutes.
+See `plan.md` for the migration statement. In short: one additive revision; old code runs unchanged on the new schema, so migrate first, then deploy, then (optionally) set the tick back to 60 minutes. (updated 2026-11-26, post-audit/post-010): the head is `a807daf8460e`; the migration runs as the owner and the role script is re-run after it (runbook section 14); the deploy follows the section 15 pattern (owner-run; pre-flight, migrate, role script, recreate containers in the section 10 order, post-deploy checks, rollback) in a new section 16.
+
+## R-15 The cross-run extraction cache and ingestion's own rows (FR-SKIP-8, audit P4-OF-3) (updated 2026-11-26, post-audit/post-010)
+
+**Evidence (read 2026-11-26).** `_last_successful_extraction` (`official_fetch.py`) walks `get_fetch_logs_for_source` (newest first) and returns the first row with `status == OK and items_found is not None`. After an extraction, `run_ingestion` writes one such row per record (`items_found=1`, `fetched_url` empty; `workflows/ingestion/graph.py`, two places). The newest match is therefore an ingestion row; on the resolved path the next check discards a row whose `fetched_url` differs from the target, so the cache returns "no extraction" and the page is fetched and extracted again.
+
+**Decision.** The cache looks only at the source's own listing-extraction rows: rows with a fetched URL, and on the resolved path a URL equal to the target, scanning past other rows instead of stopping at the newest. No schema change. Ingestion rows are left as they are (other readers use them). Tests: one extraction row plus N ingestion rows gives `cached` with 0 fetches (starting at `POST /discovery`).
+
+**Related, checked not decided.** Retention floor (c) keeps "the latest OK row with `items_found`" per source (`retention.py`), which has the same confusion: it may protect an ingestion row instead of the extraction row. The task T453 checks it and reports to the manager if the floor does not protect the extraction row (ADR-0011 owns the floors); it is not changed in 003.
+
+**Interaction with the fingerprint.** Monitoring bypasses this cache (`bypass_cache=True`) and uses the fingerprint state; the cache serves discovery. Both stay.
+
+## R-16 One answer for any provider failure on an LLM route (FR-ERR-6, audit B-57) (updated 2026-11-26, post-audit/post-010)
+
+**Decision.** The 503 handler covers the whole `LlmError` family, not only the refusal: `LlmTemporarilyUnavailable` (allowance or pause), `LlmQuotaExhausted`, `LlmProviderError`, `LlmResponseUnparseable`, and `LlmNotConfiguredError` (made a subclass of `LlmError`). `reason` values: `daily_allowance_spent`, `provider_quota`, `provider_unavailable`, `provider_response_invalid`, `not_configured`. For failures that carry no provider time (outage, unparseable, not configured) `retry_at` is now plus a configured short delay (`llm_unavailable_retry_seconds`, default 60). Document upload keeps 201 `extraction_unavailable` (it already catches the provider's error type; T275 widens it to `LlmError`).
+
+**Not a blanket handler.** Only `LlmError` is mapped; any other exception still surfaces as an error, so a code bug is never reported as "the AI is unavailable".
+
+**Where a failure never reaches the route.** `classify` and a few tools swallow exceptions today; T454 lists, for each of the eleven call sites, whether a failure reaches the route or is swallowed, and only changes the ones where a failure is silently turned into a wrong answer on a student route (not classify: OQ-1).
+
+## R-17 Classification cost (audit T-05, BR-02) (updated 2026-11-26, post-audit/post-010)
+
+`classify` runs the rules first and makes one LLM call for whatever stays unresolved; funding almost never resolves by rules (the joined text holds `fully_funded`, which the pattern cannot match). Measured under mocks as 1 call per realistic candidate, not on real pages. Consequences for 003: (a) the projection in plan.md is corrected; (b) the call runs under the caller's class (monitoring or validation), so the ladder bounds it; (c) the failure is no longer silent in the ledger (deferred, denied and provider events are counted), while what is stored is unchanged (OQ-1). Reducing the number of calls is out of scope (spec).
+
+## R-18 The operator budget and cadence view (FR-OBS-5) (updated 2026-11-26, post-audit/post-010)
+
+A read-only route is required for "non-operators get 403" to be testable, and `/metrics` cannot carry it (bearer token, hidden behind Caddy). Decision: `GET /monitoring/budget` (provisional name, in `api/monitoring.py` beside the other operator-only monitoring routes), dependency `require_operator`, no write path, body in `contracts/api-delta.md` section 5. It reuses the read helpers of the metrics collector so the two never disagree. Anonymous gets 401 from authentication before the operator check runs (010 FR-AUTHZ).
+
+## R-19 Model names from configuration (FR-BUDGET-12, audit B-55) (updated 2026-11-26, post-audit/post-010)
+
+`core/llm.py` holds `GENERATION_MODEL` and `EMBEDDING_MODEL` as constants. They become settings with the same defaults; `EMBEDDING_DIMENSIONS = 768` stays a constant because stored vectors and the vector index depend on it. No model change is made or recommended here; accuracy is never traded for cost (PRD NFR-REL-6) and the decision belongs to feature 006 (ADR-0012). A test builds `Settings()` with nothing set and asserts today's names.

@@ -1,12 +1,12 @@
 # API Contract Delta: 003 Quota Governance
 
-No new endpoints. Three existing response shapes change, and `/metrics` gains series. The OpenAPI contract file (`specs/001-scholarship-mvp/contracts/openapi.yaml`) and the drift tests (`tests/api/test_openapi_contract_002.py` and the 001 drift check) must be updated together with the code.
+(updated 2026-11-26, post-audit/post-010): one new read-only endpoint (section 5, operator-only; name provisional) and the 503 mapping widened (section 1). Three existing response shapes change, and `/metrics` gains series. The OpenAPI contract file and the drift tests must be updated together with the code (updated 2026-11-26, post-audit/post-010): the live drift contract today is `specs/002-source-monitoring-hardening/contracts/openapi.yaml` (`CONTRACT_PATH` in `tests/api/test_openapi_contract_002.py`); 003 copies it to its own folder (T276) and does not edit the 001 or 002 files.
 
 ## 1. Temporary-unavailable response on LLM-backed routes (FR-BUDGET-5)
 
 Applies to every route that can reach the LLM for a student: `POST /profile/import-cv`, `POST /scholarships/match-url`, `POST /scholarships/{id}/match`, `POST /scholarships/{id}/qa`, `POST /discovery`, `POST /applications/{id}/documents`, `POST /applications/{id}/generate/cv`, `POST /applications/{id}/generate/sop`.
 
-When the daily allowance is spent, or the provider has reported quota exhaustion, the route returns:
+When the daily allowance is spent, the provider has reported quota exhaustion, **or any other provider failure occurs (outage, unparseable response, provider not configured; FR-ERR-6)** (updated 2026-11-26, post-audit/post-010), the route returns:
 
 ```
 HTTP/1.1 503 Service Unavailable
@@ -22,10 +22,11 @@ Content-Type: application/json
 }
 ```
 
-- `reason` is one of `daily_allowance_spent`, `provider_quota`, `provider_unavailable`.
+- `reason` is one of `daily_allowance_spent`, `provider_quota`, `provider_unavailable`, `provider_response_invalid`, `not_configured` (updated 2026-11-26, post-audit/post-010). For the last three there is no provider time, so `retry_at` is now plus `llm_unavailable_retry_seconds` (default 60) and `Retry-After` matches.
+- Only the `LlmError` family is mapped; any other exception is not reported as an AI outage.
 - No provider call is made when the refusal comes from the local budget or an active pause.
 - The body never contains secrets, provider payloads, page content or stack traces.
-- This replaces today's behaviour on the routes that let the provider error escape as a bare 500 (documented open limitation in `docs/operations-hardening.md` section 11). Document upload keeps its existing `201` with an `extraction_unavailable` flag (the upload fix) and additionally maps the new `LlmError` base; it does not return 503.
+- This replaces today's behaviour on the routes that let the provider error escape as a bare 500 (audit B-57; documented open limitation in `docs/operations-hardening.md` section 11). Document upload keeps its existing `201` with an `extraction_unavailable` flag (the upload fix) and additionally maps the new `LlmError` base; it does not return 503.
 
 Add `503` to the documented responses of the routes above.
 
@@ -57,6 +58,29 @@ Same authentication as today. New series (names provisional, finalised in tasks)
 
 Values are read from the database at scrape time, so they survive restarts and agree across workers.
 
-## 5. Not changed
+## 5. Budget and cadence view (FR-OBS-5) (updated 2026-11-26, post-audit/post-010)
 
-Auth, profile, applications, alerts, coverage payload shape (only the failed-source counting rule changes), candidate-source endpoints, and every request body.
+`GET /monitoring/budget` (provisional name). Dependency `require_operator` (010): 401 without a valid token, 403 for a signed-in non-operator (`{"detail": "Operator access required"}`), 200 for an operator. Read-only; no request body; no write path.
+
+```
+{
+  "budget_day": "2026-11-26",
+  "reset_at": "2026-11-27T08:00:00Z",
+  "request_types": {
+    "generate": {"allowance": 20, "reserve": 8, "used": {"user_facing": 0, "backfill": 0, "monitoring": 0, "validation": 0},
+                 "remaining": 20, "deferred": 0, "denied": 0, "provider_exhausted": 0, "discrepancy": 0,
+                 "avoided_unchanged": 0, "avoided_rules": 0, "paused_until": null, "observed_limit": null},
+    "embed": {"allowance": null, "used": {}, "remaining": null}
+  },
+  "sources": [
+    {"domain": "www.hec.gov.pk", "interval_minutes": 1440, "interval_source": "derived|override|default",
+     "last_checked_at": null, "next_due_at": null, "noisy": false, "rules_review_needed": false}
+  ]
+}
+```
+
+Numbers come from the same read helpers as `/metrics`. The body never contains secrets, provider payloads or page content.
+
+## 6. Not changed
+
+Auth, profile, applications, alerts, coverage payload shape (only the failed-source counting rule changes), candidate-source endpoints, and every request body. (updated 2026-11-26, post-audit/post-010): access levels set by 010 are unchanged: `GET /sources/health` and `GET /monitoring/runs` stay open to any signed-in user (they gain the new fields), `GET /sources/{id}/fetch-log` and `GET /monitoring/runs/{id}` stay operator-only, and `/metrics` keeps its bearer token and is not exposed through Caddy.

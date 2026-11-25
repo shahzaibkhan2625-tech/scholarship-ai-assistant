@@ -1,6 +1,6 @@
 # Implementation Plan: LLM Quota Governance & Cheap Monitoring
 
-**Branch**: `003-quota-governance` | **Date**: 2026-10-25 | **Spec**: [spec.md](spec.md)
+**Branch**: `003-quota-governance` | **Date**: 2026-10-25 (updated 2026-11-26, post-audit/post-010) | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `/specs/003-quota-governance/spec.md` (approved, defaults accepted)
 
 ## Summary
@@ -13,13 +13,13 @@ Monitoring alone is estimated to need about 48 LLM requests a day against an obs
 
 Deterministic extraction (story 5) is feasible for HEC and removes its remaining LLM use; it is not feasible for EACEA yet. Observability (story 6) reads persisted counters so numbers survive restarts, and the scheduler logs its interval at startup.
 
-**Migration: yes, one additive Alembic revision is needed** (see "Migration statement"). Nothing in this plan is implemented yet.
+**Migration: yes, one additive Alembic revision is needed** (see "Migration statement"). Nothing in this plan is implemented yet (updated 2026-11-26, post-audit/post-010): still true on 2026-11-26 (audit B-25).
 
 ## Technical Context
 
 **Language/Version**: Python 3.12 (existing)
 **Primary Dependencies**: FastAPI, SQLAlchemy 2, Alembic, APScheduler 3.x (`BackgroundScheduler`), `google-genai` 2.22.0, `beautifulsoup4` (already declared), `prometheus-client` (already used in `core/metrics.py`). **No new dependency.** `zoneinfo` is stdlib and was verified working locally and in the production container.
-**Storage**: PostgreSQL on Neon (pooled endpoint). Three new tables and two small column additions, all additive.
+**Storage**: PostgreSQL on Neon (pooled endpoint). Three new tables and two small column additions, all additive. (updated 2026-11-26, post-audit/post-010): the application connects as `scholarship_app` (no DDL right); migrations run as the owner over the direct URL; the role script is re-run after them.
 **Testing**: pytest with the existing per-test rollback fixture, fake provider and fake clock; no live provider calls in CI; one new scored eval case.
 **Target Platform**: Linux container (podman) on the Oracle VM behind Caddy; single uvicorn worker today, with the scheduler in-process.
 **Project Type**: Backend-only modular monolith (frontend deferred, M-67).
@@ -44,6 +44,25 @@ Deterministic extraction (story 5) is feasible for HEC and removes its remaining
 | Registry write path | Only `upsert_source_by_domain` (`source_repo.py:169`), a full replace except `listing_page_url` and `freshness_window_days`. | Re-seeding production would reset EACEA `failing` to `active`. A dedicated rules/cadence command is added; production is not re-seeded (R-11). |
 | Parsing | `beautifulsoup4` is a declared dependency. | Rule engine needs no new dependency. |
 
+## What changed since 2026-10-25 (updated 2026-11-26, post-audit/post-010)
+
+Feature 010 (deployed 2026-11-20) and the 2026-10-26 audit changed the ground this plan stands on. Each row says what changed, why it matters here, and what this plan now does. Line numbers in the table above were read on 2026-10-25 and have moved; every task re-reads the file before editing it.
+
+| Change | Reason it matters | What the plan now does |
+|---|---|---|
+| Alembic head is `a807daf8460e` (010 security hardening), not `f2b8d4a6c1e3` | A revision with the old `down_revision` would create a second head and break CI and deploy | New revision uses `down_revision = a807daf8460e`; its test reads the head with `alembic heads` first (T254) |
+| The application and CI tests run as `scholarship_app`; migrations run as the owner; the role script is re-run after migrations (`.github/workflows/ci.yml`, runbook section 14) | The three new tables must be usable by the app without a manual grant, and the app has no DDL right | No grants in the revision; the role script's default privileges (`FOR ROLE <owner>`, SELECT/INSERT/UPDATE/DELETE) cover them; the role script is re-run after the migration (deploy task and the CI order are unchanged); a test creates and reads each new table as `scholarship_app` |
+| `web_fetch` rewritten: `safe_get` checks every hop against the public-address rule and pins the connection; `fetch_url` keeps its keyword signature and returns `FetchResult` with `blocked` and `final_url` | Conditional request headers must not weaken or bypass the per-hop check, and must not be sent to a redirect target | Conditional headers are an optional argument of `safe_get`/`fetch_url`, sent on the first request only (like `params`), never forwarded across a redirect; the one-argument `fetch` seam used by `fetch_official` keeps working; a blocked fetch is a site-side failure and is never a provider outcome |
+| `require_operator` exists (`api/deps.py`); `POST /monitoring/runs`, `GET /monitoring/runs/{id}` and `GET /sources/{id}/fetch-log` are operator-only; `GET /monitoring/runs` and `GET /sources/health` stay open to any signed-in user | The old risk row "anyone logged in can trigger a manual monitoring run" is no longer true; the new budget view needs the same gate (FR-OBS-5) | Risk row replaced; the budget and cadence view is a new operator-only read route (decision 9); the new run counters and health fields keep the access level of the route that carries them |
+| `POST /monitoring/runs` accepts no source list: "a run always covers the governed set `run_source_monitor` loads itself" (`api/monitoring.py` docstring, a 002 decision) | Story 3 scenario 6 and T296 say a manual run "may name sources"; no request body changes in api-delta | Not decided here. The manual run checks all due sources; naming sources would change a 002 request body and is listed for the manager (analysis finding A1) |
+| Audit found: ingestion's own log rows defeat the cross-run extraction cache (P4-OF-3) | Discovery re-extracts every source on every click, one LLM call each | New FR-SKIP-8, research R-15, tasks T452-T453 |
+| Audit found: every LLM route except documents answers a provider failure with HTTP 500 (B-57, section 7) | Students get a server error instead of "try again later" | FR-ERR-6 widens the 503 mapping from "allowance spent or paused" to any provider failure (research R-16, tasks T454-T456) |
+| Audit found: classify makes about one LLM call per new candidate and swallows LLM failures (T-05, BR-02) | The quota projection below undercounted spend; a gated classify call can be refused | Projection corrected; classify is gated, counted and logged; its stored result on no-LLM-answer is unchanged and raised as OQ-1 (research R-17) |
+| Model names are constants (B-55) | A paid-tier or model change at 006 should not need a code edit | FR-BUDGET-12: model names from settings, defaults unchanged, tasks T457-T458 |
+| Scheduler tick now rolls back on a database error and 010 added email alert delivery to the run (010 FR-ROLLBACK, FR-MAIL) | The cheap tick must not skip the rollback or the alert step | T300 keeps both; its test injects a database error |
+| `main.py` now adds `BodyLimitMiddleware` and `RateLimitMiddleware` and refuses to start on weak secrets or owner-level credentials | The `user_facing` middleware must sit inside them, and the gate is installed after the start-up checks | T273 states the order and tests it |
+| ADR-0015 and ADR-0016 exist; Blueprint v1.9 and PRD v1.3 are in force | Build order is now 010, 003, 004, 006, 005, 011, 007, 008/009; ADR-0012's order is amended by ADR-0015 | References updated; no requirement ID changed |
+
 ## Constitution Check
 
 *GATE: passed before research; re-checked after design.*
@@ -65,11 +84,11 @@ Deterministic extraction (story 5) is feasible for HEC and removes its remaining
 - `app/core/llm_gate.py` (new): `Priority` {`user_facing`, `backfill`, `monitoring`, `validation`}, `RequestType` {`generate`, `embed`}, a context-variable and `llm_priority(...)` context manager, exceptions `LlmError`, `LlmPriorityMissing`, `LlmBudgetDeferred(retry_at)`, `LlmTemporarilyUnavailable(retry_at, reason)`, `LlmQuotaExhausted`, `LlmProviderError`, `LlmResponseUnparseable`, and a gate registry. No database imports.
 - `app/services/llm_budget.py` + `data/repositories/llm_budget_repo.py` + `models/llm_budget.py` (new): the database-backed gate. Admission order: pause check, then allowance, then ladder floor, then backfill share; one atomic reservation under an advisory transaction lock on its own short session. Policy values in research R-02.
 - `core/llm.py`: acquire before each provider call, translate `APIError` after it, report 429 pauses (daily-quota detection per R-03).
-- `main.py`: install the gate in lifespan; middleware sets `user_facing`; one exception handler maps `LlmTemporarilyUnavailable` to the 503 body in `contracts/api-delta.md`.
+- `main.py`: install the gate in lifespan (after 010's start-up checks); middleware sets `user_facing` and sits inside 010's body-limit and rate-limit middleware; one exception handler maps `LlmTemporarilyUnavailable` and, (updated 2026-11-26, post-audit/post-010), every other `LlmError` and `LlmNotConfiguredError` to the 503 body in `contracts/api-delta.md` (FR-ERR-6, research R-16).
 - Entry-point scopes: monitor run and alert re-match = `monitoring`; candidate validation = `validation`; backfill helper for feature 004 = `backfill`.
 - `doc_pipeline/graph.py:143`: catch `LlmError` so the upload fix keeps returning 201 with `extraction_unavailable`.
 
-**Story 1, unchanged pages (P1).** `services/content_fingerprint.py` (normalisation reuses `clean_html_to_text`), `data/repositories/check_state_repo.py`, `models/check_state.py`; skip logic in `fetch_and_extract_listing`; new `unchanged` result handled in `_monitor_one_source` (own branch: success touch and healthy transition, no change detection, no `mark_seen_verified`, no stale sweep) and in `listing_fetch_tool` (mapped to `cached` for discovery). Conditional requests: `fetch_url` gains optional request headers and 304 handling; used only when validators are trusted. Forced full re-check every `min(7 days, freshness window / 2)`. Back-off and history bootstrap per R-08.
+**Story 1, unchanged pages (P1).** `services/content_fingerprint.py` (normalisation reuses `clean_html_to_text`), `data/repositories/check_state_repo.py`, `models/check_state.py`; skip logic in `fetch_and_extract_listing`; new `unchanged` result handled in `_monitor_one_source` (own branch: success touch and healthy transition, no change detection, no `mark_seen_verified`, no stale sweep) and in `listing_fetch_tool` (mapped to `cached` for discovery). Conditional requests: `safe_get`/`fetch_url` gain optional request headers (first request only, never forwarded across a redirect) and 304 handling; used only when validators are trusted (updated 2026-11-26, post-audit/post-010). **Discovery cache fix (FR-SKIP-8, research R-15)**: `_last_successful_extraction` stops treating ingestion's per-record success rows as extraction rows. Forced full re-check every `min(7 days, freshness window / 2)`. Back-off and history bootstrap per R-08.
 
 **Story 3, cadence (P2).** `services/cadence.py` (pure functions: interval derivation, due selection, stalest-first order, back-off). `run_source_monitor` filters to due sources; a scheduled tick with nothing due and no candidate to validate returns without creating a run row (decision 5). **Every tick, including an idle one, logs exactly one structured line** with the number of sources due, checked, skipped as unchanged and deferred, so the scheduler is provably alive even when no run row is written. Manual runs obey the budget but may name sources and always create a run row. `monitoring_runs` gains skipped and deferred counters.
 
@@ -79,11 +98,11 @@ Deterministic extraction (story 5) is feasible for HEC and removes its remaining
 
 **HEC enablement is gated by a parity check (decision 7).** No HEC category is excluded. Before rules are enabled for HEC: (1) save the real listing page once as a committed fixture; (2) record the LLM's extraction of that exact saved page once as a committed snapshot (one owner-approved request, run under the `one-off backfill` class; tests never call the provider); (3) run the rules over the same saved page; (4) the check passes only if every item in the LLM snapshot is also found by the rules (compared by normalised name), and it prints three lists: `matched`, `LLM-only` (these block enabling), and `rules-only` (flagged for the owner, not blocking); (5) the set-rules command refuses to enable the HEC rule set unless that check passes against the committed fixtures, and the report is shown to the owner before the rule set is switched on in production. A read-only comparison against the stored scholarships is a second, informational report.
 
-**Story 6, visibility (P2).** Scrape-time collector reading the ledger and pause rows; per-source noise flag; one structured startup log line from `start_scheduler`; extended run-finished log line. Series in `contracts/api-delta.md`.
+**Story 6, visibility (P2).** Scrape-time collector reading the ledger and pause rows; (updated 2026-11-26, post-audit/post-010) an operator-only read route `GET /monitoring/budget` (provisional name; `require_operator`; FR-OBS-5; research R-18); per-source noise flag; one structured startup log line from `start_scheduler`; extended run-finished log line. Series in `contracts/api-delta.md`.
 
 ## Migration statement
 
-**Yes. One additive Alembic revision is needed**, with `down_revision = f2b8d4a6c1e3` (the current head). Contents:
+**Yes. One additive Alembic revision is needed**, with `down_revision = a807daf8460e` (the current head, 010's security-hardening revision; was `f2b8d4a6c1e3` on 2026-10-25) (updated 2026-11-26, post-audit/post-010). Contents:
 
 1. Create `llm_budget_ledger` and `llm_budget_state`.
 2. Create `source_check_state` (foreign key to `source_registry.id`).
@@ -93,6 +112,7 @@ Deterministic extraction (story 5) is feasible for HEC and removes its remaining
 Properties for you as the person applying it:
 - **Additive only**: no column is altered or dropped, no data is rewritten, no CHECK constraint is added; the two integer columns use a constant default, which is metadata-only on current PostgreSQL, and the nullable column needs no rewrite.
 - **Backward compatible**: the code running in production today ignores the new tables and columns, so the safe order is migrate first, then deploy, with no downtime and no coordinated cutover.
+- **Privileges** (updated 2026-11-26, post-audit/post-010): the revision grants nothing. It runs as the owner; the role script's default privileges (`FOR ROLE <owner>`) make the new tables usable by `scholarship_app`, and the role script is re-run after the migration (runbook section 14, same as CI). `audit_log` and `alembic_version` rules are untouched.
 - **Rollback**: redeploying the previous code is safe at any time; `alembic downgrade -1` drops the new objects and loses only budget history, check state and the `outcome` annotations.
 - **No data migration**; the fetch-history bootstrap for back-off (research R-08) is done lazily in code when a state row is first created.
 - Table details: `data-model.md`. I will write the revision file in the tasks/implementation phase; I will not apply it.
@@ -108,6 +128,8 @@ No migration is needed for the interval override or the rule set (stored in the 
 | A day when HEC's page changes | ~48 (E) | HEC 0 with rules; 1 without rules (E) |
 
 Against the approved success criteria: SC-001 asks for at most 4 on a quiet day (met with margin); SC-007 asks for the reserve of 8 to stay available (guaranteed by the ladder).
+
+(updated 2026-11-26, post-audit/post-010) **Correction.** The table above counts extraction calls only. Every new candidate also costs about one `classify` call (T-05, BR-02: measured under mocks as 1 per candidate, not on real pages). So a day on which a monitored page gains k scholarships costs k extra requests (HEC with rules: 0 + k; EACEA or HEC without rules: 1 + k). On a quiet day (no new candidates) the table stands. On a busy day the monitoring class is admitted only while used requests stay below 10 of 20 (the ladder), so the largest day's classify load is bounded and the rest is deferred and counted, but a deferred classify call is not retried (OQ-1). SC-014 makes this visible after deploy (background requests per day beside new candidates per day) instead of assuming it. The pre-003 estimate of about 48 a day is for the 60-minute tick; on today's 360-minute stopgap it is about 8 (E).
 
 ## Project Structure
 
@@ -132,7 +154,7 @@ backend/app/
 ├── core/
 │   ├── llm.py                      # modified: acquire/translate/report
 │   ├── llm_gate.py                 # new: priority, exceptions, context, registry
-│   ├── config.py                   # modified: budget, cadence, rules settings
+│   ├── config.py                   # modified: budget, cadence, rules settings, model names (updated 2026-11-26, post-audit/post-010)
 │   └── metrics.py                  # modified: budget collector, noise gauge
 ├── models/
 │   ├── llm_budget.py               # new: ledger, state
@@ -144,7 +166,7 @@ backend/app/
 │   ├── check_state_repo.py         # new
 │   └── source_repo.py              # modified: streak query, log_fetch outcome, rules/cadence setter
 ├── services/
-│   ├── llm_budget.py               # new: DB-backed gate, day boundary, error parsing
+│   ├── llm_budget.py               # new: DB-backed gate, day boundary, error parsing, budget-view read
 │   ├── content_fingerprint.py      # new
 │   ├── cadence.py                  # new
 │   ├── coverage.py                 # modified: ignore provider_* in failed counts
@@ -161,7 +183,7 @@ backend/app/
 ├── agents/discovery/agent.py       # modified: handle new statuses
 ├── scheduling/scheduler.py         # modified: cheap tick, startup log
 ├── schemas/{source,monitoring,health}.py   # modified
-├── api/{health,monitoring}.py      # modified
+├── api/{health,monitoring}.py      # modified; monitoring.py gains the operator-only budget view (updated 2026-11-26, post-audit/post-010)
 ├── data/seeds/seed_sources.yaml    # modified: HEC rule set (disabled until parity passes)
 └── main.py                         # modified: install gate, middleware, 503 handler
 backend/migrations/versions/<rev>_quota_governance.py   # new (written in implementation)
@@ -175,9 +197,9 @@ backend/tests/fixtures/hec/{listing.html,llm_snapshot.json}          # recorded 
 ## Rollout
 
 1. Merge the slices below to `main` one at a time (each green in CI). Suggested slices, which `/sp.tasks` will refine: (1) schema, gate, priority scopes, 503 handler (story 2); (2) provider outcomes and health exclusions (story 4); (3) fingerprint and unchanged path (story 1); (4) cadence and cheap tick (story 3); (5) rule engine, HEC rules, parity check and set-rules commands (story 5); (6) metrics, startup log, eval case, runbook update (story 6).
-2. **You apply the migration** before the first deploy that needs it.
+2. **You apply the migration** before the first deploy that needs it (updated 2026-11-26, post-audit/post-010): owner-run, as the owner role over the direct URL, then re-run the role script, then recreate the containers in the runbook section 10 order, following the pattern of runbook section 15 (new runbook section 16, tasks T463-T468).
 3. Deploy, verify `/health`, check the startup log line shows the interval and budget settings.
-4. Change `MONITORING_INTERVAL_MINUTES` from 360 back to 60 (or leave it; cost no longer depends on it).
+4. Change `MONITORING_INTERVAL_MINUTES` from 360 back to 60 (or leave it; cost no longer depends on it). (updated 2026-11-26, post-audit/post-010): owner decision after the first week of measurements (T326); until then 360 stays.
 5. Record the HEC fixture and LLM snapshot (one request), run the parity check, send the owner the report (matched / LLM-only / rules-only), and only if it passes and the owner agrees enable the HEC rule set with the set-rules command (never by re-seeding production).
 6. Measure for 7 days against SC-001.
 
@@ -192,7 +214,10 @@ backend/tests/fixtures/hec/{listing.html,llm_snapshot.json}          # recorded 
 | Other consumers of the same key (laptop, smoke tests) | Provider signal is authoritative and visible as `discrepancy` |
 | HEC rules find a different set from the LLM (38 unique names on the page vs 32 from the LLM) | Parity check on a saved page against a recorded LLM snapshot; enabling requires rules to find everything the LLM found; every difference is reported to the owner; no category is excluded (decision 7) |
 | Re-running the seed on production resets source status | Dedicated set-rules command; documented in the runbook; production is not re-seeded |
-| Anyone logged in can trigger a manual monitoring run | Runs obey the budget (bounded harm); operator restriction is in feature 004 (ADR-0012) |
+| ~~Anyone logged in can trigger a manual monitoring run~~ (updated 2026-11-26, post-audit/post-010): closed by 010 (operator-only, audited) | New risks below |
+| Classify calls consume the allowance and a refused call is silent in what it stores (T-05) (updated 2026-11-26, post-audit/post-010) | Gated and counted; the busiest day is bounded by the ladder; SC-014 measures it; OQ-1 asks the manager whether to go further |
+| The new tables are not usable by the restricted role (updated 2026-11-26, post-audit/post-010) | Default privileges plus the role script re-run; a test as `scholarship_app` creates and reads each table; the deploy re-runs the role script before recreating containers |
+| The discovery cache fix changes which rows count as an extraction (updated 2026-11-26, post-audit/post-010) | Test starts at `POST /discovery` with ingestion rows present; retention floor (c) is checked for the same confusion (T453) |
 
 ## Decisions (reviewed and settled 2026-10-25)
 
@@ -203,10 +228,19 @@ backend/tests/fixtures/hec/{listing.html,llm_snapshot.json}          # recorded 
 5. **Quiet scheduled ticks create no `monitoring_runs` row: accepted, with one addition.** Every tick logs one line with sources due / checked / skipped (and deferred) so the scheduler is provably alive. Manual runs always create a row.
 6. **Temporary-unavailable = HTTP 503 with `Retry-After`** and a JSON body: accepted.
 7. **HEC rollout: changed.** No category is excluded. Rules are enabled for HEC only after a parity check (rules find at least everything the LLM found, on one saved page with a recorded LLM snapshot, no live call in tests); all differences are flagged to the owner (see Story 5).
+8. **Added 2026-11-26 (owner-approved, audit-driven)**: model names come from configuration with unchanged defaults and no model change (FR-BUDGET-12; ADR-0012 keeps that at 006).
+9. **Operator-only budget and cadence view** through `require_operator`, route name provisional (FR-OBS-5).
+10. **Any provider failure on an LLM route is the temporary-unavailable answer**, not only an exhausted allowance (FR-ERR-6); document upload keeps 201 `extraction_unavailable`.
+11. **The extraction cache is fixed in 003** (FR-SKIP-8), by reading only the source's own listing-extraction rows.
+
+## Open questions for the manager (updated 2026-11-26, post-audit/post-010)
+
+- **OQ-1 (classify under the gate)**: `tools/classify.py:140` catches every exception and falls back to the rules result, so a refused or failed LLM call silently leaves funding, degree and similar fields unresolved for a new record (T-05, P4-NZ-1). Under the gate this happens by design on busy days. 003 gates, counts and logs those calls and does not change what is stored, because what a record means is ADR-0013 and feature 004. Decision needed: leave as is until 004/006, or ask 003 to make a deferred classify call skip ingestion of that candidate so it is retried next run.
+- **OQ-2 (audit of the rules commands)**: 010's audit action set is closed (`AUDIT_ACTIONS` in `audit_repo.py`) and each row needs a user id; the `set` command has no signed-in user. Decision needed: should `set` write an audit row (add `source.rules.set` and an operator email argument) or only log. Not blocking the documents; the task T317 stays as written until decided.
 
 ## Architecture decision record
 
-ADR-0014 (`adr/0014-llm-budget-gate-and-fetch-outcomes.md`, Accepted 2026-10-25) records the central LLM budget gate, the reserve ladder, provider-signal pauses, the Postgres counter store, the 503 refusal, the `outcome` column with the provider-failure exclusion (which amends ADR-0008's failed-run definition), and the unchanged-page skip semantics. It uses the repo's `adr/` convention.
+ADR-0014 (`adr/0014-llm-budget-gate-and-fetch-outcomes.md`, Accepted 2026-10-25; not edited here) records the central LLM budget gate, the reserve ladder, provider-signal pauses, the Postgres counter store, the 503 refusal, the `outcome` column with the provider-failure exclusion (which amends ADR-0008's failed-run definition), and the unchanged-page skip semantics. It uses the repo's `adr/` convention.
 
 ## Complexity Tracking
 
