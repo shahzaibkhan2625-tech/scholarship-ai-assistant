@@ -80,7 +80,7 @@ Today every monitored source is checked on every scheduler tick regardless of ho
 3. **Given** an operator override of a source's check interval, **When** the next tick runs, **Then** the override is used instead of the derived interval.
 4. **Given** any derived or overridden interval, **When** it would exceed the source's freshness window, **Then** the system shortens it or flags the conflict so that records never turn stale solely because of the schedule.
 5. **Given** several sources due at once and not enough budget for all, **When** the run starts, **Then** the stalest source is checked first and the rest are deferred to the next tick, so no source is starved indefinitely.
-6. **Given** a manual on-demand monitoring run, **When** the operator triggers it, **Then** it checks due sources (or those the operator names) and still obeys the budget.
+6. **Given** a manual on-demand monitoring run, **When** the operator triggers it, **Then** it checks all due sources and still obeys the budget (updated 2026-11-26, manager decisions): the 002 route and its body are unchanged, so the operator cannot name sources.
 
 ---
 
@@ -152,7 +152,7 @@ The operator can see at any time how much of today's allowance has been used, by
 - **Conditional-request mismatch**: a server that claims "not modified" while the content has changed is caught by the periodic forced full check described in the requirements.
 - **Records going stale**: a long cadence combined with deferrals must not cause records to become stale before their freshness window; the system flags the risk rather than letting it happen silently.
 - **Manual runs and discovery**: on-demand monitoring runs and student-triggered discovery draw from the same budget as scheduled work, in their own priority class. (updated 2026-11-26, post-audit/post-010): since 010 only an operator can start a manual run; discovery stays open to any signed-in user.
-- **Classification spends the allowance too** (updated 2026-11-26, post-audit/post-010): a first run or a changed page that yields N new candidates costs up to N more `classify` requests (T-05, BR-02). They pass the same gate under the caller's class, so a deferred or refused classify call is counted and is no longer silent; what a record stores when classify gets no LLM answer is today's behaviour and is not changed here (plan.md, open question OQ-1).
+- **Classification spends the allowance too** (updated 2026-11-26, post-audit/post-010): a first run or a changed page that yields N new candidates costs up to N more `classify` requests (T-05, BR-02). They pass the same gate under the caller's class, so a deferred or refused classify call is counted and is no longer silent; what a record stores when classify gets no LLM answer is unchanged, and the record is queued for a later attempt (FR-BUDGET-13) (updated 2026-11-26, manager decisions).
 - **Paid tier later**: a much larger allowance must work with no code change; the guard simply has more headroom.
 
 ## Requirements *(mandatory)*
@@ -171,6 +171,7 @@ The operator can see at any time how much of today's allowance has been used, by
 - **FR-BUDGET-10**: One-off backfill work MUST be able to drain over several days within a per-day share, without ever consuming the user-facing reserve.
 - **FR-BUDGET-11**: The allowance, reserve and day boundary MUST be changeable by configuration alone, so a future paid-tier decision (ADR-0012, feature 006) needs no code change.
 - **FR-BUDGET-12** (updated 2026-11-26, post-audit/post-010): The generation and embedding model names MUST come from configuration, with defaults equal to today's names (`models/gemini-2.5-flash`, `models/gemini-embedding-001`), so nothing changes unless an operator sets them. Changing the model is NOT part of this feature; ADR-0012 keeps that decision at feature 006. The embedding vector size stays fixed (768) because stored vectors depend on it. *(Traced to audit B-55.)*
+- **FR-BUDGET-13** (updated 2026-11-26, manager decisions): When a `classify` LLM call is refused by the gate or fails on the provider side, the record MUST be stored exactly as today (dimensions the rules could not resolve stay `value=None` with confidence "unknown"; nothing is guessed) AND the record MUST be added to a small pending-classification queue. A scheduler step MUST drain the queue under the backfill class when the budget admits it, re-run classify for that record's text, and fill ONLY dimensions that are still unknown; it MUST NOT overwrite a known value. Each attempt MUST be logged, and the queue size MUST be shown in the operator budget view (FR-OBS-1, FR-OBS-5). The queue is its own table (record id, queued at, attempts, last reason), not a column on scholarships, so what a record means stays a feature 004 matter (ADR-0013). *(Manager decision 2026-11-26 on audit T-05/BR-02; PRD NFR-REL-4 "defer, not fail" and NFR-REL-6.)*
 
 ### Functional Requirements: Change detection (FR-SKIP)
 
@@ -199,7 +200,7 @@ The operator can see at any time how much of today's allowance has been used, by
 - **FR-ERR-3**: A provider-side failure MUST NOT modify, close, expire or empty any existing scholarship record, and MUST NOT be presented as "no scholarships found" (PRD FR-VERIFY-6).
 - **FR-ERR-4**: Recorded reasons MUST be short and MUST NOT contain secrets, credentials, or page content.
 - **FR-ERR-5**: The health view MUST show provider-side failures separately from site fetch failures.
-- **FR-ERR-6** (updated 2026-11-26, post-audit/post-010): Every route that reaches the LLM (match-url, match, Q&A, discovery, CV and SOP generation, CV import, documents) MUST answer ANY provider failure (quota, outage, unparseable response, provider not configured) with the same clear temporary-unavailable response as FR-BUDGET-5 (HTTP 503, a retry time and a short non-secret reason; shape in `contracts/api-delta.md`), never HTTP 500. Document upload keeps its existing result for this case (HTTP 201 with `extraction_unavailable`, the upload fix), which is also a clear temporary-unavailable answer and never a 500. *(Traced to audit B-57 and the section 7 "Error taxonomy: provider failure" row.)*
+- **FR-ERR-6** (updated 2026-11-26, post-audit/post-010): Every route that reaches the LLM (match-url, match, Q&A, discovery, CV and SOP generation, CV import, documents) MUST answer ANY provider failure (quota, outage, unparseable response, provider not configured) with the same clear temporary-unavailable response as FR-BUDGET-5 (HTTP 503, a retry time and a short non-secret reason; shape in `contracts/api-delta.md`), never HTTP 500. The document-upload route keeps its existing answer for this case, explicitly: HTTP 201 with `extraction_unavailable` (the upload fix); that is also a clear temporary-unavailable answer and never a 500 (updated 2026-11-26, manager decisions). *(Traced to audit B-57 and the section 7 "Error taxonomy: provider failure" row.)*
 
 ### Functional Requirements: Deterministic extraction (FR-RULES)
 
@@ -208,14 +209,15 @@ The operator can see at any time how much of today's allowance has been used, by
 - **FR-RULES-3**: When rules match nothing, the system MUST fall back to the LLM (subject to the budget) and flag the rules for review; it MUST NOT silently return an empty result.
 - **FR-RULES-4**: A rules result that departs sharply from the previous extraction MUST be flagged for the operator before it is applied.
 - **FR-RULES-5**: Extraction rules are human-defined governed configuration; the LLM MUST NOT author or activate rules on its own (constitution Principle IV).
+- **FR-RULES-6** (updated 2026-11-26, manager decisions): The operator command that sets rules or the check interval (`set`) MUST write a feature 010 audit row: action `source.rules.set`, `user_id` = the operator named by a required `--operator-email` argument, entity `source:<uuid>`. The command MUST refuse (and change nothing) if that email does not belong to an existing operator. See deviation D-1.
 
 ### Functional Requirements: Observability (FR-OBS)
 
-- **FR-OBS-1**: The system MUST expose, to the operator, for the current budget day: requests used and remaining by priority class and request type, the reserve, deferred count, skipped-unchanged count, provider-exhaustion count, local-versus-provider discrepancies, and the reset time.
+- **FR-OBS-1**: The system MUST expose, to the operator, for the current budget day: requests used and remaining by priority class and request type, the reserve, deferred count, skipped-unchanged count, provider-exhaustion count, local-versus-provider discrepancies, and the reset time; (updated 2026-11-26, manager decisions) also the number of records waiting in the pending-classification queue (FR-BUDGET-13).
 - **FR-OBS-2**: At scheduler startup the system MUST log the effective monitoring tick interval, the per-frequency cadence defaults and any per-source overrides, and the budget settings (allowance, reserve, day boundary), without logging any secret.
 - **FR-OBS-3**: Each monitoring run's summary MUST state how many sources were checked, skipped as unchanged, deferred for budget, and failed, so the cost of a run is explainable after the fact.
 - **FR-OBS-4**: Metrics access control MUST NOT be weakened by this feature. (updated 2026-11-26, post-audit/post-010): today `/metrics` needs the metrics bearer token and is not exposed through Caddy (010 post-deploy check 6); both stay as they are.
-- **FR-OBS-5** (updated 2026-11-26, post-audit/post-010): The budget and cadence view (the FR-OBS-1 numbers plus each source's interval, last check, next due time, noisy flag and rules-review flag) MUST be available to an operator through an API route that uses the existing `require_operator` dependency from feature 010: a signed-in non-operator gets 403 and an anonymous caller 401. It is read-only. *(Owner decision 2026-11-26.)*
+- **FR-OBS-5** (updated 2026-11-26, post-audit/post-010): The budget and cadence view (the FR-OBS-1 numbers (including the classification queue size) plus each source's interval, last check, next due time, noisy flag and rules-review flag) MUST be available to an operator through an API route that uses the existing `require_operator` dependency from feature 010: a signed-in non-operator gets 403 and an anonymous caller 401. It is read-only. *(Owner decision 2026-11-26.)*
 
 ### Process rules (Blueprint §23) (updated 2026-11-26, post-audit/post-010)
 
@@ -235,9 +237,11 @@ The operator can see at any time how much of today's allowance has been used, by
 | Provider-failure fields in the health views (FR-ERR-5) | `GET /sources/health`, `GET /sources/{id}/fetch-log` | those routes |
 | Run counters (FR-OBS-3) | `GET /monitoring/runs`, `GET /monitoring/runs/{id}` | those routes |
 | Budget metrics and noisy-source gauge (FR-OBS-1, FR-SKIP-7) | `GET /metrics` | the route with and without the token |
-| Operator-only budget and cadence view (FR-OBS-5) | `GET /monitoring/budget` (provisional name) | the route as operator, non-operator and anonymous |
+| Operator-only budget and cadence view (FR-OBS-5) | `GET /monitoring/budget` (approved 2026-11-26) | the route as operator, non-operator and anonymous |
 | Startup log (FR-OBS-2) | application start (`start_scheduler`) | starting the app |
 | Ledger pruning | the daily retention job | the scheduled job function |
+| Pending-classification queue: enqueue on refusal, drain under the backfill class (FR-BUDGET-13) | the scheduler tick (drain step); `POST /discovery` and the monitoring run (enqueue, through ingestion) | the tick function; the route and the run, with a refusing fake gate |
+| Rules command audit and operator check (FR-RULES-6) | operator CLI `python -m app.services.source_rules set` | the CLI `main` |
 | Model names from configuration (FR-BUDGET-12) | application start, then a gated call | building `Settings`, then `generate_text` |
 | Extraction rules: set, parity, diff, record-snapshot (FR-RULES-1..5) | operator CLI `python -m app.services.source_rules` | the CLI `main` |
 | Deploy of 003 and its post-deploy checks | runbook section 16 on the VM | the post-deploy check list |
@@ -252,7 +256,7 @@ The operator can see at any time how much of today's allowance has been used, by
 - A dashboard (frontend is deferred); this feature exposes numbers, not a screen.
 - Per-student quotas or billing (SaaS, deferred by PRD §30).
 - (updated 2026-11-26, post-audit/post-010): Making manual monitoring runs operator-only, the redirect-safe fetch and the least-privilege database role (all delivered by 010; this feature only builds on them).
-- (updated 2026-11-26, post-audit/post-010): Reducing the number of `classify` calls per new candidate (rules-first or batched classification) and fixing what `classify` stores when it gets no LLM answer (P4-NZ-1, P4-CT-3: data-quality work for features 004 and 006); 003 only gates and counts those calls (plan.md, OQ-1).
+- (updated 2026-11-26, post-audit/post-010): Reducing the number of `classify` calls per new candidate (rules-first or batched classification) and fixing what `classify` stores when it gets no LLM answer (P4-NZ-1, P4-CT-3: data-quality work for features 004 and 006); 003 only gates, counts and defers those calls (FR-BUDGET-13) (updated 2026-11-26, manager decisions).
 
 ### Key Entities
 
@@ -262,6 +266,7 @@ The operator can see at any time how much of today's allowance has been used, by
 - **Content Fingerprint**: per monitored source, a noise-insensitive summary of the page at the last successful extraction, plus any conditional-request validators and a reference to that extraction's outcome.
 - **Check Schedule**: per source, its effective interval (derived or overridden), last check, next due time, and consecutive unchanged or noisy checks.
 - **Provider Error Outcome**: a fetch-history entry whose reason class is quota, provider error or unparseable response, distinct from a site fetch failure.
+- **Pending Classification Entry** (updated 2026-11-26, manager decisions): a record whose classify call was refused or failed, with when it was queued, how many attempts were made and the last reason; removed when it has been classified.
 - **Extraction Rule Set**: operator-defined, per-source rules, with a review flag raised when they stop matching or produce an anomalous result.
 
 ## Assumptions
@@ -275,6 +280,11 @@ The operator can see at any time how much of today's allowance has been used, by
 - Live smoke tests and developer use of the same key remain outside the local count; the provider's exhaustion signal covers them.
 - (updated 2026-11-26, post-audit/post-010): The new tables work as the least-privilege role `scholarship_app`: migrations run as the owner, the role script (`backend/scripts/db/create_app_role.sql`) is re-run after them, and its default privileges grant the application SELECT, INSERT, UPDATE and DELETE on tables the owner creates (010, runbook section 14). No new database role and no DDL right for the application.
 - (updated 2026-11-26, post-audit/post-010): Classification calls are part of the load this feature governs. The default allowance of 20 a day is unchanged; whether it is enough once classify and feature 004's re-extraction run is measured after deploy (SC-014), not assumed.
+
+### Deviations from the Blueprint, PRD and ADRs (updated 2026-11-26, manager decisions)
+
+- **D-1**: the rules `set` command is audited (FR-RULES-6). This extends PRD NFR-SEC-7's list of audited actions (sign-up, source approval and rejection, manual monitoring runs, submission approvals, operator grants) by one action, `source.rules.set`. The manager amends the PRD and the Blueprint when 003 closes; 010's closed audit action set gains the new action.
+- **D-2**: FR-ERR-6 extends the temporary-unavailable answer of ADR-0014 decision 6 from "allowance spent or paused" to any provider failure on a user-facing route. ADR-0014 carries a dated amendment note (original text unchanged). The manager updates the Blueprint §22 003 row when 003 closes.
 
 ### Defaults chosen for your review
 
@@ -305,3 +315,4 @@ These are the places where I picked a reasonable default instead of asking. Chan
 - **SC-013** (updated 2026-11-26, post-audit/post-010): The budget and cadence view returns 403 to a signed-in non-operator, 401 to an anonymous caller and the numbers to an operator, in 100% of cases (FR-OBS-5).
 - **SC-014** (updated 2026-11-26, post-audit/post-010): After deploy, the 7-day measurement behind SC-001 reports background requests per day next to the number of new candidates ingested that day (two read-only queries), so the share caused by classify calls is visible and not assumed.
 - **SC-015** (updated 2026-11-26, post-audit/post-010): Every capability of this feature appears in the entry-point map with a test whose first call is its entry point (FR-PROC-1), and the tasks audit confirms it.
+- **SC-016** (updated 2026-11-26, manager decisions): When classify is refused or fails for a new record, the record is stored unchanged with no dimension guessed and appears in the queue in 100% of fixture cases; once the budget admits, the drain step fills only dimensions still unknown and overwrites 0 known values (FR-BUDGET-13).

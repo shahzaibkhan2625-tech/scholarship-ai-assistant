@@ -1,6 +1,6 @@
 # API Contract Delta: 003 Quota Governance
 
-(updated 2026-11-26, post-audit/post-010): one new read-only endpoint (section 5, operator-only; name provisional) and the 503 mapping widened (section 1). Three existing response shapes change, and `/metrics` gains series. The OpenAPI contract file and the drift tests must be updated together with the code (updated 2026-11-26, post-audit/post-010): the live drift contract today is `specs/002-source-monitoring-hardening/contracts/openapi.yaml` (`CONTRACT_PATH` in `tests/api/test_openapi_contract_002.py`); 003 copies it to its own folder (T276) and does not edit the 001 or 002 files.
+(updated 2026-11-26, post-audit/post-010): one new read-only endpoint (section 5, operator-only; `GET /monitoring/budget`, approved 2026-11-26) and the 503 mapping widened (section 1). Three existing response shapes change, and `/metrics` gains series. The OpenAPI contract file and the drift tests must be updated together with the code (updated 2026-11-26, post-audit/post-010): the live drift contract today is `specs/002-source-monitoring-hardening/contracts/openapi.yaml` (`CONTRACT_PATH` in `tests/api/test_openapi_contract_002.py`); 003 copies it to its own folder (T276) and does not edit the 001 or 002 files.
 
 ## 1. Temporary-unavailable response on LLM-backed routes (FR-BUDGET-5)
 
@@ -58,14 +58,15 @@ Same authentication as today. New series (names provisional, finalised in tasks)
 
 Values are read from the database at scrape time, so they survive restarts and agree across workers.
 
-## 5. Budget and cadence view (FR-OBS-5) (updated 2026-11-26, post-audit/post-010)
+## 5. Budget and cadence view (FR-OBS-5, approved new endpoint) (updated 2026-11-26, post-audit/post-010)
 
-`GET /monitoring/budget` (provisional name). Dependency `require_operator` (010): 401 without a valid token, 403 for a signed-in non-operator (`{"detail": "Operator access required"}`), 200 for an operator. Read-only; no request body; no write path.
+`GET /monitoring/budget` (approved by the manager 2026-11-26 as a new operator-only endpoint; the earlier statement "no new endpoints" no longer holds). Dependency `require_operator` (010): 401 without a valid token, 403 for a signed-in non-operator (`{"detail": "Operator access required"}`), 200 for an operator. Read-only; no request body; no write path.
 
 ```
 {
   "budget_day": "2026-11-26",
   "reset_at": "2026-11-27T08:00:00Z",
+  "classify_pending": 0,
   "request_types": {
     "generate": {"allowance": 20, "reserve": 8, "used": {"user_facing": 0, "backfill": 0, "monitoring": 0, "validation": 0},
                  "remaining": 20, "deferred": 0, "denied": 0, "provider_exhausted": 0, "discrepancy": 0,

@@ -62,6 +62,22 @@ State transitions:
 - Zero grounded candidates on an unchanged page: increment `backoff_level`, set `next_attempt_at = now + min(60 min * 2^level, cadence interval)`.
 - Deferred by budget or pause: set `next_attempt_at` to the retry time; do **not** touch the fingerprint.
 
+## New table: `classify_pending` (updated 2026-11-26, manager decisions)
+
+The pending-classification queue (spec FR-BUDGET-13). One row per record whose classify LLM call was refused or failed. A separate table, not a column on scholarships, so what a record means stays feature 004's matter (ADR-0013).
+
+| Column | Type | Notes |
+|---|---|---|
+| `scholarship_id` | `uuid` PK, FK to `scholarships.id` | The record to classify again |
+| `queued_at` | `timestamptz` NOT NULL | |
+| `attempts` | `integer` NOT NULL DEFAULT 0 | Drain attempts so far; every attempt is also logged |
+| `last_reason` | `varchar(32)` NULL | `budget_deferred`, `provider_quota`, `provider_error`, `provider_parse`, `not_configured`; never provider text |
+| `last_attempt_at` | `timestamptz` NULL | |
+
+- The drain step reads the oldest rows first, runs under the backfill class, and deletes the row once classify has produced an answer; it fills only dimensions still unknown.
+- Covered by the role script's default privileges (SELECT, INSERT, UPDATE, DELETE), like the other new tables; the role script is re-run after the migration.
+- Queue size is the row count; it is shown in the operator view and as a gauge.
+
 ## Changed table: `source_fetch_log`
 
 | Change | Detail |
@@ -83,7 +99,7 @@ Both are metadata-only additions on current PostgreSQL (constant default), so th
 
 ## Privileges and migration parent (updated 2026-11-26, post-audit/post-010)
 
-- The revision is run as the owner with `down_revision = a807daf8460e` (010's head). It contains no GRANT. The role script `backend/scripts/db/create_app_role.sql` is re-run after the migration; its default privileges (`FOR ROLE <owner>`) give `scholarship_app` SELECT, INSERT, UPDATE and DELETE on all three new tables, which is all they need (increment, upsert, prune by retention).
+- The revision is run as the owner with `down_revision = a807daf8460e` (010's head). It contains no GRANT (it creates four tables, `classify_pending` included). The role script `backend/scripts/db/create_app_role.sql` is re-run after the migration; its default privileges (`FOR ROLE <owner>`) give `scholarship_app` SELECT, INSERT, UPDATE and DELETE on all three new tables, which is all they need (increment, upsert, prune by retention).
 - No new role, no DDL right for the application, no change to `audit_log` or `alembic_version` rules.
 - `source_fetch_log` rows written by ingestion for a single record (`items_found = 1`, no fetched URL) are not extraction rows; FR-SKIP-8 reads only rows that have a fetched URL (research R-15). No column is added for this.
 

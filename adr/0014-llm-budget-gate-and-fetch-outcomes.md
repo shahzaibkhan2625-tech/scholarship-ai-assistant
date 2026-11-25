@@ -58,3 +58,7 @@ Treat the following as one cluster, because the pieces only work together and wo
 - Spec: `specs/003-quota-governance/spec.md` (FR-BUDGET, FR-SKIP, FR-CADENCE, FR-ERR, FR-OBS)
 - Related ADRs: ADR-0008 (source health derivation: its failed-run definition is amended here), ADR-0011 (retention floors share that definition), ADR-0012 (free-tier stance and build order), ADR-0013 (verification semantics, unaffected), ADR-0007 (re-match budget: deferral skips a pair)
 - Evidence: `docs/blueprint-gap-analysis.md` (M-23, M-33, M-35, M-36)
+
+## Amendments
+
+- 2026-11-26, feature 003 update: FR-ERR-6 extends the temporary-unavailable answer of decision 6 from "allowance spent or paused" to any provider failure on a user-facing route.
