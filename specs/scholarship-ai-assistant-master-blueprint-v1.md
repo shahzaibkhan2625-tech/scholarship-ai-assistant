@@ -1,4 +1,4 @@
-# Scholarship AI Assistant — Master Blueprint v1.8
+# Scholarship AI Assistant — Master Blueprint v1.9
 
 **Status:** Implementation-ready · **Audience:** Claude Code sessions + human developers · **Build method:** Spec-Driven, phase- and session-independent
 
@@ -15,6 +15,8 @@
 **v1.7 change theme (2026-10-25):** records the decisions taken **after Phase 5 shipped** that the v1.6 text did not cover, without redesigning the architecture or adding any agent. A **gap analysis** (`docs/blueprint-gap-analysis.md`) compared this blueprint and the PRD with the built system and found the main gaps: stored records carry little matchable data, monitoring alone exceeds the free LLM quota, source coverage is thin, and "verified" claimed more than was known. Decisions: stay on the **free LLM tier** until feature 006 (ADR-0012); **pull large-scale source expansion forward** from Phase 6 and build in the order **003 → 004 → 006 → 005 → 007 → 008/009** (ADR-0012); **restrict source approval to operators** (ADR-0012); **"verified" means confirmed on the scholarship's own official page** with deadline and eligibility, and listing-only records get a weaker **`listed`** status (ADR-0013); a **central LLM budget** with priority classes, unchanged-page skip, per-source cadence, and provider failures kept out of source health (ADR-0014, feature 003); **country names and aliases** in matching (feature 005); a temporary **360-minute monitoring interval** until feature 003 ships. See §22 (post-Phase-5 roadmap) and §46 (v1.7 changelog).
 
 **v1.8 change theme (2026-10-27):** records the outcome of a **full-project audit** (`docs/full-project-audit.md`, merged 2026-10-26) that compared every section of this blueprint and the PRD with the code, and the owner decisions taken on it. The audit found that the **five agents were built as plain functions without the OpenAI Agents SDK**, that **MCP** and **LangGraph checkpoints / human-in-the-loop pauses** were never built, and that several **§19 security controls** are missing. v1.8 adds two feature folders — **010 security hardening (runs first)** and **011 agent layer (all five agents on the OpenAI Agents SDK, after 005)** — amends the build order (**ADR-0015**), adds three process rules (entry-point rule, deviation stop rule, pre-flight; §23), and records how session handoff actually works (§42). **No agent is added or removed (still 5); no requirement is removed; nothing is deleted.** See §47.
+
+**v1.9 change theme (2026-11-21):** records the delivery of **feature 010 (security hardening)** — merged to `main` on 2026-11-02, deployed to the cloud VM on 2026-11-20, all eight post-deploy checks passed on 2026-11-21 — and the five decisions taken while specifying and deploying it (010 spec D-1…D-5, **ADR-0016**): the user-URL address check now covers **every redirect hop**, which **supersedes** the redirect residual risk accepted in ADR-0010/0011; the operator-only set is **six capabilities**, the owner is the **only operator**, and operator status is set **only by a server command**; **granting operator status is audited**; **Gmail (App Password)** is the mail provider; and on Neon the app-role password is set with **`ALTER ROLE … WITH PASSWORD` sent over stdin**, because Neon rejects the pre-hashed password that psql's `\password` sends. It also records the hosting that was already in use but never written down. **No agent is added or removed (still 5); no requirement is removed; nothing is deleted.** See §48.
 
 **v1.6 change theme:** integrates 5 production-grade concepts **without adding any new agent**. *Consolidations:* names the **Agent Loop & Human Gates** pattern (§7.0) and the **Harness** model+constraints+verification frame (§9.1). *New:* **Evals & the Checker** — scored grading with a CI score-regression gate, established early (§25.1, §22 Phase 0/1). *Timing:* a **minimal deployable cloud runtime** lands at end of Phase 2, not Phase 5 (§22, §21). *Excluded:* the **FDE (Forward Deployed Engineer)** positioning material is **positioning, not architecture** — it lives in a separate README/positioning doc, not this blueprint. See §45 (v1.6 changelog).
 
@@ -545,6 +547,11 @@ generated_documents(id, user_id, application_id, type[CV/SOP/motivation], file_r
 tasks(id, application_id, description, category, status, due_date)
 matches(id, user_id, scholarship_id, verdict, matched[], failed[], unknown[], missing_docs[], created_at)
 audit_log(id, user_id, action, entity, at)
+-- Amended 2026-11-20 (v1.9, feature 010, ADR-0016): audit_log built as above. action is a closed set:
+--   user.signup, source.approve, source.reject, monitoring.run.manual, submission.approve, operator.grant.
+--   user_id has no foreign key (the record outlives an account); for operator.grant it is the user who RECEIVED the status.
+--   Written only on success, in the same transaction as the action; the app role has INSERT and SELECT only (append-only by privilege).
+-- users gains is_operator (boolean, default false) and a unique index on lower(email) (case-insensitive sign-up and sign-in).
 ```
 
 Full DDL + Alembic migrations are Phase-0/1 artifacts.
@@ -645,13 +652,22 @@ Deterministic rules evaluate structured criteria (nationality, GPA threshold, GR
 
 Auth · authorization · **user isolation (every query scoped by `user_id`)** · secure file handling · secrets via env/secret manager · API-key protection · input validation (Pydantic) · access control · structured logging · least-privilege DB. MVP-appropriate now; the `user_id` discipline makes SaaS isolation enforceable without rework. One user's data must never be reachable by another — enforced at the repository layer.
 
-*Implementation status (Amended 2026-10-27, v1.8, ADR-0015):* per-user isolation holds (repositories filter by `user_id`). The audit (`docs/full-project-audit.md` §8 and Part 4) and read-only checks of the VM and database found these §19 controls missing: **no authorization roles** — any signed-up user can approve sources and start monitoring runs (PRD FR-DISC-8); **no address check on user-supplied URLs** in URL match and source approval, so a request can reach internal addresses such as `169.254.169.254` (the guard from ADR-0010 is used only by candidate validation); **the application connects as the database owner** (`neondb_owner`: owns every table, can create roles, bypasses row security) instead of a least-privilege role; **no password rules** and no token-secret strength check; **no upload size or type limit**; **no `audit_log`** (§14); and **email alerts are never sent** because SMTP is not configured on the server (the code exists). These are closed in **feature 010, which runs before every other remaining feature**. The SSRF *redirect* residual risk accepted in ADR-0010 / ADR-0011 stays accepted for candidate validation.
+*Implementation status (Amended 2026-10-27, v1.8, ADR-0015):* per-user isolation holds (repositories filter by `user_id`). The audit (`docs/full-project-audit.md` §8 and Part 4) and read-only checks of the VM and database found these §19 controls missing: **no authorization roles** — any signed-up user can approve sources and start monitoring runs (PRD FR-DISC-8); **no address check on user-supplied URLs** in URL match and source approval, so a request can reach internal addresses such as `169.254.169.254` (the guard from ADR-0010 is used only by candidate validation); **the application connects as the database owner** (`neondb_owner`: owns every table, can create roles, bypasses row security) instead of a least-privilege role; **no password rules** and no token-secret strength check; **no upload size or type limit**; **no `audit_log`** (§14); and **email alerts are never sent** because SMTP is not configured on the server (the code exists). These are closed in **feature 010, which runs before every other remaining feature**. *(Amended 2026-10-29, v1.9, D-1, ADR-0016):* the SSRF redirect residual risk accepted in ADR-0010 / ADR-0011 is **closed**: every fetch of a user-supplied or candidate URL checks the address of the first URL and of every redirect hop (5 hops at most) before any request is sent to it, and connects only to an address that passed the check.
+
+*Implementation status (Amended 2026-11-21, v1.9, feature 010, ADR-0016):* the controls listed above are **built and live**. Feature 010 was merged to `main` on 2026-11-02 and deployed to the VM on 2026-11-20; all eight post-deploy checks passed (the e-mail check on 2026-11-21). What now holds:
+- **Authorization:** six capabilities are **operator-only** — approve a candidate source, reject one, start a manual monitoring run, read a monitoring run's detail, read a source's fetch log, and read a candidate's validation results (010 spec D-2). A signed-in non-operator gets a clear *forbidden* answer, distinct from *not signed in*. Student features are unchanged. The owner is the **only operator**; operator status is granted or revoked **only by a command run on the server** — no API route, sign-up field or profile field can set it.
+- **User-supplied URLs:** URL match, the domain at source approval and candidate validation refuse private, loopback, link-local, cloud-metadata and other reserved addresses (IPv4 and IPv6, including mapped and numeric forms), check **every redirect hop** before it is requested (at most 5 hops), refuse a host name if **any** of its addresses is non-public, and connect to the address that passed the check (010 spec D-1; ADR-0010 amended, ADR-0011 Q4 superseded).
+- **Least-privilege database:** the application connects as **`scholarship_app`** over the pooled host (log in, read and write data; no create/alter/drop, no role or database creation, no row-security bypass, nothing on `alembic_version`). Migrations run with the owner's credentials over the direct host, passed only to the one-off migration container and never stored in the app's environment. Tables added later are usable through default privileges. The app logs a warning at start if it ever connects with owner-level rights.
+- **Credentials and uploads:** new passwords 8 characters to 72 bytes, rejected (never cut) outside that range, no composition rules; e-mail compared case-insensitively; the app refuses to start with a session secret shorter than 32 characters or equal to the sample placeholder. Uploads are capped at 10 MiB (Caddy, an ASGI limit and the readers), and a PDF is recognised by its content, not its name.
+- **`audit_log`** as in §14, append-only for the app role. **Recovery:** every broad catch that can swallow a database error rolls the session back (enforced by a static test). **Mail:** alerts are e-mailed through the owner's Gmail with a verified TLS connection; the student-visible error field holds a short reason code only.
 
 ---
 
 ## 20. Authentication Design
 
 MVP: email/password, hashed (bcrypt/argon2), JWT access tokens, Signup/Login/Logout endpoints, protected routes via FastAPI dependency. Structured so Production adds refresh tokens + reset, and SaaS adds OAuth/orgs/RBAC — without touching the isolation model.
+
+*Amended 2026-11-20 (v1.9, feature 010):* passwords are hashed with bcrypt and must be 8 characters to 72 bytes (bcrypt reads only 72 bytes, so longer input is refused, not cut); sign-in keeps working for accounts created before these rules. E-mail addresses are compared case-insensitively. The JWT signing secret must be at least 32 characters. A single **operator** flag (`users.is_operator`) exists, set only by a server command (§19); full roles/RBAC stay a SaaS item. Refresh tokens and password reset remain deferred.
 
 ---
 
@@ -675,6 +691,8 @@ MVP: email/password, hashed (bcrypt/argon2), JWT access tokens, Signup/Login/Log
 *LLM provider & quota (Amended 2026-10-25, v1.7):* generation runs on **Google Gemini (`gemini-2.5-flash`) on the free tier**, with an **observed limit of about 20 requests/day per project** (quota is per project, not per API key). The project stays on the free tier until feature 006, where the paid-tier decision is taken (**ADR-0012**). All LLM calls pass through **one central budget** (ADR-0014, feature 003). *Drift to reconcile:* the implementation also calls Gemini for embeddings (live smoke test `test_gemini_embedding_reachable`), which departs from A2 and the Hugging Face row above; the decision is recorded under §46 ⚠️.
 
 *Agent framework (Amended 2026-10-27, v1.8, ADR-0015):* the OpenAI Agents SDK row above was **not implemented in Phases 1–5** — `backend/pyproject.toml` has no `openai-agents` dependency (first flagged in `specs/002-source-monitoring-hardening/research.md`, but no decision was recorded then). The row stands: **feature 011** builds all five agents on the OpenAI Agents SDK, using Gemini through its OpenAI-compatible endpoint, while LangGraph stays the workflow engine and LangChain the tools/RAG glue. The LangChain dependency is declared but not yet imported anywhere; 011 decides where it is genuinely used. The embeddings-provider question (§46 ⚠️ 2) is decided in the **004** spec.
+
+*Hosting as built (Amended 2026-11-21, v1.9 — records a choice made in Phase 2 and never written here):* the backend runs on one **Oracle Cloud "Always Free" VM** (Ampere A1, Frankfurt region, Oracle Linux 9) as two containers under **rootful Podman** (`podman-compose`): the FastAPI backend, bound to `127.0.0.1:8000`, and **Caddy** as the only public listener (HTTPS with Caddy's internal CA, because there is no domain yet). PostgreSQL is **Neon** and vectors are **Qdrant Cloud**. Uploaded documents live in a Podman volume on the VM with **no backup** — the "managed object storage" of §22 Phase 2 is **not** in place (§48 ⚠️). Operating facts — `sudo` for every Podman command, the two Neon URLs (direct for the owner, pooled for the app), psql 14 or newer for Neon, and how the app-role password is set — are kept in `docs/operations-hardening.md` §12–§15 and `docs/vm-deployment-notes.md`.
 
 ---
 
@@ -750,7 +768,7 @@ After the full-project audit two feature folders are added and the order is amen
 
 | Order | Feature | Scope added or confirmed by the audit (short) | Why here | Status (2026-10-27) |
 |---|---|---|---|---|
-| 1 | **010 security-hardening** *(new)* | Operator role and the **minimal** operator restriction on source approve/reject and monitoring runs (moved here from 004); address check on user-supplied URLs (URL match, source approval); least-privilege database role for the app; password rules and token-secret strength; upload size/type limits; `audit_log`; rollback after database errors; SMTP configured on the server; deploy current `main` to the VM | The server is public and these risks exist today | not started |
+| 1 | **010 security-hardening** *(new)* | Operator role (one operator, the owner; granted only by a server command) restricting source approve/reject, manual monitoring runs, source fetch-log reads, candidate-validation reads and the per-run source outcomes (monitoring run detail); address check on every hop of every fetch of a user-supplied or candidate URL (URL match, source approval, candidate validation); public host name required at source approval; least-privilege database role for the app; password rules and token-secret strength; upload size/type limits; `audit_log`; rollback after database errors; SMTP configured on the server; deploy current `main` to the VM | The server is public and these risks exist today | not started |
 | 2 | **003 quota-governance** | As in v1.7, plus audit findings: the discovery cache is defeated by ingestion's own log rows; LLM failures in discovery leave no trace; every LLM route answers 503, not 500, when the quota is spent. Its spec, plan and tasks predate the audit and are updated before implementation | Every later feature adds LLM load | spec, plan, tasks, ADR-0014 done (pre-audit); not implemented |
 | 3 | **004 trustworthy-scholarship-records** | As in v1.7 (operator restriction moved to 010), plus: funding value dropped by the normalizer; closed/expired never set; URL extraction labels its own output "verified"; duplicates; discovered records not indexed for Q&A; Qdrant chunks pile up; evidence snippet; dormant conflict policy; alert gaps; ingestion backoff; `www.` candidate duplicates; T140; embeddings decision | Matching, Q&A, alerts and agents are only as good as the record | not started |
 | 4 | **006 source-coverage-at-scale** | As in v1.7, plus: robots/source rules actually enforced; coverage counts only sources actually fetched; universities/providers coverage; all query dimensions; search channel within (or by amending) ADR-0005; **paid-tier decision** | Owner's coverage goal (ADR-0012) | not started |
@@ -758,6 +776,8 @@ After the full-project audit two feature folders are added and the order is amen
 | 6 | **011 agent-layer** *(new)* | All five agents on the OpenAI Agents SDK; Main Agent through a chat route with FR-ROUTE clarification; Q&A live fetch and numeric grounding; MCP; LangGraph checkpoints and HITL pauses; per-intent response schemas with next action; `url_match` normalize node; invalid-JSON retry | Agents need correct tools (003–005) and the paid-tier decision (006) | not started |
 | 7 | **007 application-assistance** | As in v1.7, plus: CV/SOP grounding accepts requirement text as a user fact (fix within ADR-0003); empty drafts pass; SOP questions never created; Europass format; download routes; other material types; due dates; the Application agent requests missing documents and asks for approval at each step | Builds on the 011 agents | not started |
 | 8 | **008 frontend**, **009 evals & KPIs** | As in v1.7, plus: long operations as background jobs (A7); KPI-3…6 exposed; checker-accuracy, extraction, discovery and verification evals; RAG tests; ratified eval thresholds; real-model evals | UI and measurement over a trustworthy core | not started |
+
+**Status update 2026-11-21 (v1.9):** **010 is done** — merged to `main` on 2026-11-02 (`33eeabd`), deployed on 2026-11-20, eight of eight post-deploy checks passed (record: `docs/operations-hardening.md` §13). Two defects found in production were fixed on the follow-up branch `fix/010-post-deploy`: Neon rejects psql's `\password` (010 spec D-5), and a Gmail App Password copied from Google's page can contain non-breaking spaces. **Next in the order: 003.**
 
 A small **housekeeping** change (no spec, no new capability) runs before 010: correct the task checkboxes the audit found wrong, add `GEMINI_API_KEY` to `.env.example`, fix the Deep CI workflow settings, and run database tests on a disposable local Postgres instead of the shared database.
 
@@ -888,11 +908,15 @@ No new agent; evals are a verification/CI concern (harness §9.1), implemented a
 - **A14 (v1.7, ADR-0012):** the project stays on the **free LLM tier** (observed ~20 requests/day for `gemini-2.5-flash`, per project) until feature 006, where the paid-tier decision is taken. Accuracy is never traded for cost: no lighter model and no skipped verification to save quota.
 - **A15 (v1.7, ADR-0013):** **"verified" means confirmed on the scholarship's own official page with a deadline and eligibility present.** A record seen only on a listing page gets the weaker status **`listed`**. Existing records are reclassified in feature 004.
 - **A16 (v1.7, ADR-0014):** every LLM call goes through **one central budget** with priority classes (user-facing, one-off backfill, scheduled monitoring, candidate validation) and a reserve for user-facing work. Background work is deferred, never failed, when the reserve is reached; students get a clear "temporarily unavailable, try after <time>" answer, never a server error or a false "not eligible". Provider failures (quota, outage, unparseable response) never mark a source as failing.
-- **A17 (v1.7, ADR-0012):** source approval is restricted to **operators** (not any logged-in user); minimal restriction in feature 004, fuller roles and a review queue in feature 006. A10 (human-governed approval) is unchanged.
+- **A17 (v1.7, ADR-0012):** source approval is restricted to **operators** (not any logged-in user); minimal restriction in feature 004, fuller roles and a review queue in feature 006. A10 (human-governed approval) is unchanged. *(v1.9)* the restriction covers approve, reject, manually started monitoring runs, source fetch-log reads, monitoring run detail (per-source outcomes) and candidate-validation reads; operator status is granted and revoked only by a command on the server.
 - **A18 (v1.7):** A11 ("small seed registry") still describes the MVP, but **large-scale expansion is now scheduled** as feature 006 instead of Phase 6 (ADR-0012).
 - **A19 (v1.8, ADR-0015):** all **five** agents are implemented on the **OpenAI Agents SDK** (as §21 and `specs/001-scholarship-mvp/research.md` D1 state), with Gemini through its OpenAI-compatible endpoint, in feature 011. LangGraph remains the workflow engine and LangChain the tools/RAG glue. Behaviour contracts (§7, Part B) are unchanged.
-- **A20 (v1.8, ADR-0015):** the security gaps against §19 are closed in feature **010, before** any other remaining feature. The **minimal** operator restriction of A17 moves from 004 to 010; fuller roles and a review queue stay in 006.
+- **A20 (v1.8, ADR-0015):** the security gaps against §19 are closed in feature **010, before** any other remaining feature. The operator restriction of A17, as widened in v1.9, moves from 004 to 010; fuller roles and a review queue stay in 006.
 - **A21 (v1.8):** the entry-point rule, the deviation stop rule and the pre-flight (§23) apply to every feature spec from 010 onward.
+- **A22 (v1.9, ADR-0016):** there is **one operator — the owner** — and operator status is set **only by a command run on the server**. The operator-only set is six capabilities (§19). Fuller roles and a review queue remain in feature 006 (A17 unchanged).
+- **A23 (v1.9, ADR-0016):** every fetch of a user-supplied or third-party URL checks **each redirect hop** and connects only to a checked public address. This supersedes the redirect residual risk accepted in ADR-0010 / ADR-0011.
+- **A24 (v1.9, ADR-0016):** the app uses a **least-privilege database role** (`scholarship_app`, pooled URL); migrations use the **owner** role over the direct URL and are never run by the app. On Neon the role's password is set with `ALTER ROLE … WITH PASSWORD` sent over stdin (Neon rejects pre-hashed passwords; 010 spec D-5).
+- **A25 (v1.9, ADR-0016):** e-mail alerts go through the **owner's Gmail account with an App Password** over STARTTLS with certificate verification. A move to a transactional mail service is a later decision, not needed for one owner.
 
 ---
 
@@ -956,7 +980,7 @@ Approved Registry ──► Runtime Discovery ──► {Approved source: use pe
 ```
 A newly discovered source is **never** authoritative until approved. MVP = manual approval; Phase 5 = semi-automated checks, still human-confirmed.
 
-*Amended 2026-10-25 (v1.7, ADR-0012):* the approval gate is restricted to **operators**. As built in Phase 5, any logged-in user could approve or reject a candidate source, and signup is open. Minimal operator restriction ships in feature 004; fuller roles and an approval queue in feature 006. *Coverage target:* the registry must grow to **national, regional/state and individual-university** sources in **any country** (any user, not one profile), discovered through official directories and validated candidates, never through unofficial pages as facts (feature 006).
+*Amended 2026-11-20 (v1.9, feature 010):* the operator restriction is **delivered** — see §19 for the six operator-only capabilities and A22. *Amended 2026-10-25 (v1.7, ADR-0012):* the approval gate is restricted to **operators**. As built in Phase 5, any logged-in user could approve or reject a candidate source, and signup is open. Minimal operator restriction ships in feature 004; fuller roles and an approval queue in feature 006. *Coverage target:* the registry must grow to **national, regional/state and individual-university** sources in **any country** (any user, not one profile), discovered through official directories and validated candidates, never through unofficial pages as facts (feature 006).
 
 ---
 
@@ -1115,7 +1139,7 @@ Every major capability, explicitly labeled. **MVP** = built first for personal u
 | Large-scale source/country expansion | **Future/Advanced (Phase 6)** → *amended v1.7: pulled forward to feature 006 (ADR-0012)* |
 | LLM quota governance + cost-aware monitoring *(v1.7)* | **Production (feature 003, before further features)** |
 | Official-page verification + `listed` status *(v1.7)* | **Production (feature 004)** |
-| Security hardening against §19 (roles, URL address check, least-privilege DB, credential and upload rules, audit log) *(v1.8)* | **Production (feature 010, first)** |
+| Security hardening against §19 (roles, URL address check, least-privilege DB, credential and upload rules, audit log) *(v1.8)* | **Production (feature 010, first)** — *delivered and deployed 2026-11-20 (v1.9)* |
 | Agent layer on the OpenAI Agents SDK (five agents, chat route, MCP, checkpoints/HITL) *(v1.8)* | **Re-implementation of the MVP / Post-MVP agent capabilities (feature 011)** |
 | Live approval-gated portal submission | **Future/Advanced (Phase 6)** |
 | SaaS multi-tenancy, billing, quotas | **Future/Advanced (Phase 6)** |
@@ -1516,7 +1540,7 @@ These changes follow the **full-project audit** (`docs/full-project-audit.md`, P
 2. **Embeddings provider** — decided in the 004 spec (§46 ⚠️ 2).
 3. **DAAD, Stipendium Hungaricum, KAUST** — 004 or 006 spec (§46 ⚠️ 3).
 4. **EACEA listing extraction** — 004 (§46 ⚠️ 4).
-5. **SMTP provider** for email alerts, and **how the least-privilege database role is created and used** — 010 spec.
+5. **SMTP provider** for email alerts, and **how the least-privilege database role is created and used** — 010 spec. → *Decided (v1.9, D-4, §48):* SMTP provider: the owner's Gmail account, smtp.gmail.com port 587 (STARTTLS, verified certificate), authenticated with a Google App Password held only in the VM environment. Least-privilege database role: created with SQL (not the Neon console) as scholarship_app, used by the app over the pooled connection; migrations run as the owner over the direct connection. *(D-5, 2026-11-20:)* its password is set with `ALTER ROLE … WITH PASSWORD` over stdin, because Neon rejects psql's `\password`.
 6. **MCP fetch/search server providers** (A5) — 011 spec.
 7. **Search channel vs ADR-0005** — 006 spec.
 8. **Real Gemini key in Deep CI** (weekly live smoke tests) — housekeeping.
@@ -1527,6 +1551,53 @@ These changes follow the **full-project audit** (`docs/full-project-audit.md`, P
 ---
 
 *End of Master Blueprint v1.8 — 5 agents (rebuilt on the OpenAI Agents SDK in 011); audit-driven plan recorded: security first (010), agents after matching (011), process rules (§23), handoff as practised (§42).*
+
+## 48. v1.9 Revision Notes — feature 010 delivered *(2026-11-21)*
+
+Feature **010 security hardening** (`specs/010-security-hardening/`) was specified, planned and built with the spec-kit flow, merged to `main` on 2026-11-02 (`33eeabd`; CI 1506 tests passed, 0 skipped), deployed to the VM on 2026-11-20 and verified by an eight-check post-deploy script plus one manual e-mail check on 2026-11-21. The decisions behind it are in **ADR-0016**; its spec records five deviations from earlier text (D-1…D-5), which the 010 deviation stop rule (§23) requires to be written here and in the PRD.
+
+| # | Change | Modified/New | Section | Feature | Why (one line) | Source |
+|---|---|---|---|---|---|---|
+| 1 | v1.9 change theme | Modified | header | — | Records the delivery and its decisions | 010 |
+| 2 | `audit_log` as built; `users.is_operator`; case-insensitive e-mail index | Modified | §14 | 010 | Schema now matches the code | 010 data-model, ADR-0016 |
+| 3 | §19 controls built and live; redirect residual risk superseded | Modified | §19 | 010 | The v1.8 status said "missing" | 010 spec D-1, ADR-0016 |
+| 4 | Password, e-mail and secret rules; operator flag | Modified | §20 | 010 | Authentication rules changed | 010 FR-CRED, FR-AUTHZ |
+| 5 | Hosting as built | Modified | §21 | (Phase 2, unrecorded) | The hosting choice was never written down | VM, runbook |
+| 6 | 010 status: done | Modified | §22 | 010 | Roadmap state | deploy record |
+| 7 | Assumptions A22–A25 | **New** | §27 | 010 | Single operator; every redirect hop checked; DB roles; Gmail | ADR-0016, D-1…D-5 |
+| 8 | Operator restriction delivered | Modified | §29 | 010 | Roadmap state | 010 |
+| 8a | §22 010 row scope widened; A17 appended; A20 wording | Modified | §22, §27 | 010 | Match D-1 and D-2 | 010 plan "Records to update" |
+| 9 | 010 label: delivered | Modified | §36 | 010 | Label must match reality | 010 |
+| 10 | §47 ⚠️ 5 marked decided | Modified | §47 | 010 | Open item closed | 010 spec D-4, D-5 |
+
+**010 deviations recorded here (owner decisions; the owner delegated "best option, no compromise" on 2026-10-29, and D-5 was a manager decision during the deploy):**
+- **D-1** — the address check covers **every redirect hop**, including candidate validation. Supersedes the redirect residual risk accepted in ADR-0010 (decision 2), ADR-0011 Q4, ADR-0015 decision 1 and the v1.8 §19 text.
+- **D-2** — operator-only also covers **reading** a monitoring run's detail, a source's fetch log and a candidate's validation results (six capabilities in total). Widens the §22 010 row and A17. *(The v1.8 §22 010 scope began: "Operator role and the **minimal** operator restriction on source approve/reject and monitoring runs (moved here from 004); address check on user-supplied URLs (URL match, source approval)"; replaced in v1.9 as the 010 plan prescribes.)*
+- **D-3** — **granting operator status** is an audited action (adds `operator.grant`).
+- **D-4** — **Gmail with an App Password** is the mail provider (closes §47 ⚠️ 5, first half).
+- **D-5** — on Neon the app-role password is set with **`ALTER ROLE scholarship_app WITH PASSWORD '…'` piped over stdin**, not psql's `\password`: Neon answers *"Neon only supports being given plaintext passwords"* to the hash `\password` sends. Found in production on 2026-11-20 (closes §47 ⚠️ 5, second half).
+
+**Lessons recorded for later features (process, not architecture):** CI cannot catch differences between its own Postgres and Neon (D-5 passed CI and failed in production), so every deploy keeps a live post-deploy check; Neon needs psql 14 or newer; secrets typed on a Windows owner machine are held in PowerShell variables and sent to the VM over stdin, never pasted into the remote shell (runbook §14).
+
+### Consistency audit (v1.9)
+- **Agent count stays 5** — 010 changed no agent, workflow graph or tool interface. ✅
+- **Governance narrowed, not loosened** — operator-only grows from two capabilities to six; A10 (human approval) and A17 (fuller roles in 006) are unchanged. ✅
+- **ADRs** — ADR-0016 is the record; ADR-0010 is amended and ADR-0011 Q4 superseded for redirects (D-1); ADR-0012, 0013, 0014 and 0015 stand. ✅
+- **Free-tier stance kept** — 010 added no LLM call. ✅
+- **Behaviour kept** — student features, alerts in the app, matching and Q&A behave as before; FR-ROUTE, FR-AGENTIC and FR-APP are unchanged. ✅
+- **Nothing deleted except as the approved 010 plan prescribes** — the one §19 sentence that accepted the redirect risk is replaced by its dated D-1 amendment (`specs/010-security-hardening/plan.md`, "Records to update"); every other v1.8 sentence is kept, and the old §22 010 scope text is preserved in this section. ✅
+
+### ⚠️ NOT YET DEFINED — needs decision (introduced/confirmed by v1.9)
+1. Items 1–4 and 6–9 of §47 are unchanged and still open.
+2. **Document storage backup** — uploads live in a VM volume with no backup (§21 hosting note); decide before real users upload documents (008 at the latest).
+3. **A domain name** — without one, Caddy serves its own CA and browsers warn; needed before the frontend (008).
+4. **External MCP server for Claude / ChatGPT clients** — proposed by the owner on 2026-11-20: expose the product's capabilities (search, match, details, deadlines) as an MCP server that Claude and ChatGPT can use as a plugin/app, with OAuth for outside users. If approved, it belongs to feature **011** (where MCP is built) and would use the same `scholarship_app` database role behind the API. **Owner decision pending.**
+
+**Net effect (v1.9):** the §19 security controls are no longer a plan — they are built, deployed and checked on the live server; the redirect risk earlier accepted is closed; and the hosting that has run since Phase 2 is written down. Build order unchanged: **003 → 004 → 006 → 005 → 011 → 007 → 008/009**. Agent count remains **5**.
+
+---
+
+*End of Master Blueprint v1.9 — 5 agents; feature 010 delivered and deployed (security controls of §19 live; redirect risk closed; single operator; least-privilege DB role; Gmail alerts); next: 003.*
 
 <!-- The section below is a separate document type (PRD). It defines WHAT/WHY at the product and agent-behavior level. It does not replace or duplicate the architecture defined above. -->
 

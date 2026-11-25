@@ -37,6 +37,7 @@ Treat the following as one cluster: the security work, the agent rebuild and the
 - 011 is a large feature that comes late in the order; until it ships, the agents remain as the audit found them.
 - Specifying one feature at a time means later features have no spec until their turn, and 003's existing documents need updating before it is built.
 - The SSRF redirect risk accepted in ADR-0010 and ADR-0011 remains open.
+  - Superseded by ADR-0016 on 2026-10-29.
 - Moving the minimal operator restriction from 004 to 010 changes ADR-0012 decision 4, and the build order changes ADR-0012 decision 2; a reader must consult this ADR alongside ADR-0012 to see the current plan.
 
 ## Alternatives Considered

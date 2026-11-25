@@ -34,4 +34,4 @@ These are non-negotiable and apply across all agents and phases:
 
 ## Status
 
-Phases 0–5 complete and deployed (cloud VM, HTTPS). Full-project audit merged 2026-10-26. Build order (ADR-0015): 010 security → 003 quota → 004 records → 006 sources → 005 matching → 011 agents → 007 application → 008/009. Feature 010 is next, after a housekeeping change.
+Phases 0–5 complete and deployed (cloud VM, HTTPS). Full-project audit merged 2026-10-26. Build order (ADR-0015): 010 security → 003 quota → 004 records → 006 sources → 005 matching → 011 agents → 007 application → 008/009. Feature 010 shipped on the VM on 2026-11-20 (main @ 33eeabd, post-deploy fixes on fix/010-post-deploy); all eight post-deploy checks passed by 2026-11-21. Next in the build order is 003.
