@@ -10,12 +10,12 @@ Exception text is a reason class only; provider payloads, page content and secre
 (FR-ERR-4).
 """
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 
 class Priority(StrEnum):
@@ -73,10 +73,13 @@ class LlmTemporarilyUnavailable(LlmError):
 class LlmQuotaExhausted(LlmError):
     """The provider reported quota exhaustion (HTTP 429)."""
 
-    def __init__(self, retry_at: datetime | None = None, daily: bool = False) -> None:
+    def __init__(
+        self, retry_at: datetime | None = None, daily: bool = False, observed_limit: int | None = None
+    ) -> None:
         super().__init__("provider_quota")
         self.retry_at = retry_at
         self.daily = daily
+        self.observed_limit = observed_limit
 
 
 class LlmProviderError(LlmError):
@@ -123,6 +126,15 @@ def llm_priority(priority: Priority) -> Iterator[None]:
         yield
     finally:
         _priority.reset(token)
+
+
+_T = TypeVar("_T")
+
+
+def run_as_backfill(func: Callable[..., _T], *args, **kwargs) -> _T:
+    """Run a one-off job under the `backfill` class (for later features, e.g. 004 re-extraction)."""
+    with llm_priority(Priority.BACKFILL):
+        return func(*args, **kwargs)
 
 
 class _ClosedGate:

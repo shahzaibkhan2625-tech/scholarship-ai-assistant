@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.agents.research_qa.agent import answer_question
+from app.api.llm_responses import LLM_UNAVAILABLE_RESPONSES
 from app.api.deps import get_current_user
 from app.models.user import User
 from app.schemas.qa import QaAnswer
@@ -15,7 +16,7 @@ class QaRequest(BaseModel):
     question: str
 
 
-@router.post("/{scholarship_id}/qa", response_model=QaAnswer)
+@router.post("/{scholarship_id}/qa", response_model=QaAnswer, responses={**LLM_UNAVAILABLE_RESPONSES})
 def ask_question(
     scholarship_id: uuid.UUID,
     payload: QaRequest,

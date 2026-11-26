@@ -16,6 +16,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.api.llm_responses import LLM_UNAVAILABLE_RESPONSES
 from app.api.deps import get_current_user
 from app.data.repositories import application_repo, document_repo, scholarship_repo
 from app.data.repositories.db import get_db
@@ -48,7 +49,7 @@ def _get_owned_application(db: Session, current_user: User, application_id: uuid
 @router.post(
     "/applications/{application_id}/generate/cv",
     response_model=GeneratedDocumentSchema,
-    responses={409: {"description": "Gap in required information — reported, not filled with invented content (US5 Scenario 5)"}},
+    responses={409: {"description": "Gap in required information — reported, not filled with invented content (US5 Scenario 5)"}, **LLM_UNAVAILABLE_RESPONSES},
 )
 def generate_cv(
     application_id: uuid.UUID,
@@ -72,7 +73,7 @@ def generate_cv(
 @router.post(
     "/applications/{application_id}/generate/sop",
     response_model=GeneratedDocumentSchema,
-    responses={409: {"description": "Gap in required information — reported, not filled with invented content"}},
+    responses={409: {"description": "Gap in required information — reported, not filled with invented content"}, **LLM_UNAVAILABLE_RESPONSES},
 )
 def generate_sop(
     application_id: uuid.UUID,

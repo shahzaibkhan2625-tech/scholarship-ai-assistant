@@ -8,11 +8,19 @@ in a later slice; this file defines the contract they must satisfy then.
 
 import re
 import uuid
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pymupdf
 import pytest
 
+from app.core.llm_gate import (
+    LlmBudgetDeferred,
+    LlmProviderError,
+    LlmQuotaExhausted,
+    LlmResponseUnparseable,
+    LlmTemporarilyUnavailable,
+)
 from app.models.application import Application
 from app.models.document import ApplicationDocument, GeneratedDocument
 from app.models.scholarship import Scholarship
@@ -329,6 +337,9 @@ def test_upload_scanned_document_returns_201_with_needs_ocr_flag(authed_user, ap
 # still surface as 500 so real bugs are not swallowed.
 
 
+_RETRY_AT = datetime(2099, 1, 1, tzinfo=timezone.utc)
+
+
 def _provider_errors():
     from google.genai import errors as genai_errors
 
@@ -340,6 +351,12 @@ def _provider_errors():
         pytest.param(genai_errors.ClientError(429, quota), id="client-error-429"),
         pytest.param(genai_errors.ServerError(503, unavailable), id="server-error-503"),
         pytest.param(LlmNotConfiguredError("GEMINI_API_KEY is not configured"), id="llm-not-configured"),
+        # 003 T268/T275: the new LlmError family (gate refusals and translated provider failures).
+        pytest.param(LlmTemporarilyUnavailable(_RETRY_AT, "daily_allowance_spent"), id="llm-allowance-spent"),
+        pytest.param(LlmBudgetDeferred(_RETRY_AT), id="llm-budget-deferred"),
+        pytest.param(LlmQuotaExhausted(_RETRY_AT, daily=True), id="llm-quota-exhausted"),
+        pytest.param(LlmProviderError(), id="llm-provider-error"),
+        pytest.param(LlmResponseUnparseable(), id="llm-unparseable"),
     ]
 
 

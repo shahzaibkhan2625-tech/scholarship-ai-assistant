@@ -76,6 +76,7 @@ from sqlalchemy.orm import Session
 
 from app.core import metrics
 from app.core.config import settings
+from app.core.llm_gate import Priority, llm_priority
 from app.core.logging import bind_log_context, log_context, reset_log_context
 from app.data.repositories import candidate_validation_repo, monitoring_repo, scholarship_repo, source_repo
 from app.models.monitoring import MonitoringRun, MonitoringStatus, MonitoringTrigger
@@ -516,7 +517,8 @@ def _validate_candidates_step(
         return
     for candidate_id in candidate_ids:
         try:
-            validate(db, candidate_id)
+            with llm_priority(Priority.VALIDATION):
+                validate(db, candidate_id)
         except Exception:  # noqa: BLE001 - one bad candidate must not stop the rest
             logger.exception("validation of candidate %s failed; continuing", candidate_id)
             db.rollback()
@@ -539,7 +541,7 @@ def _record_run_end(status: MonitoringStatus, counters: _Counters, started: floa
     )
 
 
-def run_source_monitor(
+def _run_source_monitor(
     db: Session,
     *,
     trigger: MonitoringTrigger,
@@ -627,3 +629,12 @@ def run_source_monitor(
             reset_log_context(run_token)
     db.refresh(run)
     return run
+
+
+@functools.wraps(_run_source_monitor)
+def run_source_monitor(db: Session, **kwargs) -> MonitoringRun:
+    """Entry point of the monitor (and of the alert re-match step it runs): every provider call made
+    inside is declared `monitoring` (003, FR-BUDGET-3); candidate validation narrows it to `validation`.
+    `functools.wraps` keeps the public signature (including the `now` seam) unchanged."""
+    with llm_priority(Priority.MONITORING):
+        return _run_source_monitor(db, **kwargs)

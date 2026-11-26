@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.agents.discovery.agent import run_discovery
+from app.api.llm_responses import LLM_UNAVAILABLE_RESPONSES
 from app.api.deps import get_current_user
 from app.data.repositories.db import get_db
 from app.models.profile import Profile
@@ -37,7 +38,7 @@ def _has_discovery_criteria(profile: Profile) -> bool:
 @router.post(
     "",
     response_model=DiscoveryResult,
-    responses={422: {"description": "Profile setup is required before discovery can run"}},
+    responses={422: {"description": "Profile setup is required before discovery can run"}, **LLM_UNAVAILABLE_RESPONSES},
 )
 def discover(
     current_user: User = Depends(get_current_user),

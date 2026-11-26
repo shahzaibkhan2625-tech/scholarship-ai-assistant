@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
 
+from app.api.llm_responses import LLM_UNAVAILABLE_RESPONSES
 from app.api.deps import get_current_user
 from app.data.repositories.db import get_db
 from app.models.user import User
@@ -20,7 +21,7 @@ class MatchUrlRequest(BaseModel):
 @router.post(
     "/match-url",
     response_model=UrlMatchResult,
-    responses={422: {"model": FetchFailure, "description": "URL could not be fetched"}},
+    responses={422: {"model": FetchFailure, "description": "URL could not be fetched"}, **LLM_UNAVAILABLE_RESPONSES},
 )
 def match_url(
     payload: MatchUrlRequest,

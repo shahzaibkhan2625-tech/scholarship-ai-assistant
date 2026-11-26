@@ -1,7 +1,11 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from datetime import datetime, timezone
+from math import ceil
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from app.api.alerts import router as alerts_router
 from app.api.coverage import router as coverage_router
@@ -20,6 +24,8 @@ from app.api.sources import router as sources_router
 from app.api.url_match import router as url_match_router
 from app.core.body_limit import BodyLimitMiddleware
 from app.core.config import settings
+from app.core.llm_gate import LlmTemporarilyUnavailable, install_gate
+from app.core.llm_priority_middleware import LlmPriorityMiddleware
 from app.core.logging import configure_logging
 from app.core.metrics import router as metrics_router
 from app.core.rate_limit import RateLimitMiddleware, TokenBucketLimiter
@@ -54,11 +60,18 @@ async def lifespan(_app: FastAPI):
     except Exception:  # noqa: BLE001
         logger.warning("database role check failed")
 
+    # 003: the budget gate is installed after the start-up checks; with none installed every provider
+    # call is refused (fail closed).
+    from app.services.llm_budget import BudgetConfig, DbLlmGate
+
+    install_gate(DbLlmGate(BudgetConfig.from_settings(settings)))
+
     start_scheduler()
     try:
         yield
     finally:
         stop_scheduler()
+        install_gate(None)
 
 
 app = FastAPI(title="Scholarship AI Assistant", lifespan=lifespan)
@@ -66,6 +79,9 @@ app = FastAPI(title="Scholarship AI Assistant", lifespan=lifespan)
 rate_limiter = TokenBucketLimiter(settings.rate_limit_per_minute)
 # Starlette makes the LAST middleware added the outermost: the limiter is added first so
 # RequestIDMiddleware wraps it and even a 429 carries an X-Request-ID and an access-log line.
+# 003: sets the `user_facing` LLM class for every request. Added first so it is the innermost: a
+# request refused by the rate limiter or the body limit never reaches the gate.
+app.add_middleware(LlmPriorityMiddleware)
 app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
 app.add_middleware(BodyLimitMiddleware)
 app.add_middleware(RequestIDMiddleware)
@@ -87,6 +103,25 @@ app.include_router(alerts_router, tags=["alerts"])
 app.include_router(coverage_router, tags=["coverage"])
 app.include_router(scholarships_router, tags=["scholarships"])
 app.include_router(metrics_router, tags=["metrics"])
+
+
+@app.exception_handler(LlmTemporarilyUnavailable)
+async def llm_temporarily_unavailable_handler(_request: Request, exc: LlmTemporarilyUnavailable) -> JSONResponse:
+    """FR-BUDGET-5, contracts/api-delta.md section 1: a refused student request is a 503 with
+    `Retry-After`, never a bare 500. The body holds no secret, provider payload or stack trace."""
+    retry_at = exc.retry_at.astimezone(timezone.utc)
+    seconds = max(1, ceil((retry_at - datetime.now(timezone.utc)).total_seconds()))
+    return JSONResponse(
+        status_code=503,
+        headers={"Retry-After": str(seconds)},
+        content={
+            "detail": "AI features are temporarily unavailable. Try again after the retry time.",
+            "code": "llm_temporarily_unavailable",
+            "retry_after_seconds": seconds,
+            "retry_at": retry_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "reason": exc.reason,
+        },
+    )
 
 
 @app.get("/health")

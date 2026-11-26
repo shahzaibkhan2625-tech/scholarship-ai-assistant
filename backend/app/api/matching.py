@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.api.llm_responses import LLM_UNAVAILABLE_RESPONSES
 from app.api.deps import get_current_user
 from app.data.repositories import match_repo, scholarship_repo
 from app.data.repositories.db import get_db
@@ -15,7 +16,9 @@ from app.services.ranking import rank_matches
 router = APIRouter()
 
 
-@router.post("/scholarships/{scholarship_id}/match", response_model=MatchVerdict)
+@router.post(
+    "/scholarships/{scholarship_id}/match", response_model=MatchVerdict, responses={**LLM_UNAVAILABLE_RESPONSES}
+)
 def match_scholarship_by_id(
     scholarship_id: uuid.UUID,
     current_user: User = Depends(get_current_user),

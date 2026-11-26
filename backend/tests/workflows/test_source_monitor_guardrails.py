@@ -13,6 +13,11 @@ WORKFLOW_DIR = APP / "workflows" / "source_monitor"
 AGENTS_DIR = APP / "agents"
 
 FORBIDDEN_PREFIXES = ("app.agents", "app.core.llm", "langchain", "google.genai", "google.generativeai")
+# 003 T274 (spec-directed amendment): the monitor declares its priority class with `llm_priority`. That
+# interface module holds enums, a context variable and exceptions only (no provider access, AST-checked in
+# tests/core/test_llm_gate.py), so it is the one `app.core.llm*` module the monitor may import. The provider
+# wrapper `app.core.llm` itself, agents, langchain and genai stay forbidden.
+ALLOWED_INTERFACE_MODULES = ("app.core.llm_gate",)
 
 
 def forbidden_imports(source: str) -> list[str]:
@@ -26,7 +31,9 @@ def forbidden_imports(source: str) -> list[str]:
             names = [module] + [f"{module}.{alias.name}" for alias in node.names]
         else:
             continue
-        found += [n for n in names if n.startswith(FORBIDDEN_PREFIXES)]
+        found += [
+            n for n in names if n.startswith(FORBIDDEN_PREFIXES) and not n.startswith(ALLOWED_INTERFACE_MODULES)
+        ]
     return found
 
 
@@ -57,4 +64,7 @@ def test_checker_detects_planted_violations():
     assert forbidden_imports("import langchain_core")
     assert forbidden_imports("from google import genai\nfrom google.genai import types")
     assert forbidden_imports("from app.core import llm") == ["app.core.llm"]
+    assert forbidden_imports("from app.core.llm import generate_text")
+    assert forbidden_imports("from app.core.llm_errors import classify_provider_error")
+    assert forbidden_imports("from app.core.llm_gate import Priority, llm_priority") == []
     assert forbidden_imports("from app.data.repositories import source_repo") == []

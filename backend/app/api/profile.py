@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from pypdf import PdfReader
 from sqlalchemy.orm import Session
 
+from app.api.llm_responses import LLM_UNAVAILABLE_RESPONSES
 from app.api.deps import get_current_user
 from app.core.uploads import is_pdf, read_cv_upload
 from app.data.repositories.db import get_db
@@ -87,7 +88,7 @@ def post_criteria(
     return [ProfileCriterionSchema.model_validate(c) for c in criteria]
 
 
-@router.post("/import-cv", response_model=ProfileUpdateRequest)
+@router.post("/import-cv", response_model=ProfileUpdateRequest, responses={**LLM_UNAVAILABLE_RESPONSES})
 def import_cv(
     file: UploadFile,
     current_user: User = Depends(get_current_user),

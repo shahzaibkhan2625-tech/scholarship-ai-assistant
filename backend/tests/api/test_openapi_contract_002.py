@@ -24,7 +24,9 @@ import yaml
 
 from app.main import app
 
-CONTRACT_PATH = Path(__file__).resolve().parents[3] / "specs" / "002-source-monitoring-hardening" / "contracts" / "openapi.yaml"
+# 003 T276: the live-drift contract is 003's copy of the 002 contract plus the 503 of the LLM routes;
+# the 002 yaml stays untouched as the historical record.
+CONTRACT_PATH = Path(__file__).resolve().parents[3] / "specs" / "003-quota-governance" / "contracts" / "openapi.yaml"
 API_DIR = Path(__file__).resolve().parents[2] / "app" / "api"
 
 # contract schema name -> live (FastAPI model) name; absent means identical.
@@ -226,6 +228,35 @@ def test_the_six_operator_only_operations_declare_403():
 def test_the_routes_open_to_students_do_not_declare_403():
     paths = app.openapi()["paths"]
     assert [(m, p) for m, p in OPEN_TO_STUDENTS if "403" in paths[p][m]["responses"]] == []
+
+
+# -- 003 T276: the seven LLM-backed student routes document the 503 ------------------------------
+
+LLM_ROUTES_WITH_503 = [
+    ("post", "/profile/import-cv"),
+    ("post", "/scholarships/match-url"),
+    ("post", "/scholarships/{scholarship_id}/match"),
+    ("post", "/scholarships/{scholarship_id}/qa"),
+    ("post", "/discovery"),
+    ("post", "/applications/{application_id}/generate/cv"),
+    ("post", "/applications/{application_id}/generate/sop"),
+]
+
+
+def test_the_llm_routes_declare_503_live_and_in_the_contract():
+    live, contract = app.openapi()["paths"], _contract()["paths"]
+    assert [(m, p) for m, p in LLM_ROUTES_WITH_503 if "503" not in live[p][m]["responses"]] == []
+    assert [(m, p) for m, p in LLM_ROUTES_WITH_503 if "503" not in contract[p][m]["responses"]] == []
+
+
+def test_the_503_body_schema_matches_the_live_model():
+    contract = _contract()
+    assert schema_drift(contract, app.openapi(), "LlmUnavailable") == []
+
+
+def test_the_document_upload_route_does_not_document_the_ai_503():
+    contract = _contract()["paths"]
+    assert "/applications/{application_id}/documents" not in contract
 
 
 # -- negative tests: the comparator must notice each kind of drift ------------------------
