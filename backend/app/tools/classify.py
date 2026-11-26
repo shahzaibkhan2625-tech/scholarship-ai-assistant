@@ -18,9 +18,10 @@ import re
 
 from pydantic import BaseModel
 
+from app.core.llm_gate import LlmError
 from app.models.scholarship import DegreeLevel, FundingStatus
 from app.models.source import SourceType
-from app.tools._json_utils import extract_json_object
+from app.tools._json_utils import ExtractionParseError, extract_json_object
 
 __all__ = ["ClassificationField", "ClassificationResult", "classify"]
 
@@ -36,6 +37,11 @@ class ClassificationResult(BaseModel):
     provider_type: ClassificationField = ClassificationField()
     country: ClassificationField = ClassificationField()
     field: ClassificationField = ClassificationField()
+    # 003 FR-BUDGET-13: the LLM step was refused or failed, so the dimensions the rules could not resolve
+    # stay unknown. `deferred_reason` is a reason class (budget_deferred, provider_quota, provider_error,
+    # provider_parse, not_configured), never provider text; the caller queues the record to be classified later.
+    deferred: bool = False
+    deferred_reason: str | None = None
 
 
 _DEGREE_PATTERNS: dict[DegreeLevel, list[str]] = {
@@ -119,6 +125,17 @@ def _llm_fallback_classify(text: str, dimensions: list[str]) -> dict:
     return extract_json_object(raw)
 
 
+def _deferred_reason(error: Exception) -> str:
+    """The reason class of a refused or failed LLM step; keyed off the exception type, never its text."""
+    if isinstance(error, LlmError):
+        if error.reason == "not_configured":
+            return "not_configured"
+        return "budget_deferred" if error.fetch_outcome == "deferred" else error.fetch_outcome
+    if isinstance(error, ExtractionParseError):
+        return "provider_parse"
+    return "provider_error"
+
+
 def classify(text: str) -> ClassificationResult:
     """Rules-based first pass over `text` for all five dimensions; any
     dimension the rules can't resolve is deferred to a single LLM fallback
@@ -133,15 +150,17 @@ def classify(text: str) -> ClassificationResult:
         "field": _match_known_list(text_lower, _KNOWN_FIELDS),
     }
 
+    deferred_reason: str | None = None
     unresolved = [dim for dim, field_result in results.items() if field_result.value is None]
     if unresolved:
         try:
             llm_result = _llm_fallback_classify(text, unresolved)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - the rules result stands; the refusal is reported, not hidden
             llm_result = {}
+            deferred_reason = _deferred_reason(exc)
         for dim in unresolved:
             value = llm_result.get(dim)
             if value:
                 results[dim] = ClassificationField(value=str(value), confidence="inferred")
 
-    return ClassificationResult(**results)
+    return ClassificationResult(**results, deferred=deferred_reason is not None, deferred_reason=deferred_reason)

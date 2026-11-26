@@ -3,7 +3,7 @@
 APScheduler 3.x `BackgroundScheduler`: one interval job, `max_instances=1` and
 `coalesce=True` so a slow run never overlaps itself and missed ticks collapse
 into one. Each tick runs `run_source_monitor(trigger=SCHEDULED)` on its own
-`SessionLocal()` session. `MONITORING_INTERVAL_MINUTES <= 0` disables it.
+`SessionLocal()` session, then drains the pending-classification queue (003). `MONITORING_INTERVAL_MINUTES <= 0` disables it.
 
 T230: a second job prunes `source_fetch_log` daily (03:00 UTC, same guards). It is
 coupled to the monitoring switch: no scheduler, no retention (no extra setting).
@@ -37,6 +37,19 @@ def _run_scheduled_monitor() -> None:
             run_source_monitor(session, trigger=MonitoringTrigger.SCHEDULED)
         except Exception:  # noqa: BLE001 - a failed tick must never kill the scheduler thread
             logger.exception("scheduled source monitoring run failed")
+        _drain_classify_queue(session)
+
+
+def _drain_classify_queue(session) -> None:
+    """003 FR-BUDGET-13: after the monitor run, give the pending-classification queue its turn under the
+    `backfill` class. Runs even when the run failed, and never raises."""
+    from app.services import classify_backfill
+
+    try:
+        classify_backfill.drain_classify_pending(session)
+    except Exception:  # noqa: BLE001 - a failed drain retries on the next tick
+        logger.exception("classify queue drain failed")
+        session.rollback()
 
 
 def _run_scheduled_retention() -> None:

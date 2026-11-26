@@ -36,7 +36,7 @@ from typing import Any, Callable, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from app.data.repositories import scholarship_repo, source_repo
+from app.data.repositories import classify_pending_repo, scholarship_repo, source_repo
 from app.data.repositories.db import safe_rollback
 from app.models.funding import FundingDetails
 from app.models.requirement import Requirement
@@ -616,7 +616,12 @@ def _store_node(state: IngestionState) -> dict:
                 )
             )
 
-        scholarship = scholarship_repo.create(db, scholarship)
+        # 003 FR-BUDGET-13: flush (not commit) so the record gets its id, then one commit below writes the
+        # record, its source link and, when the classify LLM step was refused or failed, its queue row.
+        db.add(scholarship)
+        db.flush()
+        if classification is not None and classification.deferred_reason:
+            classify_pending_repo.enqueue(db, scholarship.id, classification.deferred_reason)
 
         db.add(
             ScholarshipSource(
@@ -630,6 +635,7 @@ def _store_node(state: IngestionState) -> dict:
             )
         )
         db.commit()
+        db.refresh(scholarship)
 
         source_repo.log_fetch(
             db,

@@ -28,6 +28,8 @@ class ClassifiedScholarshipFields:
     country_confidence: str
     field: str | None
     field_confidence: str
+    # 003 FR-BUDGET-13: reason class when the LLM step was refused or failed (see `ClassificationResult`).
+    deferred_reason: str | None = None
 
 
 def classify_candidate(text: str) -> ClassifiedScholarshipFields:
@@ -47,4 +49,5 @@ def classify_candidate(text: str) -> ClassifiedScholarshipFields:
         country_confidence=result.country.confidence,
         field=result.field.value,
         field_confidence=result.field.confidence,
+        deferred_reason=result.deferred_reason,
     )

@@ -93,6 +93,8 @@ def test_scheduled_job_runs_monitor_with_scheduled_trigger(monkeypatch):
             return False
 
     monkeypatch.setattr(db_mod, "SessionLocal", lambda: _Session())
+    # 003: the tick now also drains the classify queue (tests/scheduling/test_classify_drain.py); keep it off the stub.
+    monkeypatch.setattr("app.services.classify_backfill.drain_classify_pending", lambda session, **kw: None)
     sched_mod._run_scheduled_monitor()
     assert calls == [MonitoringTrigger.SCHEDULED]
 
