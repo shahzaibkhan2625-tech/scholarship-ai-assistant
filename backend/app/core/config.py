@@ -1,4 +1,5 @@
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -63,6 +64,33 @@ class Settings(BaseSettings):
     candidate_validation_recheck_days: int = Field(default=7, ge=1, alias="CANDIDATE_VALIDATION_RECHECK_DAYS")
     max_candidate_validations_per_run: int = Field(default=15, ge=1, alias="MAX_CANDIDATE_VALIDATIONS_PER_RUN")
 
+    # 003 quota governance: every value is optional with a safe default (ADR-0014).
+    llm_generation_daily_allowance: int = Field(default=20, ge=1, alias="LLM_GENERATION_DAILY_ALLOWANCE")
+    # Unset = counted, not limited.
+    llm_embedding_daily_allowance: int | None = Field(default=None, ge=1, alias="LLM_EMBEDDING_DAILY_ALLOWANCE")
+    llm_user_facing_reserve: int = Field(default=8, ge=0, alias="LLM_USER_FACING_RESERVE")
+    llm_ladder_offset_backfill: int = Field(default=0, ge=0, alias="LLM_LADDER_OFFSET_BACKFILL")
+    llm_ladder_offset_monitoring: int = Field(default=2, ge=0, alias="LLM_LADDER_OFFSET_MONITORING")
+    llm_ladder_offset_validation: int = Field(default=4, ge=0, alias="LLM_LADDER_OFFSET_VALIDATION")
+    llm_backfill_daily_share: int = Field(default=6, ge=0, alias="LLM_BACKFILL_DAILY_SHARE")
+    llm_budget_timezone: str = Field(default="America/Los_Angeles", alias="LLM_BUDGET_TIMEZONE")
+    llm_default_pause_seconds: int = Field(default=900, ge=1, alias="LLM_DEFAULT_PAUSE_SECONDS")
+    # Retry delay for failures that carry no provider time (outage, unparseable reply, not configured).
+    llm_unavailable_retry_seconds: int = Field(default=60, ge=1, alias="LLM_UNAVAILABLE_RETRY_SECONDS")
+    llm_ledger_retention_days: int = Field(default=90, ge=1, alias="LLM_LEDGER_RETENTION_DAYS")
+
+    cadence_weekly_minutes: int = Field(default=1440, ge=15, alias="CADENCE_WEEKLY_MINUTES")
+    cadence_monthly_minutes: int = Field(default=10080, ge=15, alias="CADENCE_MONTHLY_MINUTES")
+    cadence_quarterly_minutes: int = Field(default=10080, ge=15, alias="CADENCE_QUARTERLY_MINUTES")
+    cadence_annual_minutes: int = Field(default=10080, ge=15, alias="CADENCE_ANNUAL_MINUTES")
+    cadence_undeclared_minutes: int = Field(default=1440, ge=15, alias="CADENCE_UNDECLARED_MINUTES")
+    forced_full_recheck_days: int = Field(default=7, ge=1, alias="FORCED_FULL_RECHECK_DAYS")
+    unextractable_backoff_base_minutes: int = Field(default=60, ge=1, alias="UNEXTRACTABLE_BACKOFF_BASE_MINUTES")
+    noise_window_checks: int = Field(default=10, ge=1, alias="NOISE_WINDOW_CHECKS")
+    noise_threshold: float = Field(default=0.8, gt=0, le=1, alias="NOISE_THRESHOLD")
+    rules_anomaly_low_ratio: float = Field(default=0.5, gt=0, le=1, alias="RULES_ANOMALY_LOW_RATIO")
+    rules_anomaly_high_ratio: float = Field(default=2.0, ge=1, alias="RULES_ANOMALY_HIGH_RATIO")
+
     @field_validator("qdrant_url", "qdrant_api_key", "gemini_api_key")
     @classmethod
     def _strip_whitespace(cls, value: str | None) -> str | None:
@@ -95,6 +123,21 @@ class Settings(BaseSettings):
         if value.startswith("postgres://"):
             return value.replace("postgres://", "postgresql+psycopg://", 1)
         return value
+
+    @field_validator("llm_budget_timezone")
+    @classmethod
+    def _known_budget_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError, OSError):
+            raise ValueError("LLM_BUDGET_TIMEZONE must be a known IANA timezone name") from None
+        return value
+
+    @model_validator(mode="after")
+    def _reserve_below_allowance(self) -> "Settings":
+        if self.llm_user_facing_reserve >= self.llm_generation_daily_allowance:
+            raise ValueError("LLM_USER_FACING_RESERVE must be below LLM_GENERATION_DAILY_ALLOWANCE")
+        return self
 
     @model_validator(mode="after")
     def _require_strong_signing_secret(self) -> "Settings":
