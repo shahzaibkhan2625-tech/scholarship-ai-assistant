@@ -46,3 +46,6 @@ class MonitoringRun(Base):
     sources_processed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sources_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     changes_detected: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 003 (FR-OBS-3): checks skipped as unchanged / deferred for budget or pause.
+    sources_skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    sources_deferred: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

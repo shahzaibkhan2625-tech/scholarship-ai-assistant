@@ -8,6 +8,7 @@ re-parsing an operator-entered value that might smuggle in a scheme or path.
 import re
 import uuid
 from datetime import datetime
+from typing import Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -128,6 +129,9 @@ class CandidateSourceRead(BaseModel):
     reviewed_at: datetime | None = None
 
 
+FetchOutcome = Literal["unchanged", "deferred", "rules", "provider_quota", "provider_error", "provider_parse"]
+
+
 class SourceFetchLogCreate(BaseModel):
     source_id: uuid.UUID
     started_at: datetime | None = None
@@ -139,6 +143,7 @@ class SourceFetchLogCreate(BaseModel):
     fetched_url: str | None = None
     used_homepage_fallback: bool = False
     monitoring_run_id: uuid.UUID | None = None
+    outcome: FetchOutcome | None = None
 
 
 class SourceFetchLogRead(BaseModel):

@@ -14,6 +14,9 @@ from app.models import requirement  # noqa: F401  (registers requirements with B
 from app.models import funding  # noqa: F401  (registers funding_details with Base.metadata)
 from app.models import match  # noqa: F401  (registers matches with Base.metadata)
 from app.models import audit  # noqa: F401  (registers audit_log with Base.metadata)
+from app.models import llm_budget  # noqa: F401  (registers llm_budget_ledger / llm_budget_state)
+from app.models import check_state  # noqa: F401  (registers source_check_state)
+from app.models import classify_pending  # noqa: F401  (registers classify_pending)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

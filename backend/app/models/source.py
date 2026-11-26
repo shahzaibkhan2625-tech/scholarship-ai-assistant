@@ -166,6 +166,9 @@ class SourceFetchLog(Base):
     monitoring_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("monitoring_runs.id"), nullable=True, index=True
     )
+    # 003 (R-10): NULL on ordinary rows; unchanged | deferred | rules | provider_quota | provider_error |
+    # provider_parse. `status` keeps its three values.
+    outcome: Mapped[str | None] = mapped_column(String(24), nullable=True)
 
 
 # US8 B2: serves the newest-first per-source reads (coverage DISTINCT ON, recent logs,
