@@ -410,8 +410,14 @@ def test_listing_extraction_reuses_cache_within_ttl_without_refetching(db):
     source = source_repo.upsert_source_by_domain(session, _source_data(status="active", update_frequency="weekly"))
     created_sources.append(source.id)
 
+    # 003 FR-SKIP-8: a real extraction row carries its fetched URL; an OK row with `items_found` but no
+    # fetched URL is one of ingestion's per-record rows and is not an extraction.
     prior_log = source_repo.log_fetch(
-        session, SourceFetchLogCreate(source_id=source.id, status=FetchStatus.OK, items_found=1, retry_count=0)
+        session,
+        SourceFetchLogCreate(
+            source_id=source.id, status=FetchStatus.OK, items_found=1, retry_count=0,
+            fetched_url="https://example.com/list",
+        ),
     )
     created_logs.append(prior_log.id)
 

@@ -9,7 +9,11 @@ floors, so the history that explains a source's current state is never pruned:
   (b) each source's single most recent row of any kind (a source flagged `failing`
       by discovery's first-failure rule may have only an old NULL-run row);
   (c) each source's most recent OK row with `items_found` -- the extraction-cache /
-      shrink-guard baseline read by `official_fetch` and the monitor graph.
+      shrink-guard baseline read by `official_fetch` and the monitor graph;
+  (c2) (003, FR-SKIP-8) each source's most recent listing-EXTRACTION row: OK, `items_found` and a
+      fetched URL. Ingestion writes its own per-record OK rows (`items_found=1`, no fetched URL), so
+      the newest `items_found` row of floor (c) is usually one of those and would leave the
+      extraction row, which the discovery cache and the baseline read, unprotected.
 
 Only `source_fetch_log` is touched. Pooler-safe: no locks, no session state, one
 short transaction per batch. `source_ids` scopes the job (tests MUST pass it; the
@@ -73,8 +77,18 @@ def _protected_ids(
         .distinct(SourceFetchLog.source_id)
         .order_by(SourceFetchLog.source_id, SourceFetchLog.started_at.desc(), SourceFetchLog.id.desc())
     )
+    floor_c2 = scoped(
+        select(SourceFetchLog.id)
+        .where(
+            SourceFetchLog.status == FetchStatus.OK,
+            SourceFetchLog.items_found.is_not(None),
+            SourceFetchLog.fetched_url.is_not(None),
+        )
+        .distinct(SourceFetchLog.source_id)
+        .order_by(SourceFetchLog.source_id, SourceFetchLog.started_at.desc(), SourceFetchLog.id.desc())
+    )
     protected: set[uuid.UUID] = set()
-    for stmt in (floor_a, floor_b, floor_c):
+    for stmt in (floor_a, floor_b, floor_c, floor_c2):
         protected.update(db.execute(stmt).scalars().all())
     return list(protected)
 

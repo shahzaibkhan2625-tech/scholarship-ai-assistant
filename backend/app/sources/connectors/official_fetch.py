@@ -250,15 +250,20 @@ def _extraction_ttl(update_frequency: str | None) -> timedelta:
     return _UPDATE_FREQUENCY_TTL.get(update_frequency or "", _DEFAULT_EXTRACTION_TTL)
 
 
-def _last_successful_extraction(db: Session, source_id: uuid.UUID):
+def _last_successful_extraction(db: Session, source_id: uuid.UUID, target_url: str | None = None):
     """The most recent `source_fetch_log` row that represents a real past
-    LISTING-EXTRACTION success (status OK *and* `items_found` populated) for
-    this source — not just a raw HTTP-200, which `fetch_official` above logs
-    on every attempt regardless of whether extraction ever ran.
+    LISTING-EXTRACTION success (status OK *and* `items_found` populated *and* a fetched URL) for
+    this source. Not just a raw HTTP-200, which `fetch_official` above logs on every attempt, and not
+    one of ingestion's own per-record success rows (`items_found=1`, no fetched URL): those are
+    skipped, never allowed to shadow the extraction row behind them (003 FR-SKIP-8, audit P4-OF-3).
+    With `target_url` (the resolved path) only a row fetched from that very target counts.
     `get_fetch_logs_for_source` is already ordered `started_at desc, id desc` (deterministic on a tie)."""
     for log in source_repo.get_fetch_logs_for_source(db, source_id):
-        if log.status == FetchStatus.OK and log.items_found is not None:
-            return log
+        if log.status != FetchStatus.OK or log.items_found is None or not log.fetched_url:
+            continue
+        if target_url is not None and log.fetched_url != target_url:
+            continue
+        return log
     return None
 
 
@@ -354,12 +359,12 @@ def fetch_and_extract_listing(
 
     # 002 T177: monitoring must never receive "cached" (a cached result cannot
     # detect change); default False leaves every 001/discovery call unchanged.
-    last_extraction = None if bypass_cache else _last_successful_extraction(db, source_id)
     # On the resolved path a cached row only counts if it was fetched from this
     # very target (NULL pre-002 rows never match), so changing/clearing the
     # listing URL is never answered from a different page's extraction.
-    if last_extraction is not None and resolved and last_extraction.fetched_url != url:
-        last_extraction = None
+    last_extraction = (
+        None if bypass_cache else _last_successful_extraction(db, source_id, url if resolved else None)
+    )
     if last_extraction is not None:
         age = datetime.now(timezone.utc) - last_extraction.started_at
         if age < _extraction_ttl(source.update_frequency):

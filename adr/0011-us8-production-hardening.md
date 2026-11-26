@@ -69,3 +69,7 @@
 - Spec: `specs/002-source-monitoring-hardening/spec.md` (US8, NFR-HARDEN-1..8, SC-007..010)
 - Tasks: T216–T237 (+ request-ID middleware, retention floor clause, loopback bind, pinned `STORAGE_ROOT`)
 - Related ADRs: ADR-0008 (health derivation, runs-not-rows), ADR-0010 (SSRF limits), ADR-0006 (`_prior:*` rows are not pruned by this work)
+
+## Amendment (2026-11-26, feature 003 update)
+
+The original text above is unchanged. Retention floor (c) keeps each source's most recent OK row with `items_found`. Ingestion writes its own per-record OK rows (`items_found=1`, no fetched URL), so that row is usually an ingestion row and the older listing-extraction row, which the discovery cache and the baseline read, was not protected. Feature 003 (FR-SKIP-8, T453) adds floor (c2): each source's most recent OK row with `items_found` and a fetched URL. Floors (a), (b) and (c) are unchanged; (c2) only adds protection.
