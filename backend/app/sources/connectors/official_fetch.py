@@ -42,11 +42,15 @@ from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
-from app.data.repositories import source_repo
+from app.core.config import settings
+from app.data.repositories import check_state_repo, source_repo
 from app.data.repositories.db import safe_rollback
 from app.data.repositories.source_repo import SourceNotApprovedError
 from app.models.source import FetchStatus, VerificationStatus
 from app.schemas.source import SourceFetchLogCreate
+from app.services import content_fingerprint
+from app.services import llm_budget
+from app.services.lifecycle import DEFAULT_FRESHNESS_WINDOW_DAYS
 from app.sources.retry_policy import DEFAULT_MAX_ATTEMPTS, run_with_retry
 from app.tools.detect_candidate_links import find_candidate_links
 from app.tools.extract_listing import ExtractListingOutput, extract_listing_from_page
@@ -129,6 +133,10 @@ class OfficialFetchResult:
     final_url: str | None = None
     # 002 D3: fixed vocabulary ("fetch_error"); None on success.
     failure_kind: str | None = None
+    # 003: a 304 answer to a conditional request (no body), and the validators the server sent.
+    not_modified: bool = False
+    etag: str | None = None
+    last_modified: str | None = None
 
 
 class _FetchFailed(Exception):
@@ -158,13 +166,15 @@ def fetch_official(
     monitoring_run_id: uuid.UUID | None = None,
     skip_failing_transition: bool = False,
     allow_failing: bool = False,
+    request_headers: dict[str, str] | None = None,
 ) -> OfficialFetchResult:
     source = _gate_source(db, source_id, allow_failing)
     if source is None:
         raise SourceNotApprovedError(f"source {source_id} is not an active, approved source")
 
     def _attempt() -> FetchResult:
-        result = fetch(url)
+        # Conditional headers only when given: an injected one-argument `fetch(url)` keeps working.
+        result = fetch(url, headers=request_headers) if request_headers else fetch(url)
         if not result.success:
             raise _FetchFailed(result)
         return result
@@ -196,6 +206,9 @@ def fetch_official(
             http_status=fetch_result.status_code,
             fetched_at=datetime.now(timezone.utc),
             final_url=fetch_result.final_url,
+            not_modified=getattr(fetch_result, "not_modified", False),
+            etag=getattr(fetch_result, "etag", None),
+            last_modified=getattr(fetch_result, "last_modified", None),
         )
 
     failed = outcome.last_error
@@ -276,7 +289,7 @@ class CachedScholarshipRef:
 @dataclass(frozen=True)
 class ListingExtractionResult:
     source_id: uuid.UUID
-    status: str  # "ok" | "fail" | "cached"
+    status: str  # "ok" | "fail" | "cached" | "unchanged" | "deferred" (003)
     candidates: list[dict] = field(default_factory=list)  # ready for run_ingestion; "ok" only
     cached: list[CachedScholarshipRef] = field(default_factory=list)  # already-persisted refs; "cached" only
     error: str | None = None
@@ -286,6 +299,71 @@ class ListingExtractionResult:
     failure_kind: str | None = None
     # 002 D2: this call's grounded accepted_count; "ok" only.
     accepted_count: int | None = None
+    # 003: when a deferred check may be tried again.
+    retry_at: datetime | None = None
+
+
+# 003: helpers for the unchanged-page skip (state transitions: data-model.md, source_check_state).
+_SUCCESS_OUTCOMES = frozenset({"ok", "rules"})
+_CADENCE_MINUTES_BY_FREQUENCY = {
+    "weekly": "cadence_weekly_minutes",
+    "monthly": "cadence_monthly_minutes",
+    "quarterly": "cadence_quarterly_minutes",
+    "annual": "cadence_annual_minutes",
+}
+
+
+def _cadence_cap_minutes(source) -> int:
+    """The source's check interval, the ceiling of the back-off (the cadence service of US3 owns the
+    full derivation; this reads the same defaults)."""
+    name = _CADENCE_MINUTES_BY_FREQUENCY.get(source.update_frequency or "", "cadence_undeclared_minutes")
+    return getattr(settings, name)
+
+
+def _forced_recheck_due(source, state, now: datetime) -> bool:
+    """FR-SKIP-5: a full re-extraction every min(forced days, freshness window / 2), whatever the
+    fingerprint says."""
+    if state.last_full_extraction_at is None:
+        return True
+    window_days = source.freshness_window_days or DEFAULT_FRESHNESS_WINDOW_DAYS
+    interval = timedelta(days=min(settings.forced_full_recheck_days, window_days / 2))
+    return now - state.last_full_extraction_at >= interval
+
+
+def _conditional_headers(state) -> dict[str, str] | None:
+    if not state.validators_trusted:
+        return None
+    headers = {}
+    if state.etag:
+        headers["If-None-Match"] = state.etag
+    if state.last_modified:
+        headers["If-Modified-Since"] = state.last_modified
+    return headers or None
+
+
+def _validator_fields(state, fetch_result, same_fingerprint: bool) -> dict:
+    """Validators are trusted only after the server proved it honours them: a stable ETag, or a
+    Last-Modified that stayed constant while the fingerprint did (HEC sends the response time, so
+    it never qualifies)."""
+    etag, modified = fetch_result.etag, fetch_result.last_modified
+    stable = same_fingerprint and (
+        (bool(etag) and etag == state.etag) or (not etag and bool(modified) and modified == state.last_modified)
+    )
+    return {"etag": etag, "last_modified": modified, "validators_trusted": stable}
+
+
+def _noise_fields(state, did_change: bool) -> dict:
+    checks, changed = content_fingerprint.update_noise_window(
+        state.checks_window, state.changed_window, did_change, window=settings.noise_window_checks
+    )
+    return {"checks_window": checks, "changed_window": changed}
+
+
+def _cached_refs(db: Session, source_id: uuid.UUID) -> list[CachedScholarshipRef]:
+    return [
+        CachedScholarshipRef(scholarship_id=ss.scholarship_id, verification_status=ss.verification_status)
+        for ss in source_repo.get_scholarship_sources_by_source(db, source_id)
+    ]
 
 
 def _detect_and_record_candidate_sources(db: Session, url: str, html: str) -> None:
@@ -331,6 +409,7 @@ def fetch_and_extract_listing(
     bypass_cache: bool = False,
     skip_failing_transition: bool = False,
     allow_failing: bool = False,
+    clock: Callable[[], datetime] | None = None,
 ) -> ListingExtractionResult:
     """T135: fetch (`fetch_official` above) -> `extract_listing` -> shaped
     result, gated by a two-layer cache so a source isn't re-fetched/
@@ -368,10 +447,7 @@ def fetch_and_extract_listing(
     if last_extraction is not None:
         age = datetime.now(timezone.utc) - last_extraction.started_at
         if age < _extraction_ttl(source.update_frequency):
-            cached = [
-                CachedScholarshipRef(scholarship_id=ss.scholarship_id, verification_status=ss.verification_status)
-                for ss in source_repo.get_scholarship_sources_by_source(db, source_id)
-            ]
+            cached = _cached_refs(db, source_id)
             return ListingExtractionResult(
                 source_id=source_id,
                 status="cached",
@@ -379,6 +455,13 @@ def fetch_and_extract_listing(
                 fetched_url=url,
                 used_homepage_fallback=used_homepage_fallback,
             )
+
+    now = (clock or (lambda: datetime.now(timezone.utc)))()
+    state = check_state_repo.get_or_create(db, source_id)  # bootstraps the back-off from history (R-08)
+    last_succeeded = state.last_extraction_outcome in _SUCCESS_OUTCOMES
+    forced = _forced_recheck_due(source, state, now)
+    # Validators go out only when trusted, and never on a forced full re-check.
+    conditional = _conditional_headers(state) if (last_succeeded and not forced and state.fingerprint) else None
 
     fetch_result = fetch_official(
         db,
@@ -391,6 +474,7 @@ def fetch_and_extract_listing(
         monitoring_run_id=monitoring_run_id,
         skip_failing_transition=skip_failing_transition,
         allow_failing=allow_failing,
+        request_headers=conditional,
     )
     if not fetch_result.success:
         return ListingExtractionResult(
@@ -424,6 +508,38 @@ def fetch_and_extract_listing(
                 failure_kind=FAILURE_REDIRECT_ANOMALY,
             )
 
+    def _row(outcome: str) -> None:
+        source_repo.log_fetch(
+            db, SourceFetchLogCreate(source_id=source_id, status=FetchStatus.OK, outcome=outcome, **log_context)
+        )
+
+    def _result(status: str, **extra) -> ListingExtractionResult:
+        return ListingExtractionResult(
+            source_id=source_id, status=status, fetched_url=url, used_homepage_fallback=used_homepage_fallback, **extra
+        )
+
+    if fetch_result.not_modified:  # a trusted validator was honoured: same page, nothing to extract
+        check_state_repo.update(
+            db, source_id, **_noise_fields(state, False)
+        )
+        llm_budget.record_avoided(db, "avoided_unchanged", now=now)
+        _row("unchanged")
+        return _result("unchanged", cached=_cached_refs(db, source_id))
+
+    fingerprint = content_fingerprint.fingerprint_html(fetch_result.content or "")
+    same = state.fingerprint is not None and fingerprint == state.fingerprint
+    common = {**_noise_fields(state, state.fingerprint is not None and not same), **_validator_fields(state, fetch_result, same)}
+    if same and last_succeeded and not forced:  # FR-SKIP-2: skip the LLM and candidate-link detection
+        check_state_repo.update(db, source_id, **common)
+        llm_budget.record_avoided(db, "avoided_unchanged", now=now)
+        _row("unchanged")
+        return _result("unchanged", cached=_cached_refs(db, source_id))
+    if same and not last_succeeded and state.next_attempt_at is not None and now < state.next_attempt_at:
+        # FR-SKIP-4: an unchanged page whose last extraction failed is retried on a back-off, not skipped as a success
+        check_state_repo.update(db, source_id, **common)
+        _row("deferred")
+        return _result("deferred", retry_at=state.next_attempt_at, cached=_cached_refs(db, source_id))
+
     _detect_and_record_candidate_sources(db, url, fetch_result.content or "")
 
     extraction = extract_listing(fetch_result.content or "", source_url=url)
@@ -434,6 +550,12 @@ def fetch_and_extract_listing(
         # hallucinated names) must not be silently indistinguishable from "no
         # scholarships found" -- logged and the source marked failing,
         # exactly like a real fetch failure, so it surfaces as a coverage gap.
+        level = state.backoff_level + 1
+        delay = min(settings.unextractable_backoff_base_minutes * 2 ** min(level - 1, 20), _cadence_cap_minutes(source))
+        check_state_repo.update(
+            db, source_id, fingerprint=fingerprint, fingerprint_at=now, last_extraction_outcome="zero_candidates",
+            backoff_level=level, next_attempt_at=now + timedelta(minutes=delay), **common,
+        )
         detail = "listing extraction yielded 0 candidates"
         if extraction.rejected_count:
             detail = f"listing extraction yielded 0 grounded candidates (rejected {extraction.rejected_count} ungrounded)"
@@ -457,6 +579,10 @@ def fetch_and_extract_listing(
     # Some candidates were hallucinated and rejected by grounding but others
     # were accepted: proceed with the good ones, but the rejection is still
     # logged (not silently dropped) via the OK row's `error` note.
+    check_state_repo.update(
+        db, source_id, fingerprint=fingerprint, fingerprint_at=now, last_full_extraction_at=now,
+        last_extraction_outcome="ok", backoff_level=0, next_attempt_at=None, **common,
+    )
     log_note = (
         f"rejected {extraction.rejected_count} ungrounded candidate(s): {extraction.rejected_names[:5]}"
         if extraction.rejected_count

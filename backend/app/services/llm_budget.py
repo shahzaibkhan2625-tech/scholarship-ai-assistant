@@ -32,7 +32,7 @@ from app.core.llm_gate import (
 )
 from app.data.repositories import llm_budget_repo as repo
 
-__all__ = ["BudgetConfig", "Decision", "DbLlmGate", "budget_day", "next_boundary", "decide"]
+__all__ = ["BudgetConfig", "Decision", "DbLlmGate", "budget_day", "next_boundary", "decide", "record_avoided"]
 
 logger = logging.getLogger(__name__)
 
@@ -178,3 +178,24 @@ class DbLlmGate:
         except Exception as exc:  # noqa: BLE001
             self.store_failures += 1
             logger.warning("llm budget store unavailable (%s)", type(exc).__name__)
+
+
+def record_avoided(
+    db: Session,
+    event: str,
+    *,
+    request_type: RequestType = RequestType.GENERATE,
+    now: datetime | None = None,
+) -> None:
+    """Count a provider request that was NOT made (`avoided_unchanged`, `avoided_rules`) in the caller's
+    transaction (FR-OBS-1). Best effort inside a savepoint: counting must never break a check."""
+    from app.core.config import settings
+
+    moment = now or _utcnow()
+    day = budget_day(moment, ZoneInfo(settings.llm_budget_timezone))
+    priority = (current_priority() or Priority.MONITORING).value
+    try:
+        with db.begin_nested():
+            repo.increment(db, day, request_type.value, priority, event)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not count %s (%s)", event, type(exc).__name__)

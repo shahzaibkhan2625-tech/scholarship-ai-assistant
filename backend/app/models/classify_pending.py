@@ -19,7 +19,7 @@ class ClassifyPending(Base):
     __tablename__ = "classify_pending"
 
     scholarship_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("scholarships.id"), primary_key=True
+        UUID(as_uuid=True), ForeignKey("scholarships.id", ondelete="CASCADE"), primary_key=True
     )
     queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

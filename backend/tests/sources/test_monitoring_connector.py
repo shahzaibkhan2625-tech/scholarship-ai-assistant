@@ -92,7 +92,12 @@ def test_empty_extraction_marks_failing_by_default_but_not_with_skip(session_and
     assert (skipped.status, skipped.failure_kind) == ("fail", "empty_extraction")
     assert _status(session, source.id) == SourceStatus.ACTIVE
 
-    default = fetch_and_extract_listing(session, source.id, None, fetch=_ok, extract_listing=_zero, sleep=_no_sleep)
+    def other_page(url):  # 003: a changed page, so the back-off for the unchanged one does not apply
+        return FetchResult(url=url, success=True, status_code=200, html="<html>another page</html>")
+
+    default = fetch_and_extract_listing(
+        session, source.id, None, fetch=other_page, extract_listing=_zero, sleep=_no_sleep
+    )
     assert (default.status, default.failure_kind) == ("fail", "empty_extraction")
     assert _status(session, source.id) == SourceStatus.FAILING  # 001 behavior intact
 

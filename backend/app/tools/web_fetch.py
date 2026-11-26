@@ -42,6 +42,11 @@ class FetchResult:
     # 010: True when the URL (or a redirect hop) was refused before any request was sent to it;
     # `error` then starts "blocked: ".
     blocked: bool = False
+    # 003 (R-06): a 304 answer to a conditional request (success, no body), and the validators the
+    # server sent, so the caller can decide whether the server honours them.
+    not_modified: bool = False
+    etag: str | None = None
+    last_modified: str | None = None
 
 
 class BlockedFetchError(Exception):
@@ -90,6 +95,7 @@ def safe_get(
     timeout: float = _TIMEOUT_SECONDS,
     max_redirects: int | None = None,
     params: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
     resolve: Callable[[str], list[str]] | None = None,
 ) -> tuple[httpx.Response, str]:
     """GET `url` with the per-hop public-address check and a pinned connection.
@@ -97,15 +103,21 @@ def safe_get(
     Returns `(response, final_url)`, `final_url` being the last URL requested as written (never the
     pinned-IP form). Raises `BlockedFetchError` (refused before any request to the offending hop),
     and `httpx.RequestError` subclasses for unresolvable hosts, timeouts and connection errors. A
-    redirect response without a `Location` is returned as is. `params` apply to the first request."""
+    redirect response without a `Location` is returned as is. `params` and `headers` (conditional
+    request validators, 003) apply to the first request only and are never forwarded to a redirect
+    target; the per-hop public-address check and the pinned connection are unchanged."""
     resolve = resolve or _resolve_host
     limit = settings.max_fetch_redirects if max_redirects is None else max_redirects
     current = httpx.URL(url)
     with _make_client(timeout=timeout) as client:
         for hop in range(limit + 1):
-            pinned, headers, extensions = _pin(current, resolve)
+            pinned, pin_headers, extensions = _pin(current, resolve)
             request = client.build_request(
-                "GET", pinned, params=params if hop == 0 else None, headers=headers, extensions=extensions
+                "GET",
+                pinned,
+                params=params if hop == 0 else None,
+                headers={**pin_headers, **(headers or {})} if hop == 0 else pin_headers,
+                extensions=extensions,
             )
             response = client.send(request)
             location = response.headers.get("location")
@@ -125,10 +137,13 @@ def fetch_url(
     *,
     timeout: float = _TIMEOUT_SECONDS,
     max_redirects: int | None = None,
+    headers: dict[str, str] | None = None,
     resolve: Callable[[str], list[str]] | None = None,
 ) -> FetchResult:
     try:
-        response, final_url = safe_get(url, timeout=timeout, max_redirects=max_redirects, resolve=resolve)
+        response, final_url = safe_get(
+            url, timeout=timeout, max_redirects=max_redirects, headers=headers, resolve=resolve
+        )
     except BlockedFetchError as exc:
         # host and reason only: never the path, query, userinfo or any page content
         logger.warning("fetch refused: host=%s reason=%s", urlparse(url).hostname, exc)
@@ -149,10 +164,15 @@ def fetch_url(
             final_url=final_url,
         )
 
+    if response.status_code == 304:
+        return FetchResult(url=url, success=True, status_code=304, final_url=final_url, not_modified=True)
+
     return FetchResult(
         url=url,
         success=True,
         status_code=response.status_code,
         html=response.text,
         final_url=final_url,
+        etag=response.headers.get("etag"),
+        last_modified=response.headers.get("last-modified"),
     )

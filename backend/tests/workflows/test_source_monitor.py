@@ -78,7 +78,10 @@ class _Fetcher:
             self.on_call(url)
         if urlparse(url).hostname in self.failing_hosts:
             return FetchResult(url=url, success=False, status_code=503, error="Server responded with HTTP 503")
-        return FetchResult(url=url, success=True, status_code=200, html="<html>listing</html>")
+        # 003: the page text differs on every call, so each run is an extraction (a changed page). These
+        # tests exercise the monitor's change detection, which runs only after an extraction; the
+        # unchanged-page skip has its own tests (test_source_monitor_unchanged.py).
+        return FetchResult(url=url, success=True, status_code=200, html=f"<html>listing {len(self.calls)}</html>")
 
 
 def _cand(name, **overrides):

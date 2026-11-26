@@ -218,7 +218,9 @@ def _run_web_listing_step(
     # URL choice is the connector's (listing_page_url -> legacy key -> homepage).
     outcome = listing_fetch(db, step.source_id, None)
 
-    if outcome.status == "cached":
+    if outcome.status in ("cached", "deferred"):
+        # 003: `deferred` (the extraction was not attempted now: back-off or budget) is neither an error
+        # nor "no scholarships found"; what is already persisted for the source is returned.
         step_results = [
             DiscoveryResultItem(
                 scholarship_id=ref.scholarship_id,

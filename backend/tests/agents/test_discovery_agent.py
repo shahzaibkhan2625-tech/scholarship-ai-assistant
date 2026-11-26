@@ -405,3 +405,44 @@ def test_agent_module_does_not_import_the_connector_or_resolver_or_build_a_homep
     assert not any("connectors" in name or name == "resolve_fetch_target" for name in imported)
     listing_step = text.split("def _run_web_listing_step")[1].split("def _run_step")[0]
     assert 'f"https://{source.domain}"' not in listing_step
+
+
+# --- 003 T281 (R-07): the connector's new `unchanged` (mapped to cached) and `deferred` statuses -----
+
+
+def _web_source(session, created_sources):
+    return _active_api_source(session, created_sources, source_type="gov", access_method="web")
+
+
+def _refs_listing_fetch(status):
+    refs = [SimpleNamespace(scholarship_id=uuid.uuid4(), verification_status="verified") for _ in range(2)]
+
+    def listing_fetch(_db, source_id, _url):
+        return SimpleNamespace(source_id=source_id, status=status, candidates=[], cached=refs, error=None)
+
+    return listing_fetch, refs
+
+
+def _only_this_source(source_id):
+    real = source_repo.get_active_sources
+    return patch.object(source_repo, "get_active_sources", lambda db, **kw: [s for s in real(db, **kw) if s.id == source_id])
+
+
+def test_unchanged_page_is_served_from_the_persisted_records_without_an_error_or_a_false_empty(db):
+    session, created_sources, _ = db
+    source = _web_source(session, created_sources)
+    listing_fetch, refs = _refs_listing_fetch("cached")  # the tool maps `unchanged` to `cached`
+    with _only_this_source(source.id):
+        run = run_discovery(session, _profile(), listing_fetch=listing_fetch, fetch_api=lambda *a: None)
+    assert run.fetch_errors == []
+    assert {r.scholarship_id for r in run.discovery_result.results} == {r.scholarship_id for r in refs}
+
+
+def test_deferred_extraction_is_neither_an_error_nor_a_false_no_results(db):
+    session, created_sources, _ = db
+    source = _web_source(session, created_sources)
+    listing_fetch, refs = _refs_listing_fetch("deferred")
+    with _only_this_source(source.id):
+        run = run_discovery(session, _profile(), listing_fetch=listing_fetch, fetch_api=lambda *a: None)
+    assert run.fetch_errors == []  # not recorded as a failure, and never "None"
+    assert {r.scholarship_id for r in run.discovery_result.results} == {r.scholarship_id for r in refs}

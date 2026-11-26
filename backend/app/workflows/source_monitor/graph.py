@@ -116,12 +116,17 @@ class _Counters:
     processed: int = 0
     failed: int = 0
     changes: int = 0
+    skipped: int = 0  # 003: checks skipped as unchanged
+    deferred: int = 0  # 003: checks deferred (back-off or budget)
 
 
 @dataclass
 class _SourceStats:
     changes: int = 0
     fetch_failed: bool = False
+    # 003: this check was skipped as unchanged / deferred (no extraction, no change detection).
+    skipped: bool = False
+    deferred: bool = False
     # "ok" | "fail" | "error" (the check crashed); drives the log event and the fetch counter.
     fetch_status: str | None = None
     # US2: one event per stored new/field-changed scholarship, consumed by the
@@ -451,7 +456,22 @@ def _monitor_one_source(
             fetch=fetch,
             extract_listing=extract_listing,
             sleep=sleep,
+            clock=clock,
         )
+        if result.status == "unchanged":
+            # 003 FR-SKIP-2/6: the page is the one already extracted. A successful, cheap check: touch it
+            # and apply the healthy transition, and nothing else. No change detection, no
+            # `mark_seen_verified`, no stale sweep (an empty listed-names set would read as "everything was
+            # removed" and could close records).
+            stats.skipped, stats.fetch_status = True, "ok"
+            source_repo.touch_source_check(db, source_id, success=True)
+            _apply_health_transition(db, source_id, success=True)
+            return True
+        if result.status == "deferred":
+            # The extraction was not attempted (back-off for an unextractable page, or the budget). Neither
+            # a success nor a failure of the site: health and records are left exactly as they are.
+            stats.deferred, stats.fetch_status = True, "ok"
+            return True
         success = result.status == "ok"
         stats.fetch_failed = not success
         stats.fetch_status = "ok" if success else "fail"
@@ -536,6 +556,8 @@ def _record_run_end(status: MonitoringStatus, counters: _Counters, started: floa
             "sources_processed": counters.processed,
             "sources_failed": counters.failed,
             "changes_detected": counters.changes,
+            "sources_skipped": counters.skipped,
+            "sources_deferred": counters.deferred,
             "duration_seconds": round(duration, 3),
         },
     )
@@ -588,6 +610,8 @@ def _run_source_monitor(
                 counters.processed += 1
                 counters.failed += 1 if stats.fetch_failed else 0
                 counters.changes += stats.changes
+                counters.skipped += 1 if stats.skipped else 0
+                counters.deferred += 1 if stats.deferred else 0
                 fetch_status = stats.fetch_status or ("fail" if stats.fetch_failed else "ok")
                 metrics.SOURCE_FETCH_TOTAL.labels(status=fetch_status).inc()
                 logger.log(

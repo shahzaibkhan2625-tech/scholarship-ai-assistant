@@ -28,7 +28,7 @@ class CachedScholarshipRefOutput(BaseModel):
 
 class ListingFetchOutput(BaseModel):
     source_id: uuid.UUID
-    status: str  # "ok" | "fail" | "cached"
+    status: str  # "ok" | "fail" | "cached" | "deferred"
     candidates: list[dict[str, Any]] = Field(default_factory=list)
     cached: list[CachedScholarshipRefOutput] = Field(default_factory=list)
     error: str | None = None
@@ -37,9 +37,12 @@ class ListingFetchOutput(BaseModel):
 def listing_fetch_tool(db: Session, source_id: uuid.UUID, url: str | None = None) -> ListingFetchOutput:
     """`url=None` lets the connector resolve the fetch target (T165)."""
     result = fetch_and_extract_listing(db, source_id, url)
+    # 003 (R-07): an unchanged page is the page already extracted, so discovery sees the existing
+    # `cached` outcome with the persisted refs; `deferred` passes through (refs, no error).
+    status = "cached" if result.status == "unchanged" else result.status
     return ListingFetchOutput(
         source_id=result.source_id,
-        status=result.status,
+        status=status,
         candidates=result.candidates,
         cached=[
             CachedScholarshipRefOutput(scholarship_id=ref.scholarship_id, verification_status=ref.verification_status)

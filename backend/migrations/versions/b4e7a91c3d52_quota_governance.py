@@ -62,7 +62,7 @@ def upgrade() -> None:
         sa.Column('rules_review_needed', sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.Column('rules_review_reason', sa.String(length=64), nullable=True),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.ForeignKeyConstraint(['source_id'], ['source_registry.id']),
+        sa.ForeignKeyConstraint(['source_id'], ['source_registry.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('source_id'),
     )
     op.create_table(
@@ -72,7 +72,7 @@ def upgrade() -> None:
         sa.Column('attempts', sa.Integer(), server_default='0', nullable=False),
         sa.Column('last_reason', sa.String(length=32), nullable=True),
         sa.Column('last_attempt_at', sa.DateTime(timezone=True), nullable=True),
-        sa.ForeignKeyConstraint(['scholarship_id'], ['scholarships.id']),
+        sa.ForeignKeyConstraint(['scholarship_id'], ['scholarships.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('scholarship_id'),
     )
     op.add_column('source_fetch_log', sa.Column('outcome', sa.String(length=24), nullable=True))

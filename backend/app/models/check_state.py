@@ -14,7 +14,7 @@ class SourceCheckState(Base):
     __tablename__ = "source_check_state"
 
     source_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("source_registry.id"), primary_key=True
+        UUID(as_uuid=True), ForeignKey("source_registry.id", ondelete="CASCADE"), primary_key=True
     )
     fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     fingerprint_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
