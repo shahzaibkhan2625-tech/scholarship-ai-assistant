@@ -134,6 +134,8 @@ The provider-failure rows are `fail`, which the failure-streak definition would 
 
 **Open for review.** Using `fail` for provider rows keeps the status truthful but relies on two readers being updated and tested; this is my recommendation.
 
+**Implementation choices (batch 1, recorded 2026-11-27, manager-approved).** A run whose newest row carries a `provider_*` outcome is left out of the failure streak, so retention keeps the full ranking. `recent_provider_failures` counts the runs among the newest 10 that have a provider failure; `last_provider_failure_at` looks at all rows. Candidate validation stops on deferral, quota or outage and continues on a parse failure.
+
 ## R-11 Deterministic extraction (story 5): feasibility on HEC, and not on EACEA
 
 **HEC listing page, measured** (`https://www.hec.gov.pk/english/scholarshipsgrants/Pages/default.aspx`, plain GET, 200, ~136 KB):
@@ -202,6 +204,8 @@ See `plan.md` for the migration statement. In short: one additive revision; old 
 
 **Where a failure never reaches the route.** `classify` and a few tools swallow exceptions today; T454 lists, for each of the eleven call sites, whether a failure reaches the route or is swallowed, and only changes the ones where a failure is silently turned into a wrong answer on a student route (not classify: OQ-1).
 
+**Implementation choices (batch 1, recorded 2026-11-27, manager-approved).** (a) One `LlmError` handler: the 503 `reason` and the fetch-log `outcome` are read from class attributes (`reason`, `fetch_outcome`) of the exception, not from a type ladder. (b) A missing API key is recorded as `provider_error` in the fetch log. (c) A failure that carries no provider time retries after `llm_unavailable_retry_seconds`. (d) `LlmPriorityMissing` stays a programming error and is never reported as an outage. (e) `LlmResponseUnparseable` is raised only in `extract_profile`, `extract_requirements` and soft-preference matching; CV/SOP routes keep their 409 and document upload keeps its existing behaviour (201 `extraction_unavailable`).
+
 ## R-17 Classification cost (audit T-05, BR-02) (updated 2026-11-26, post-audit/post-010)
 
 `classify` runs the rules first and makes one LLM call for whatever stays unresolved; funding almost never resolves by rules (the joined text holds `fully_funded`, which the pattern cannot match). Measured under mocks as 1 call per realistic candidate, not on real pages. Consequences for 003: (a) the projection in plan.md is corrected; (b) the call runs under the caller's class (monitoring or validation), so the ladder bounds it; (c) the failure is no longer silent in the ledger (deferred, denied and provider events are counted); (d) (updated 2026-11-26, manager decisions) a refused or failed classify call no longer ends the story: the record is stored as today and queued for a later attempt (R-20). Reducing the number of calls is out of scope (spec).
@@ -229,3 +233,5 @@ See `plan.md` for the migration statement. In short: one additive revision; old 
 **Budget effect.** The drain runs as backfill: capped at 6 requests a day and admitted only while remaining requests stay above the reserve, so students and monitoring are never starved by it. Because backfill has the smallest cap, a large backlog drains over several days (FR-BUDGET-10).
 
 **Not done here.** Reducing the number of classify calls (rules-first, batching) stays out of scope.
+
+**Implementation choices (batch 1, recorded 2026-11-27, manager-approved).** `_store_node` commits the scholarship record, its source link and the queue row in one transaction. The drain takes a batch of 10 rows per tick. A refusal stops the drain and leaves the rows untouched (no attempt counted); a quota or outage failure counts an attempt and stops; a parse failure counts an attempt and continues with the next row. The drain currently runs after the scheduled monitor, and the cheap tick of T300 must keep it.

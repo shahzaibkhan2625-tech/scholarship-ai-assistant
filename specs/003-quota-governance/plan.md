@@ -225,6 +225,10 @@ backend/tests/fixtures/hec/{listing.html,llm_snapshot.json}          # recorded 
 | The new tables are not usable by the restricted role (updated 2026-11-26, post-audit/post-010) | Default privileges plus the role script re-run; a test as `scholarship_app` creates and reads each table; the deploy re-runs the role script before recreating containers |
 | The discovery cache fix changes which rows count as an extraction (updated 2026-11-26, post-audit/post-010) | Test starts at `POST /discovery` with ingestion rows present; retention floor (c) is checked for the same confusion (T453) |
 
+## Implementation choices recorded after batch 1 (2026-11-27, manager-approved)
+
+Details are in research R-10, R-16 and R-20. In short: one `LlmError` handler reads the 503 reason and the fetch-log outcome from class attributes; a missing key is `provider_error`; failures without a provider time retry after `llm_unavailable_retry_seconds`; `LlmPriorityMissing` is a programming error, never an outage; `LlmResponseUnparseable` is raised only in `extract_profile`, `extract_requirements` and soft-preference matching; a run with a provider outcome is left out of the failure streak; `recent_provider_failures` counts runs among the newest 10; candidate validation stops on deferral/quota/outage and continues on a parse failure; `_store_node` commits record and queue row together; the drain takes 10 rows, stops untouched on refusal, counts an attempt and stops on quota/outage, counts and continues on a parse failure, and keeps running after the scheduled monitor (T300 must keep it).
+
 ## Decisions (reviewed and settled 2026-10-25)
 
 1. **Outcome model (R-10): accepted.** New nullable `outcome` column, `status` unchanged; provider failures stored as `fail` plus `outcome = provider_*` and excluded from health and coverage by two readers.
