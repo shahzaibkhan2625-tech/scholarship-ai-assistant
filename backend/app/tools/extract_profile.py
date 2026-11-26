@@ -2,8 +2,11 @@
 the FR contract these are suggestions only: the caller (API layer) never
 auto-saves them, the user must confirm before they hit the profile."""
 
+from pydantic import ValidationError
+
+from app.core.llm_gate import LlmResponseUnparseable
 from app.schemas.profile import ProfileUpdateRequest
-from app.tools._json_utils import extract_json_object
+from app.tools._json_utils import ExtractionParseError, extract_json_object
 
 _SYSTEM_INSTRUCTION = (
     "You extract structured profile fields from a student's CV/resume text. "
@@ -19,5 +22,8 @@ def extract_profile_from_text(cv_text: str) -> ProfileUpdateRequest:
     from app.core.llm import generate_text
 
     raw = generate_text(cv_text, system_instruction=_SYSTEM_INSTRUCTION)
-    parsed = extract_json_object(raw)
-    return ProfileUpdateRequest(**{k: v for k, v in parsed.items() if k in ProfileUpdateRequest.model_fields})
+    try:
+        parsed = extract_json_object(raw)
+        return ProfileUpdateRequest(**{k: v for k, v in parsed.items() if k in ProfileUpdateRequest.model_fields})
+    except (ExtractionParseError, ValidationError, AttributeError):
+        raise LlmResponseUnparseable() from None  # 003 FR-ERR-6: the route answers 503, never 500

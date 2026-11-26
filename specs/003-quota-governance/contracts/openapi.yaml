@@ -417,6 +417,8 @@ components:
         last_success_at: { type: string, format: date-time, nullable: true }
         consecutive_failures: { type: integer }
         listing_page_url: { type: string, nullable: true }
+        recent_provider_failures: { type: integer }
+        last_provider_failure_at: { type: string, format: date-time, nullable: true }
 
     SourceFetchLogEntry:
       type: object
@@ -433,6 +435,10 @@ components:
         fetched_url: { type: string, nullable: true }
         used_homepage_fallback: { type: boolean }
         monitoring_run_id: { type: string, format: uuid, nullable: true }
+        outcome:
+          type: string
+          nullable: true
+          enum: [unchanged, deferred, rules, provider_quota, provider_error, provider_parse]
 
     ScholarshipLifecycleView:
       type: object
@@ -538,7 +544,9 @@ components:
         code: { type: string }
         retry_after_seconds: { type: integer }
         retry_at: { type: string, format: date-time }
-        reason: { type: string }
+        reason:
+          type: string
+          enum: [daily_allowance_spent, provider_quota, provider_unavailable, provider_response_invalid, not_configured]
 
   securitySchemes:
     bearerAuth:

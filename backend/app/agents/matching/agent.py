@@ -17,6 +17,7 @@ Guardrails enforced by this module, in depth:
   (f) Deterministic ranking stays in services/ranking.py — this agent never sorts results.
 """
 
+from app.core.llm_gate import LlmResponseUnparseable
 from app.models.profile import CriterionKind
 from app.schemas.match import (
     CriterionOutcome,
@@ -25,7 +26,7 @@ from app.schemas.match import (
     MatchStrength,
     MatchVerdict,
 )
-from app.tools._json_utils import extract_json_object
+from app.tools._json_utils import ExtractionParseError, extract_json_object
 
 _SYSTEM_INSTRUCTION = """You evaluate a student's SOFT preferences and EXCLUSIONS against one
 scholarship's structured details. You are NOT evaluating hard constraints (GPA, degree,
@@ -90,7 +91,10 @@ def produce_soft_preference_outcomes(
         f"Student's soft preferences / exclusions:\n{_soft_criteria_description(profile)}"
     )
     raw = generate_text(prompt, system_instruction=_SYSTEM_INSTRUCTION)
-    parsed = extract_json_object(raw)
+    try:
+        parsed = extract_json_object(raw)
+    except ExtractionParseError:
+        raise LlmResponseUnparseable() from None  # 003 FR-ERR-6: the route answers 503, never 500
 
     outcomes: list[CriterionOutcome] = []
     for item in parsed.get("soft_preferences", []):

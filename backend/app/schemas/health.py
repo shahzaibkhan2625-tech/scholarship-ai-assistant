@@ -25,6 +25,9 @@ class SourceHealth(BaseModel):
     last_success_at: datetime | None = None
     consecutive_failures: int
     listing_page_url: str | None = None
+    # 003 FR-ERR-5: provider-side failures, kept out of `consecutive_failures`.
+    recent_provider_failures: int = 0
+    last_provider_failure_at: datetime | None = None
 
 
 class SourceFetchLogEntry(SourceFetchLogRead):

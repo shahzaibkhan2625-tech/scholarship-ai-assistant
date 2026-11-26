@@ -43,6 +43,7 @@ from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.llm_gate import LlmError, LlmPriorityMissing
 from app.data.repositories import check_state_repo, source_repo
 from app.data.repositories.db import safe_rollback
 from app.data.repositories.source_repo import SourceNotApprovedError
@@ -540,9 +541,33 @@ def fetch_and_extract_listing(
         _row("deferred")
         return _result("deferred", retry_at=state.next_attempt_at, cached=_cached_refs(db, source_id))
 
+    def _extraction_unavailable(error: LlmError) -> ListingExtractionResult:
+        """FR-ERR-1..4: the gate refused or the provider failed. Not a failure of the site: the source is not
+        marked failing, no record changes and the fingerprint is NOT stored (the next attempt runs against
+        the old baseline). The row carries a short reason class only, never provider text or page content."""
+        outcome = error.fetch_outcome
+        retry_at = getattr(error, "retry_at", None) or now + timedelta(seconds=settings.llm_unavailable_retry_seconds)
+        check_state_repo.update(db, source_id, last_extraction_outcome=outcome, next_attempt_at=retry_at, **common)
+        if outcome == "deferred":
+            _row("deferred")
+        else:
+            source_repo.log_fetch(
+                db,
+                SourceFetchLogCreate(
+                    source_id=source_id, status=FetchStatus.FAIL, outcome=outcome, retry_count=0,
+                    error=f"extraction not completed ({outcome})", **log_context,
+                ),
+            )
+        return _result("deferred", retry_at=retry_at, cached=_cached_refs(db, source_id))
+
     _detect_and_record_candidate_sources(db, url, fetch_result.content or "")
 
-    extraction = extract_listing(fetch_result.content or "", source_url=url)
+    try:
+        extraction = extract_listing(fetch_result.content or "", source_url=url)
+    except LlmPriorityMissing:
+        raise  # a missing priority scope is a programming error, never reported as an outage
+    except LlmError as error:
+        return _extraction_unavailable(error)
 
     if extraction.accepted_count == 0:
         # T135/A5+A8: a successful fetch yielding zero GROUNDED candidates

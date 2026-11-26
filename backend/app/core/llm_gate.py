@@ -31,7 +31,15 @@ class RequestType(StrEnum):
 
 
 class LlmError(Exception):
-    """Base of every LLM-side failure or refusal."""
+    """Base of every LLM-side failure or refusal.
+
+    Two class attributes say how the failure is reported, so no caller matches on exception text or
+    chains `isinstance`: `reason` is the short non-secret word a student route puts in its 503 body
+    (contracts/api-delta.md section 1) and `fetch_outcome` is the `source_fetch_log.outcome` a
+    monitoring check records (research R-10)."""
+
+    reason = "provider_unavailable"
+    fetch_outcome = "provider_error"
 
 
 class LlmPriorityMissing(LlmError):
@@ -44,6 +52,8 @@ class LlmPriorityMissing(LlmError):
 class LlmGateNotInstalled(LlmError):
     """No gate is installed: the call is refused (fail closed)."""
 
+    fetch_outcome = "deferred"
+
     def __init__(self) -> None:
         super().__init__("gate_not_installed")
 
@@ -51,16 +61,26 @@ class LlmGateNotInstalled(LlmError):
 class LlmBudgetDeferred(LlmError):
     """A background request was refused for now; the work is deferred, never failed."""
 
+    fetch_outcome = "deferred"
+
     def __init__(self, retry_at: datetime) -> None:
         super().__init__("budget_deferred")
         self.retry_at = retry_at
 
 
-TEMPORARILY_UNAVAILABLE_REASONS = ("daily_allowance_spent", "provider_quota", "provider_unavailable")
+TEMPORARILY_UNAVAILABLE_REASONS = (
+    "daily_allowance_spent",
+    "provider_quota",
+    "provider_unavailable",
+    "provider_response_invalid",
+    "not_configured",
+)
 
 
 class LlmTemporarilyUnavailable(LlmError):
     """A user-facing request was refused; the route answers 503 with `Retry-After`."""
+
+    fetch_outcome = "deferred"
 
     def __init__(self, retry_at: datetime, reason: str) -> None:
         if reason not in TEMPORARILY_UNAVAILABLE_REASONS:
@@ -72,6 +92,9 @@ class LlmTemporarilyUnavailable(LlmError):
 
 class LlmQuotaExhausted(LlmError):
     """The provider reported quota exhaustion (HTTP 429)."""
+
+    reason = "provider_quota"
+    fetch_outcome = "provider_quota"
 
     def __init__(
         self, retry_at: datetime | None = None, daily: bool = False, observed_limit: int | None = None
@@ -85,12 +108,18 @@ class LlmQuotaExhausted(LlmError):
 class LlmProviderError(LlmError):
     """Outage, network failure or any other provider-side error."""
 
+    reason = "provider_unavailable"
+    fetch_outcome = "provider_error"
+
     def __init__(self) -> None:
         super().__init__("provider_error")
 
 
 class LlmResponseUnparseable(LlmError):
     """The provider answered but the reply could not be used."""
+
+    reason = "provider_response_invalid"
+    fetch_outcome = "provider_parse"
 
     def __init__(self) -> None:
         super().__init__("provider_parse")

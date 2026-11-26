@@ -76,7 +76,7 @@ from sqlalchemy.orm import Session
 
 from app.core import metrics
 from app.core.config import settings
-from app.core.llm_gate import Priority, llm_priority
+from app.core.llm_gate import LlmError, LlmPriorityMissing, Priority, llm_priority
 from app.core.logging import bind_log_context, log_context, reset_log_context
 from app.data.repositories import candidate_validation_repo, monitoring_repo, scholarship_repo, source_repo
 from app.models.monitoring import MonitoringRun, MonitoringStatus, MonitoringTrigger
@@ -403,8 +403,25 @@ def _apply_health_transition(db: Session, source_id: uuid.UUID, *, success: bool
 def _record_crashed_check(db: Session, run: MonitoringRun, source_id: uuid.UUID, exc: Exception) -> None:
     """A check that raised after the fetch left only the `OK` HTTP row, which reads
     as healthy. Record it as the failed outcome it is (FR-HEALTH-1/2). Best effort:
-    bookkeeping trouble is logged and must never stop the run."""
+    bookkeeping trouble is logged and must never stop the run.
+
+    003 (FR-ERR-1/2): an `LlmError` is the provider failing or the budget gate refusing, not the site, so it
+    is recorded as a provider outcome with a short reason class and no health transition."""
     try:
+        if isinstance(exc, LlmError) and not isinstance(exc, LlmPriorityMissing):
+            outcome = exc.fetch_outcome
+            source_repo.log_fetch(
+                db,
+                SourceFetchLogCreate(
+                    source_id=source_id,
+                    status=FetchStatus.OK if outcome == "deferred" else FetchStatus.FAIL,
+                    outcome=outcome,
+                    error=f"extraction not completed ({outcome})",
+                    retry_count=0,
+                    monitoring_run_id=run.id,
+                ),
+            )
+            return
         source_repo.log_fetch(
             db,
             SourceFetchLogCreate(
@@ -515,6 +532,11 @@ def _alert_step(
         db.rollback()
 
 
+# A deferral, a spent quota or an outage will refuse every remaining candidate too; a page-level parse
+# failure (`provider_parse`) says nothing about the next candidate, so the step carries on after it.
+_STOP_VALIDATION_OUTCOMES = frozenset({"deferred", "provider_quota", "provider_error"})
+
+
 def _validate_candidates_step(
     db: Session, validate: Callable[[Session, uuid.UUID], object], clock: Callable[[], datetime]
 ) -> None:
@@ -538,10 +560,20 @@ def _validate_candidates_step(
     for candidate_id in candidate_ids:
         try:
             with llm_priority(Priority.VALIDATION):
-                validate(db, candidate_id)
+                result = validate(db, candidate_id)
+        except LlmError as exc:
+            # FR-ERR-1: the provider or the budget refused; the rest would only be refused too.
+            logger.warning("candidate validation stopped: %s", exc.fetch_outcome)
+            db.rollback()
+            return
         except Exception:  # noqa: BLE001 - one bad candidate must not stop the rest
             logger.exception("validation of candidate %s failed; continuing", candidate_id)
             db.rollback()
+            continue
+        provider_outcome = getattr(result, "provider_outcome", None)
+        if provider_outcome in _STOP_VALIDATION_OUTCOMES:
+            logger.warning("candidate validation stopped after the first deferral: %s", provider_outcome)
+            return
 
 
 def _record_run_end(status: MonitoringStatus, counters: _Counters, started: float) -> None:

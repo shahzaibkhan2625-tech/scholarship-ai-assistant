@@ -19,17 +19,19 @@ from app.core.llm_gate import LlmError, RequestType, get_gate, require_priority
 
 _T = TypeVar("_T")
 
-GENERATION_MODEL = "models/gemini-2.5-flash"
-EMBEDDING_MODEL = "models/gemini-embedding-001"
-EMBEDDING_DIMENSIONS = 768
+EMBEDDING_DIMENSIONS = 768  # fixed: must match the stored vectors; the model names are settings (FR-BUDGET-12)
 
 _client: genai.Client | None = None
 
 
-class LlmNotConfiguredError(RuntimeError):
+class LlmNotConfiguredError(LlmError, RuntimeError):
     """Raised when GEMINI_API_KEY is not set. Callers must handle this
     explicitly (e.g. surface an Unknown/could-not-confirm result) rather than
-    letting an unconfigured LLM silently produce no output."""
+    letting an unconfigured LLM silently produce no output. Part of the `LlmError` family (003, FR-ERR-6):
+    a student route answers 503 `not_configured`, a monitoring check records a provider outcome."""
+
+    reason = "not_configured"
+    fetch_outcome = "provider_error"
 
 
 def get_gemini_client() -> genai.Client:
@@ -74,7 +76,7 @@ def generate_text(prompt: str, *, system_instruction: str | None = None, tempera
     )
 
     def operation(client: genai.Client) -> str:
-        response = client.models.generate_content(model=GENERATION_MODEL, contents=prompt, config=config)
+        response = client.models.generate_content(model=settings.llm_generation_model, contents=prompt, config=config)
         return response.text or ""
 
     return _call(RequestType.GENERATE, operation)
@@ -86,7 +88,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 
     def operation(client: genai.Client) -> list[list[float]]:
         response = client.models.embed_content(
-            model=EMBEDDING_MODEL,
+            model=settings.llm_embedding_model,
             contents=texts,
             config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIMENSIONS),
         )

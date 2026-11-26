@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     max_candidate_validations_per_run: int = Field(default=15, ge=1, alias="MAX_CANDIDATE_VALIDATIONS_PER_RUN")
 
     # 003 quota governance: every value is optional with a safe default (ADR-0014).
+    # FR-BUDGET-12: model names live in configuration, today's values are the defaults. The embedding
+    # dimension (768) is not a setting: it must match the stored vectors.
+    llm_generation_model: str = Field(default="models/gemini-2.5-flash", alias="LLM_GENERATION_MODEL")
+    llm_embedding_model: str = Field(default="models/gemini-embedding-001", alias="LLM_EMBEDDING_MODEL")
     llm_generation_daily_allowance: int = Field(default=20, ge=1, alias="LLM_GENERATION_DAILY_ALLOWANCE")
     # Unset = counted, not limited.
     llm_embedding_daily_allowance: int | None = Field(default=None, ge=1, alias="LLM_EMBEDDING_DAILY_ALLOWANCE")

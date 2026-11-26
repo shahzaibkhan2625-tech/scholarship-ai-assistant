@@ -5,9 +5,10 @@ say "unknown" rather than guess, per constitution Principle I. This tool only
 extracts; it never decides eligibility (that stays in the deterministic
 hard_constraints service, per Principle II)."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
-from app.tools._json_utils import extract_json_object
+from app.core.llm_gate import LlmResponseUnparseable
+from app.tools._json_utils import ExtractionParseError, extract_json_object
 
 _SYSTEM_INSTRUCTION = """You extract structured scholarship data from official scholarship-page text.
 Respond with ONLY a JSON object (no markdown, no commentary) matching exactly this shape:
@@ -90,5 +91,7 @@ def extract_requirements_from_page(page_text: str, *, source_url: str) -> Extrac
 
     prompt = f"Official scholarship page (source: {source_url}):\n\n{page_text[:20000]}"
     raw = generate_text(prompt, system_instruction=_SYSTEM_INSTRUCTION)
-    parsed = extract_json_object(raw)
-    return ExtractedScholarshipData(**parsed)
+    try:
+        return ExtractedScholarshipData(**extract_json_object(raw))
+    except (ExtractionParseError, ValidationError, TypeError):
+        raise LlmResponseUnparseable() from None  # 003 FR-ERR-6: the route answers 503, never 500

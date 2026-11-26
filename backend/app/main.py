@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from math import ceil
 
 from fastapi import FastAPI, Request
@@ -24,7 +24,7 @@ from app.api.sources import router as sources_router
 from app.api.url_match import router as url_match_router
 from app.core.body_limit import BodyLimitMiddleware
 from app.core.config import settings
-from app.core.llm_gate import LlmTemporarilyUnavailable, install_gate
+from app.core.llm_gate import LlmError, install_gate
 from app.core.llm_priority_middleware import LlmPriorityMiddleware
 from app.core.logging import configure_logging
 from app.core.metrics import router as metrics_router
@@ -105,11 +105,17 @@ app.include_router(scholarships_router, tags=["scholarships"])
 app.include_router(metrics_router, tags=["metrics"])
 
 
-@app.exception_handler(LlmTemporarilyUnavailable)
-async def llm_temporarily_unavailable_handler(_request: Request, exc: LlmTemporarilyUnavailable) -> JSONResponse:
-    """FR-BUDGET-5, contracts/api-delta.md section 1: a refused student request is a 503 with
-    `Retry-After`, never a bare 500. The body holds no secret, provider payload or stack trace."""
-    retry_at = exc.retry_at.astimezone(timezone.utc)
+@app.exception_handler(LlmError)
+async def llm_temporarily_unavailable_handler(_request: Request, exc: LlmError) -> JSONResponse:
+    """FR-BUDGET-5 and FR-ERR-6, contracts/api-delta.md section 1: a student request that is refused or that
+    meets ANY provider failure (quota, outage, unparseable reply, key not configured) is a 503 with
+    `Retry-After`, never a bare 500. The body holds no secret, provider payload or stack trace: only the
+    short `reason` class the exception carries. Only the `LlmError` family is mapped. With no provider time,
+    the retry time is now plus `llm_unavailable_retry_seconds`."""
+    provider_time = getattr(exc, "retry_at", None)
+    if provider_time is None:
+        provider_time = datetime.now(timezone.utc) + timedelta(seconds=settings.llm_unavailable_retry_seconds)
+    retry_at = provider_time.astimezone(timezone.utc)
     seconds = max(1, ceil((retry_at - datetime.now(timezone.utc)).total_seconds()))
     return JSONResponse(
         status_code=503,

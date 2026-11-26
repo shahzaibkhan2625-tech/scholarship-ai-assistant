@@ -42,7 +42,6 @@ from typing import Any, TypedDict
 from google.genai import errors as genai_errors
 from langgraph.graph import END, START, StateGraph
 
-from app.core.llm import LlmNotConfiguredError
 from app.core.llm_gate import LlmError
 from app.core.uploads import is_pdf
 from app.data.repositories import document_repo
@@ -143,7 +142,7 @@ def _extract_fields_node(state: DocPipelineState) -> dict:
         # the file itself parsed fine, so we proceed with "nothing extracted"
         # rather than blocking the upload.
         return {}
-    except (LlmError, genai_errors.APIError, LlmNotConfiguredError) as exc:
+    except (LlmError, genai_errors.APIError) as exc:  # LlmError covers every kind, key not configured included
         # The LLM provider is down, over quota, or not configured: the same reasoning applies (the
         # file parsed fine and is already saved), but unlike bad JSON this is an outage the user
         # should be told about, so it is recorded as a flag. Deliberately narrow: any other

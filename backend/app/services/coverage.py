@@ -58,10 +58,15 @@ class FetchLogSnapshot:
     started_at: datetime
     monitoring_run_id: uuid.UUID | None = None
     id: uuid.UUID | None = None  # tiebreak when two rows share a `started_at`
+    outcome: str | None = None  # 003 R-10: `provider_*` rows are the provider failing, not the source
 
 
 _FAILING_STATUSES = {FetchStatus.FAIL.value, FetchStatus.TIMEOUT.value}
 _ACTIVE_STATUSES = {SourceStatus.ACTIVE.value, SourceStatus.FAILING.value}
+
+
+def _site_failed(entry: FetchLogSnapshot) -> bool:
+    return entry.status in _FAILING_STATUSES and not (entry.outcome or "").startswith("provider_")
 
 
 def _latest_outcome_failed(logs: list[FetchLogSnapshot]) -> bool:
@@ -69,11 +74,9 @@ def _latest_outcome_failed(logs: list[FetchLogSnapshot]) -> bool:
     outcome when the source has run history, else the latest raw row."""
     run_rows = [entry for entry in logs if entry.monitoring_run_id is not None]
     if not run_rows:
-        return logs[-1].status in _FAILING_STATUSES
+        return _site_failed(logs[-1])
     latest_run_id = run_rows[-1].monitoring_run_id
-    return any(
-        entry.status in _FAILING_STATUSES for entry in run_rows if entry.monitoring_run_id == latest_run_id
-    )
+    return any(_site_failed(entry) for entry in run_rows if entry.monitoring_run_id == latest_run_id)
 
 
 def compute_coverage_summary(
@@ -179,6 +182,7 @@ def get_coverage_summary(db: Session) -> CoverageSummary:
             started_at=log.started_at,
             monitoring_run_id=log.monitoring_run_id,
             id=log.id,
+            outcome=log.outcome,
         )
         for log in rows.values()
     ]

@@ -6,6 +6,7 @@ keeps its 201 with an `extraction_unavailable` flag.
 """
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -15,7 +16,9 @@ class LlmUnavailable(BaseModel):
     code: str
     retry_after_seconds: int
     retry_at: datetime
-    reason: str
+    reason: Literal[
+        "daily_allowance_spent", "provider_quota", "provider_unavailable", "provider_response_invalid", "not_configured"
+    ]
 
 
 LLM_UNAVAILABLE_RESPONSES = {

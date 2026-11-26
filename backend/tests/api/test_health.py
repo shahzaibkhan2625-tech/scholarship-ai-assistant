@@ -133,7 +133,8 @@ def test_timestamps_come_from_the_registry_not_from_a_zero_result_shape(authed_u
     assert row["last_success_at"].startswith("2027-01-01T00:00:00")
     assert row["last_checked_at"].startswith("2027-01-01T01:00:00")
     assert set(row) == {"source_id", "name", "status", "last_checked_at", "last_success_at",
-                        "consecutive_failures", "listing_page_url"}  # no items/results field to misread
+                        "consecutive_failures", "listing_page_url",
+                        "recent_provider_failures", "last_provider_failure_at"}  # 003 FR-ERR-5; still no items/results field to misread
 
 
 def test_consecutive_failures_counts_runs_not_rows(authed_user, session):

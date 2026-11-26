@@ -10,6 +10,7 @@ when a fetch is attempted against a non-active `source_id`.
 
 import uuid
 from datetime import datetime, timezone
+from typing import NamedTuple
 from urllib.parse import urlparse
 
 from sqlalchemy import and_, func, select
@@ -341,7 +342,10 @@ def reactivate_source(db: Session, source_id: uuid.UUID) -> SourceRegistry | Non
 _FAILURE_SCAN_RUNS = 100
 
 
-def ranked_monitoring_runs(source_ids: list[uuid.UUID] | None = None):
+_PROVIDER_OUTCOME = SourceFetchLog.outcome.like("provider\\_%", escape="\\")
+
+
+def ranked_monitoring_runs(source_ids: list[uuid.UUID] | None = None, *, exclude_provider: bool = False):
     """ADR-0008 / ADR-0011: THE definition of a source's "recent monitoring runs",
     shared by health (`_failure_streaks`) and retention so they cannot drift.
 
@@ -350,7 +354,11 @@ def ranked_monitoring_runs(source_ids: list[uuid.UUID] | None = None):
     that source's rows in the run is not `OK` (a failed check is an `OK` HTTP row plus
     a `FAIL` row). Rows with a NULL `monitoring_run_id` (discovery / ingestion stage
     rows) are ignored. Runs rank newest-first by their latest row; the run id breaks
-    a timestamp tie so the ranking is deterministic."""
+    a timestamp tie so the ranking is deterministic.
+
+    003 (FR-ERR-2, R-10): with `exclude_provider` a run that holds a `provider_*` outcome row is left out
+    altogether, so a check that failed only because the LLM provider failed neither extends nor resets a
+    failure streak. Retention keeps the default (every run), so its floors do not move."""
     per_run = (
         select(
             SourceFetchLog.source_id.label("source_id"),
@@ -361,6 +369,8 @@ def ranked_monitoring_runs(source_ids: list[uuid.UUID] | None = None):
         .where(SourceFetchLog.monitoring_run_id.is_not(None))
         .group_by(SourceFetchLog.source_id, SourceFetchLog.monitoring_run_id)
     )
+    if exclude_provider:
+        per_run = per_run.having(~func.coalesce(func.bool_or(_PROVIDER_OUTCOME), False))
     if source_ids is not None:
         per_run = per_run.where(SourceFetchLog.source_id.in_(source_ids))
     per_run = per_run.subquery()
@@ -379,8 +389,8 @@ def ranked_monitoring_runs(source_ids: list[uuid.UUID] | None = None):
 
 def _failure_streaks(db: Session, source_ids: list[uuid.UUID] | None = None) -> dict[uuid.UUID, int]:
     """ADR-0008: consecutive failed monitoring-RUN outcomes per source (absent = 0),
-    over `ranked_monitoring_runs`; a single set-based query."""
-    ranked = ranked_monitoring_runs(source_ids)
+    over `ranked_monitoring_runs` without provider-side runs (FR-ERR-2); a single set-based query."""
+    ranked = ranked_monitoring_runs(source_ids, exclude_provider=True)
     rows = db.execute(
         select(ranked.c.source_id, ranked.c.failed)
         .where(ranked.c.rn <= _FAILURE_SCAN_RUNS)
@@ -397,6 +407,57 @@ def _failure_streaks(db: Session, source_ids: list[uuid.UUID] | None = None) -> 
         else:
             ended.add(source_id)
     return streaks
+
+
+class ProviderFailureStats(NamedTuple):
+    count: int  # monitoring runs, among the newest `window`, that hit a provider-side failure
+    last_at: datetime | None  # the newest provider-side failure row of any kind
+
+
+# Default size of the "recent" window for `provider_failure_stats` (contracts/api-delta.md section 2).
+_PROVIDER_FAILURE_WINDOW_RUNS = 10
+
+
+def provider_failure_stats(
+    db: Session, source_ids: list[uuid.UUID], window: int = _PROVIDER_FAILURE_WINDOW_RUNS
+) -> dict[uuid.UUID, ProviderFailureStats]:
+    """FR-ERR-5: provider-side failures per source, reported apart from the failure streak. Only sources
+    that ever had one appear. Two set-based queries, bounded by `source_ids`."""
+    if not source_ids:
+        return {}
+    per_run = (
+        select(
+            SourceFetchLog.source_id.label("source_id"),
+            SourceFetchLog.monitoring_run_id.label("monitoring_run_id"),
+            func.max(SourceFetchLog.started_at).label("last_at"),
+            func.coalesce(func.bool_or(_PROVIDER_OUTCOME), False).label("provider"),
+        )
+        .where(SourceFetchLog.monitoring_run_id.is_not(None), SourceFetchLog.source_id.in_(source_ids))
+        .group_by(SourceFetchLog.source_id, SourceFetchLog.monitoring_run_id)
+        .subquery()
+    )
+    ranked = select(
+        per_run.c.source_id,
+        per_run.c.provider,
+        func.row_number()
+        .over(partition_by=per_run.c.source_id, order_by=(per_run.c.last_at.desc(), per_run.c.monitoring_run_id.desc()))
+        .label("rn"),
+    ).subquery()
+    recent = dict(
+        db.execute(
+            select(ranked.c.source_id, func.count())
+            .where(ranked.c.rn <= window, ranked.c.provider)
+            .group_by(ranked.c.source_id)
+        ).all()
+    )
+    last = dict(
+        db.execute(
+            select(SourceFetchLog.source_id, func.max(SourceFetchLog.started_at))
+            .where(_PROVIDER_OUTCOME, SourceFetchLog.source_id.in_(source_ids))
+            .group_by(SourceFetchLog.source_id)
+        ).all()
+    )
+    return {sid: ProviderFailureStats(recent.get(sid, 0), at) for sid, at in last.items()}
 
 
 def consecutive_failure_count(db: Session, source_id: uuid.UUID) -> int:

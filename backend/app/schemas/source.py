@@ -160,6 +160,7 @@ class SourceFetchLogRead(BaseModel):
     fetched_url: str | None = None
     used_homepage_fallback: bool = False
     monitoring_run_id: uuid.UUID | None = None
+    outcome: FetchOutcome | None = None
 
 
 class CandidateSourceReject(BaseModel):

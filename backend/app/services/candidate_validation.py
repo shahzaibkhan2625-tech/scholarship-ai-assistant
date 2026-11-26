@@ -36,6 +36,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
+from app.core.llm_gate import LlmError
 from app.core.url_safety import _non_public, _resolve_host, unsafe_url_reason  # noqa: F401  (moved to url_safety in 010; names stay importable)
 from app.data.repositories import candidate_validation_repo, source_repo
 from app.models.candidate_validation import CandidateSourceValidation
@@ -126,15 +127,20 @@ def _reachability(
 
 def _extractability(
     html: str, source_url: str, extract_listing: Callable[..., ExtractListingOutput]
-) -> tuple[bool, str]:
+) -> tuple[bool, str, str | None]:
+    """(extractable, detail, provider_outcome). 003 FR-ERR-1: a provider failure or a refusal by the budget
+    gate says nothing about the page, so it is recorded as such (a short reason class, never provider text)
+    and handed back as `provider_outcome` for the monitor step."""
     try:
         output = extract_listing(html, source_url=source_url)
+    except LlmError as exc:
+        return False, f"extraction unavailable ({exc.fetch_outcome}); not a finding about the page", exc.fetch_outcome
     except Exception as exc:  # noqa: BLE001
-        return False, f"extraction raised {type(exc).__name__}: {exc}"
+        return False, f"extraction raised {type(exc).__name__}: {exc}", None
     detail = f"{output.accepted_count} grounded listing(s) extracted"
     if output.rejected_count:
         detail += f", {output.rejected_count} rejected as ungrounded"
-    return output.accepted_count > 0, detail
+    return output.accepted_count > 0, detail, None
 
 
 def validate_candidate(
@@ -157,12 +163,13 @@ def validate_candidate(
     db.commit()  # end the read transaction before any network / LLM call
 
     reachable, reachable_detail, html = _reachability(url, fetch, resolve, candidate_id)
+    provider_outcome = None
     if html is None:
         extractable, extractable_detail = False, "not attempted: page not reachable"
     else:
-        extractable, extractable_detail = _extractability(html, url, extract_listing)
+        extractable, extractable_detail, provider_outcome = _extractability(html, url, extract_listing)
 
-    return candidate_validation_repo.add(
+    row = candidate_validation_repo.add(
         db,
         candidate_id,
         reachable=reachable,
@@ -172,3 +179,6 @@ def validate_candidate(
         official_signals=compute_official_signals(url, html, matched_keyword=matched_keyword),
         checked_at=(now or _utcnow)(),
     )
+    # In-memory only (the stored truth is `extractable_detail`): lets the monitor step stop after a deferral.
+    row.provider_outcome = provider_outcome
+    return row

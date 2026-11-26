@@ -26,6 +26,7 @@ def get_sources_health(
     db: Session = Depends(get_db),
 ) -> list[SourceHealth]:
     rows = source_repo.list_source_health(db, SourceStatus(status_filter) if status_filter else None)
+    provider = source_repo.provider_failure_stats(db, [source.id for source, _ in rows])
     return [
         SourceHealth(
             source_id=source.id,
@@ -35,6 +36,8 @@ def get_sources_health(
             last_success_at=source.last_success_at,
             consecutive_failures=failures,
             listing_page_url=source.listing_page_url,
+            recent_provider_failures=provider[source.id].count if source.id in provider else 0,
+            last_provider_failure_at=provider[source.id].last_at if source.id in provider else None,
         )
         for source, failures in rows
     ]
