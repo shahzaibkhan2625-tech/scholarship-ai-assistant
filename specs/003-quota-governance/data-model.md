@@ -39,7 +39,7 @@ Per monitored source runtime state for story 1 (change detection), story 3 (cade
 
 | Column | Type | Notes |
 |---|---|---|
-| `source_id` | `uuid` PK, FK to `source_registry.id` | |
+| `source_id` | `uuid` PK, FK to `source_registry.id` `ON DELETE CASCADE` | |
 | `fingerprint` | `varchar(64)` NULL | SHA-256 hex of the normalised visible text at the last **successful** extraction |
 | `fingerprint_at` | `timestamptz` NULL | When that extraction happened |
 | `etag` | `text` NULL | Conditional-request validator, only if the server supplied one |
@@ -62,13 +62,15 @@ State transitions:
 - Zero grounded candidates on an unchanged page: increment `backoff_level`, set `next_attempt_at = now + min(60 min * 2^level, cadence interval)`.
 - Deferred by budget or pause: set `next_attempt_at` to the retry time; do **not** touch the fingerprint.
 
+**Foreign keys cascade (decided 2026-11-27).** `source_check_state.source_id` and `classify_pending.scholarship_id` are `ON DELETE CASCADE`. Derived per-source and per-record state has no meaning once its parent row is deleted, and a restrict would block cleanup and existing teardown that deletes `source_registry` rows. Sources are normally retired by status, not deleted, so the cascade is a safety net rather than a routine path.
+
 ## New table: `classify_pending` (updated 2026-11-26, manager decisions)
 
 The pending-classification queue (spec FR-BUDGET-13). One row per record whose classify LLM call was refused or failed. A separate table, not a column on scholarships, so what a record means stays feature 004's matter (ADR-0013).
 
 | Column | Type | Notes |
 |---|---|---|
-| `scholarship_id` | `uuid` PK, FK to `scholarships.id` | The record to classify again |
+| `scholarship_id` | `uuid` PK, FK to `scholarships.id` `ON DELETE CASCADE` | The record to classify again |
 | `queued_at` | `timestamptz` NOT NULL | |
 | `attempts` | `integer` NOT NULL DEFAULT 0 | Drain attempts so far; every attempt is also logged |
 | `last_reason` | `varchar(32)` NULL | `budget_deferred`, `provider_quota`, `provider_error`, `provider_parse`, `not_configured`; never provider text |

@@ -92,6 +92,8 @@ Because skipped checks no longer refresh `last_verified_at`, the forced full che
 
 For discovery (`bypass_cache=False`), an `unchanged` result is mapped by `listing_fetch_tool` to the existing `cached` outcome, so a student-triggered discovery on an unchanged page also costs no LLM request.
 
+**Zero candidates and deferred results (decided 2026-11-27).** A zero-candidate extraction still stores the fingerprint, with `last_extraction_outcome = zero_candidates`, so the back-off in R-08 recognises the same page next time. A deferred or unchanged result returns the persisted scholarship refs for that source, so discovery shows the records already known and never an error or "none found".
+
 ## R-08 Unextractable pages and history bootstrap
 
 **Decision.** If the page is unchanged but the last extraction did not succeed (zero grounded candidates, provider failure), do not treat it as unchanged: retry with doubling back-off starting at 60 minutes, capped at the source's cadence interval, stored as `next_attempt_at` and `backoff_level` on the per-source state. A changed page resets the back-off.
