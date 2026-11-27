@@ -181,6 +181,9 @@ a source's current state:
 | (b) | each source's single latest row of any kind | a source flagged `failing` by discovery may have only one old row; deleting it would read as "never checked" |
 | (c) | each source's latest `OK` row with `items_found` | it is the extraction-cache entry and the shrink-guard baseline; pruning it silently loses both |
 
+The same daily job (003) also deletes `llm_budget_ledger` rows older than `LLM_LEDGER_RETENTION_DAYS`
+(default 90); the pause table (`llm_budget_state`) is never pruned. A failure of one prune does not stop the other.
+
 `monitoring_runs`, `alerts`, `alert_preferences` and `candidate_source_validations` are never
 pruned. Retention is coupled to monitoring: `MONITORING_INTERVAL_MINUTES <= 0` means no
 scheduler and no retention.
@@ -278,7 +281,7 @@ changes.
 | `created_at.desc()` same-transaction ties | **Closed** in US8 B2 (id tiebreakers at 7 sites) | commit 5603428 |
 | Document storage has no off-VM backup | Open | §10 |
 | **Document upload no longer returns a 500 when the LLM provider errors** (fixed on branch `fix/upload-llm-provider-errors`, found 2026-10-22 when a Gemini 429 escaped the pipeline). A genai API error (429, 5xx) or an unconfigured key during field extraction now keeps the file and row and flags the row `extraction_unavailable` (201, retry-able note); `parsed_meta` stays empty and nothing is marked satisfied. There is no re-extract endpoint, so the user re-uploads once the service is back. Unrelated exceptions still return 500. | **Fixed, deployed 2026-10-24** | `app/workflows/doc_pipeline/graph.py` |
-| **Other LLM-backed endpoints (Q&A, URL matching, generation) still return a bare 500 when the provider errors** (e.g. Gemini quota exhausted); only document upload was hardened. | Open, out of scope of the upload fix | observed 2026-10-22 |
+| **Other LLM-backed endpoints (Q&A, URL matching, generation) no longer return a bare 500 when the provider errors** (feature 003, FR-ERR-6): any provider failure on one of the eight LLM routes (quota, outage, unparseable reply, key not configured, daily allowance spent) is a `503` with a `Retry-After` header and a JSON body `{code, retry_after_seconds, retry_at, reason}`. Document upload keeps its `201` with `extraction_unavailable`. An exception that is not an `LlmError` is still a 500 (a code bug is never reported as "the AI is unavailable"). Calls that swallow a failure by design (`classify`, queued for a later attempt) are listed in `tests/api/test_llm_failure_kinds.py`. | **Closed by 003** (on deploy) | `app/main.py` handler, `app/core/llm_gate.py` |
 | **Discovery swallows a provider error into an empty result, not a 500.** A Gemini/provider error (or a malformed-response parse error) raised during listing extraction is caught by `agents/discovery/agent.py`'s broad per-step exception handler, which only appended to an in-memory `fetch_errors` list that `app.api.discovery` never logs or returns — so the failure was previously invisible end-to-end (0 candidates, no log, no `source_fetch_log` row). This is a gap, now logged by exception type only (`logger.error`, source id/domain/dimension + `type(exc).__name__`, never `str(exc)` or page content) since `fix/discovery-log-swallowed-errors` (2026-10-24). The 2026-10-24 live smoke-test failure (0 candidates) produced **no logged exception** under this new logging, so its actual cause is **not yet determined** — it was not necessarily this swallow path; see `docs/t-002-verification-log.md` open item 1. | Logging gap fixed; live failure cause still open | `app/agents/discovery/agent.py`, `tests/agents/test_discovery_agent.py` |
 | **A corrupt PDF in the CV-import path returns a bare 500.** `POST /profile/import-cv` (`app/api/profile.py`, `_extract_text_from_upload`) reads PDFs with `pypdf`; a corrupt or truncated file raises `PdfStreamError`, which is not caught. Pre-existing (unchanged by the 2026-10-23 pypdf bump) and not fixed. No test uploads a PDF on this path. | Open, not fixed | `app/api/profile.py` |
 | **Gemini free-tier quota is tiny** (20 requests/day for `gemini-2.5-flash` observed). Once used up, every LLM-backed endpoint (document parsing, Q&A, URL matching, generation) fails until the quota resets (about a 24h window); the LLM smoke tests also cannot pass. | Operational constraint; consider a paid key | observed 2026-10-22 |
@@ -500,3 +503,107 @@ unset OPERATOR_TOKEN CHECK_ACCOUNT_EMAIL CHECK_ACCOUNT_PASSWORD OWNER_DATABASE_U
 ### Rollback
 
 Any FAIL, or a start-up problem: restore `.env.pre-010` over `.env`, retag the previous image with `sudo podman tag localhost/scholarship-ai-assistant_backend:pre-010 localhost/scholarship-ai-assistant_backend:latest`, and recreate the containers in the §10 step 3 order (no `--build`). The 010 migration is additive, so the previous code runs against the new schema; no downgrade is needed. Record the failing check and its cause in §13.
+
+## 16. Deploy 003
+
+Feature 003 (LLM quota governance and cheap monitoring), revision `b4e7a91c3d52`. Mirrors §15. **Owner-run.** No secret is typed in a command and none is written into this file; `<placeholders>` are filled in at the terminal. No `.env` change is required: every new setting is optional with a safe default (list in §17).
+
+### Pre-flight (read-only)
+
+1. **Branch and commit.** `cd <repo>; git fetch origin; git switch main; git pull --ff-only`; then `git branch --show-current` must print `main` and `git log -1 --oneline` must show the merged 003 commit.
+2. **Rollback material.** `cp .env .env.pre-003`; note the running image id with `sudo podman images` and **tag it before building**: `sudo podman tag <current image id> localhost/scholarship-ai-assistant_backend:pre-003` (the build moves `:latest`; Rollback uses this tag).
+3. **Current head.** Over the owner **direct** URL (§14), `alembic current` must print `a807daf8460e` (010's revision). Anything else: stop and tell the manager.
+4. **Today's ledger is empty.** The new tables do not exist yet. After the migration (roll-out step 3) `SELECT count(*) FROM llm_budget_ledger;` must return 0.
+
+### Roll-out
+
+1. **Build, do not swap:** `sudo /usr/local/bin/podman-compose -f docker-compose.podman.yml build backend`. The running containers are untouched.
+2. **Migrate as the owner**, passing the URL by variable name only (same commands as §15 step 3, with this image): `uv run alembic upgrade head`, then `uv run alembic current` must print `b4e7a91c3d52 (head)`. The revision is additive (four tables, three columns, no change to an existing column); it carries no GRANT.
+3. **Re-run the role script** (§14) over the owner direct URL so the new tables are granted to `scholarship_app` (default privileges cover them; the printed flags must be unchanged).
+4. **Recreate the containers** in the §10 step 3 order (stop and remove Caddy, then the backend, then `sudo /usr/local/bin/podman-compose -f docker-compose.podman.yml up -d`, no `--build`).
+5. **Read the start-up log:** `sudo podman logs scholarship-ai-assistant_backend_1 | grep "scheduler configuration"`. It must show the tick interval, the cadence defaults, the per-source overrides and the budget settings (allowance, reserve, ladder offsets, backfill share, timezone), and the log must have **no** `owner-level rights` warning.
+6. **Optional settings** (none required; set in `.env` only if you want to change a default): `LLM_GENERATION_DAILY_ALLOWANCE` (20), `LLM_EMBEDDING_DAILY_ALLOWANCE` (unset: counted, not limited), `LLM_USER_FACING_RESERVE` (8), `LLM_LADDER_OFFSET_BACKFILL` / `_MONITORING` / `_VALIDATION` (0 / 2 / 4), `LLM_BACKFILL_DAILY_SHARE` (6), `LLM_BUDGET_TIMEZONE` (America/Los_Angeles), `LLM_DEFAULT_PAUSE_SECONDS` (900), `LLM_UNAVAILABLE_RETRY_SECONDS` (60), `LLM_LEDGER_RETENTION_DAYS` (90), `LLM_GENERATION_MODEL` / `LLM_EMBEDDING_MODEL` (today's models), `CADENCE_*_MINUTES`, `FORCED_FULL_RECHECK_DAYS` (7), `UNEXTRACTABLE_BACKOFF_BASE_MINUTES` (60), `NOISE_*`, `RULES_ANOMALY_*`. Keep `MONITORING_INTERVAL_MINUTES` at 360 (§17).
+7. **Do not re-seed production** (§17: the seed loader would reset EACEA `failing` to `active` and replace `extraction_rules` wholesale).
+8. **Post-deploy checks** (below). Any FAIL: roll back.
+9. **Record the results** in §13 (a "003 deployment record" next to the 010 one): deployed commit, the check results, rollback material.
+
+### Post-deploy checks
+
+`backend/scripts/post_deploy_check.py` now runs the 010 checks and these 003 checks, with the same environment variables as §15 (it prints none of their values):
+
+1. `GET /health` returns 200.
+2. The Alembic head equals the 003 revision `b4e7a91c3d52`.
+3. As `scholarship_app`, `SELECT` and `UPDATE` succeed on `llm_budget_ledger`, `llm_budget_state` and `source_check_state` (inside a transaction that is rolled back), and `CREATE TABLE` is refused.
+4. `GET /monitoring/budget` is 403 for the check account and 200 for the operator.
+5. `GET /metrics` through Caddy is still 404.
+6. A manual run as the operator, repeated: the second run must not extract again (it checks nothing, because nothing is due yet, or it reports `sources_skipped` above 0), and the ledger `allowed` total for today is never above the allowance.
+7. **MANUAL:** the start-up log line `scheduler configuration` is present (roll-out step 5).
+
+### Rollback
+
+Any FAIL, or a start-up problem: restore `.env.pre-003` over `.env`, retag the previous image with `sudo podman tag localhost/scholarship-ai-assistant_backend:pre-003 localhost/scholarship-ai-assistant_backend:latest`, and recreate the containers in the §10 step 3 order (no `--build`). The 003 migration is additive and **safe to leave applied**: the previous code ignores the new tables and columns, so no downgrade is needed. Record the failing check and its cause in §13.
+
+## 17. LLM budget, cadence and extraction rules (feature 003)
+
+### What the budget does
+
+Every provider request goes through one gate (`core/llm_gate.py`, `services/llm_budget.py`). The daily allowance (default 20 generation requests; embeddings are counted but not limited unless `LLM_EMBEDDING_DAILY_ALLOWANCE` is set) resets at midnight `LLM_BUDGET_TIMEZONE` (America/Los_Angeles, the provider's own day). Priority classes: `user_facing` (students; admitted until the allowance is spent), then `validation`, `monitoring`, `backfill` (background; each needs the remaining allowance to stay above the user-facing reserve plus its offset, so the last requests of the day are for students; backfill is also capped at 6 a day).
+
+- **Refused background work is deferred, never failed:** the check is retried later, health and records are untouched, and the fetch log records `outcome='deferred'`.
+- **A refused student request is a 503** with `Retry-After` (reason `daily_allowance_spent`). The same 503 covers a provider quota error, an outage, an unparseable reply and a missing key (§11).
+- **Provider pause.** A 429 from the provider pauses every non-user-facing request until the provider's stated time; a daily-quota error pauses until the next budget-day boundary. While paused, students also get the 503 (no provider call is made). The ledger records a `discrepancy` when the provider says exhausted but the local count is below the allowance (another consumer shares the key, e.g. a laptop).
+- **A failed budget store never takes the site down:** background work is deferred, and a student request goes through (and is counted).
+- **Deferred classification.** When a refused or failed call leaves a new record's dimensions unknown, the record is stored as it is and queued in `classify_pending`; the scheduler tick drains the queue oldest first (10 a tick) under the `backfill` class and fills only dimensions that are still unknown. The queue size is in the budget view and `/metrics`.
+
+### Reading the numbers
+
+- **`GET /monitoring/budget`** (operator only, read only): today's allowance, reserve, used per class, remaining, deferred, denied, provider-exhausted, discrepancy and avoided counts, the pause, the queue size, and per source the interval in force, the last check, the next due time, the noisy flag and the rules-review flag.
+- **`/metrics`** (§6; VM-internal): `llm_budget_allowance`, `llm_budget_used`, `llm_budget_remaining`, `llm_budget_reserve`, `llm_budget_events`, `llm_budget_seconds_to_reset`, `llm_provider_paused_until_timestamp`, `source_check_noisy`, `classify_pending_size`. They are read from the database at scrape time, so they survive restarts.
+- **Logs.** `scheduler configuration` once at start-up (interval, cadence defaults, per-source overrides, budget settings). `monitoring tick` on every scheduler tick with `due`, `checked`, `skipped`, `deferred` and `idle`: an idle tick (nothing due, no candidate to validate) writes this line and **no** `monitoring_runs` row, so a quiet scheduler is distinguishable from a dead one. `monitoring run finished` now also carries `sources_skipped` and `sources_deferred`.
+
+### Cadence
+
+A source is due at `max(next_attempt_at, last_checked_at + interval)`. The interval is the per-source override (`extraction_rules.check_interval_minutes`, at least 15), else by `update_frequency` (weekly 1 day; monthly, quarterly, annual 7 days; undeclared 1 day), and never above half the freshness window. The tick only selects due sources, stalest first. A page that is unchanged (same normalised text) is recorded as an `unchanged` check with no LLM request; a forced full re-check runs every 7 days (or half the freshness window) so a link-only change is not missed. A provider failure sets `next_attempt_at`, so a changed page is not re-attempted on every tick.
+
+Set a source's interval or rule set **only** with the audited command (it changes nothing else in the registry):
+```
+sudo podman exec scholarship-ai-assistant_backend_1 uv run python -m app.services.source_rules set \
+  --domain <domain> --operator-email <operator email> --interval-minutes <n>
+```
+Enabling a rule set also needs `--rules-file`, `--fixture` and `--snapshot`, and is refused unless the parity check passes (`docs/SOURCES.md`, HEC section). `parity`, `diff` and `record-snapshot` are described in the command help; `record-snapshot` makes exactly one provider request and needs `--confirm`.
+
+### The seed re-run hazard
+
+**Never re-run the seed loader on production for this feature.** It replaces `extraction_rules` wholesale and would reset EACEA from `failing` to `active`. Use the `set` command above.
+
+### MONITORING_INTERVAL_MINUTES
+
+Cost no longer depends on the tick length: a tick only selects due sources and an idle tick makes no run and no provider request. Keep **360** on the VM until the first week of measurements (below); then decide whether to return it to 60 (T326, owner decision). A shorter tick only makes due sources get picked up sooner.
+
+### Measurement (read-only SQL, run as the owner or `scholarship_app`)
+
+SC-001, background requests a day (the ledger cannot tell an extraction from a classification, so read it next to the number of new candidates ingested that day, SC-014):
+```sql
+SELECT budget_day,
+       sum(count) FILTER (WHERE event = 'allowed' AND priority_class <> 'user_facing') AS background_requests,
+       sum(count) FILTER (WHERE event = 'allowed' AND priority_class = 'user_facing')  AS student_requests,
+       sum(count) FILTER (WHERE event = 'avoided_unchanged') AS avoided_unchanged,
+       sum(count) FILTER (WHERE event = 'avoided_rules')     AS avoided_rules,
+       sum(count) FILTER (WHERE event IN ('deferred','denied')) AS refused
+FROM llm_budget_ledger
+WHERE request_type = 'generate' AND budget_day >= CURRENT_DATE - 7
+GROUP BY budget_day ORDER BY budget_day;
+
+SELECT date_trunc('day', retrieved_at) AS day, count(*) AS new_records
+FROM scholarships WHERE retrieved_at > now() - interval '7 days' GROUP BY 1 ORDER BY 1;
+```
+SC-004, checks per source over 14 days, and that nothing went stale because of the schedule:
+```sql
+SELECT s.domain, s.update_frequency, count(DISTINCT l.monitoring_run_id) AS runs_with_a_check
+FROM source_fetch_log l JOIN source_registry s ON s.id = l.source_id
+WHERE l.started_at > now() - interval '14 days' AND l.monitoring_run_id IS NOT NULL
+GROUP BY 1, 2 ORDER BY 1;
+
+SELECT lifecycle_status, count(*) FROM scholarships GROUP BY 1 ORDER BY 1;
+```
+Record the results and the SC-007 observation in §13 after the first week; the decision on `MONITORING_INTERVAL_MINUTES` is yours (T326).

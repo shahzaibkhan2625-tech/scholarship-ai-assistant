@@ -243,6 +243,7 @@ The operator can see at any time how much of today's allowance has been used, by
 | Pending-classification queue: enqueue on refusal, drain under the backfill class (FR-BUDGET-13) | the scheduler tick (drain step); `POST /discovery` and the monitoring run (enqueue, through ingestion) | the tick function; the route and the run, with a refusing fake gate |
 | Rules command audit and operator check (FR-RULES-6) | operator CLI `python -m app.services.source_rules set` | the CLI `main` |
 | Model names from configuration (FR-BUDGET-12) | application start, then a gated call | building `Settings`, then `generate_text` |
+| Rules-first extraction inside a check (FR-RULES-1..4) (added by the T462 audit, 2026-11-27) | scheduler tick; `POST /monitoring/runs` | the tick function with an enabled rule set and a fake provider |
 | Extraction rules: set, parity, diff, record-snapshot (FR-RULES-1..5) | operator CLI `python -m app.services.source_rules` | the CLI `main` |
 | Deploy of 003 and its post-deploy checks | runbook section 16 on the VM | the post-deploy check list |
 

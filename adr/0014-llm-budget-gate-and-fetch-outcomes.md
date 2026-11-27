@@ -62,3 +62,10 @@ Treat the following as one cluster, because the pieces only work together and wo
 ## Amendments
 
 - 2026-11-26, feature 003 update: FR-ERR-6 extends the temporary-unavailable answer of decision 6 from "allowance spent or paused" to any provider failure on a user-facing route.
+
+- 2026-11-27, feature 003 implementation note (what 003 added beyond this ADR; the decisions above stand):
+  - **Classify deferral queue.** A refused or failed classification no longer ends the story: the record is stored as before and queued in `classify_pending` in the same transaction; the scheduler tick drains the queue oldest first (batch of 10) under the `backfill` class and fills only dimensions that are still unknown (FR-BUDGET-13, research R-20).
+  - **`provider_*` outcomes kept out of health.** Provider-side failures are recorded as `provider_quota`, `provider_error`, `provider_parse` or `deferred` outcomes on both the monitoring and the discovery path and are excluded from the failure streak, coverage and retention ranking by the readers (a run with a provider outcome does not extend or reset a streak); `GET /sources/health` shows `recent_provider_failures` (runs among the newest 10) and `last_provider_failure_at` apart from `consecutive_failures` (FR-ERR-1..5).
+  - **Operator budget view.** `GET /monitoring/budget` (operator only, read only) shows today's budget numbers, the pause, the classification queue size and each source's cadence, from the same read helpers as the `/metrics` collector (FR-OBS-5).
+  - **Model names from settings.** `LLM_GENERATION_MODEL` and `LLM_EMBEDDING_MODEL` replace the constants in `core/llm.py` with today's values as defaults; no model change (FR-BUDGET-12). The embedding dimension stays a constant.
+  - **The fingerprint stores `zero_candidates`.** A fetch that yields zero grounded candidates also stores the page fingerprint (outcome `zero_candidates`), so the unextractable-page back-off can recognise the same page and does not re-spend a provider request on it (FR-SKIP-4, research R-08).

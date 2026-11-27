@@ -83,12 +83,19 @@ class FakeSite:
             if not self.account_exists:
                 return httpx.Response(401, json={"detail": "Incorrect email or password"})
             return httpx.Response(200, json={"access_token": CHECK_TOKEN, "token_type": "bearer"})
+        if path == "/monitoring/budget":  # 003 check 11/12
+            if not is_operator:
+                return httpx.Response(403, json={"detail": "Operator access required"})
+            return httpx.Response(200, json={"request_types": {"generate": {"allowance": 20, "used": {"monitoring": 1}}}})
         if path == "/monitoring/runs" and request.method == "POST":
-            return httpx.Response(self.run_status_for_operator if is_operator else self.run_status_for_check_account)
+            status = self.run_status_for_operator if is_operator else self.run_status_for_check_account
+            return httpx.Response(status, json={"id": "run-1", "status": "running"})
         if path == "/monitoring/runs" and request.method == "GET":
             return httpx.Response(self.list_status, json=[])
         if path.startswith("/monitoring/runs/"):
-            return httpx.Response(200 if is_operator else self.detail_status_for_check_account)
+            status = 200 if is_operator else self.detail_status_for_check_account
+            return httpx.Response(status, json={"id": "run-1", "status": "completed", "sources_processed": 0,
+                                                "sources_skipped": 0, "sources_deferred": 0})
         if path == "/scholarships/match-url":
             return httpx.Response(self.match_status, json=self.match_body)
         return httpx.Response(404)
@@ -109,6 +116,15 @@ class FakeSql:
     def operator_count(self, url):
         self.urls.append(url)
         return self.operators
+
+    # 003 checks 9 and 10 (see tests/scripts/test_post_deploy_check_003.py for their own tests)
+    def alembic_head(self, url):
+        self.urls.append(url)
+        return "b4e7a91c3d52"
+
+    def app_role_budget_tables(self, url):
+        self.urls.append(url)
+        return []
 
 
 @pytest.fixture
@@ -219,7 +235,7 @@ def test_main_exits_zero_when_nothing_failed_and_prints_one_line_per_check(pdc, 
     out = capsys.readouterr().out
     assert code == 0
     lines = [line for line in out.splitlines() if line.startswith(("PASS", "FAIL", "MANUAL"))]
-    assert len(lines) == 8
+    assert len(lines) == 13  # 010's eight checks and 003's five
 
 
 def test_main_exits_non_zero_when_any_check_fails(pdc, capsys):

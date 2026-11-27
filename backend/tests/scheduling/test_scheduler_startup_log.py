@@ -104,3 +104,24 @@ def test_a_disabled_scheduler_starts_nothing_and_logs_no_configuration(startup, 
     with caplog.at_level(logging.INFO):
         assert sched_mod.start_scheduler(0) is None
     assert [r for r in caplog.records if r.getMessage() == MESSAGE] == []
+
+
+def test_application_start_logs_the_configuration_once(monkeypatch, caplog, db_session_factory):
+    """Entry point of the spec's map: starting the app (the lifespan calls `start_scheduler`)."""
+    import app.data.repositories.db as db_mod
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    monkeypatch.setattr(db_mod, "SessionLocal", db_session_factory)
+    monkeypatch.setattr(source_repo, "get_monitorable_sources", lambda db, **kw: [])
+    monkeypatch.setattr(settings, "monitoring_interval_minutes", 360)
+    sched_mod.stop_scheduler()
+    try:
+        with caplog.at_level(logging.INFO):
+            with TestClient(app):
+                pass
+    finally:
+        sched_mod.stop_scheduler()
+    record = _record(caplog)
+    assert record.tick_interval_minutes == 360

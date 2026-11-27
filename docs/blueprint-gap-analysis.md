@@ -27,14 +27,16 @@
 | Status | Rows | Share |
 |---|---|---|
 | Built | 35 | 45% |
-| Partial | 26 | 34% |
-| Missing | 5 | 6% |
+| Partial | 27 | 35% |
+| Missing | 4 | 5% |
 | Deferred-by-decision | 11 | 14% |
 | **Total** | **77** | |
 
 (Counts updated 2026-10-25: M-10 moved from *Deferred* to *Missing* because ADR-0012 supersedes the Blueprint deferral and schedules it as feature 006.)
 
-The small *Missing* count is misleading on its own: most of the real distance to the product vision sits in the 26 *Partial* rows, where a capability exists but is narrower than the requirement (one listing page, four hard-constraint dimensions, five sources). The five *Missing* rows are large-scale source expansion (M-10, now scheduled), monitoring cost control (M-36), natural-language constraint parsing (M-49), live-fetch escalation in Q&A (M-51), and a draft review loop (M-63). Of the 11 *Deferred* rows, only the frontend (M-67) and reminders (M-38) materially block the stated product goals.
+(Counts updated 2026-11-27, feature 003: M-36 moved from *Missing* to *Partial*. The budget gate, the unchanged-page skip and the per-source cadence are implemented on branch `003-quota-governance`; the row stays *Partial* until the first week of production measurements (SC-001) confirms the cost. M-23, M-33 and M-35 keep their status; their gap text changed.)
+
+The small *Missing* count is misleading on its own: most of the real distance to the product vision sits in the 27 *Partial* rows, where a capability exists but is narrower than the requirement (one listing page, four hard-constraint dimensions, five sources). The four *Missing* rows are large-scale source expansion (M-10, now scheduled), natural-language constraint parsing (M-49), live-fetch escalation in Q&A (M-51), and a draft review loop (M-63); monitoring cost control (M-36) was the fifth until feature 003 (see the 2026-11-27 note above). Of the 11 *Deferred* rows, only the frontend (M-67) and reminders (M-38) materially block the stated product goals.
 
 ### 1.2 Top 5 gaps
 
@@ -114,7 +116,7 @@ Citations: BP = Blueprint section, PRD IDs as written in the PRD. Evidence is `p
 | M-20 | Verify against the official source (FR-VERIFY-1/3; BP §32) | **Partial** | `grep official_source_confirmed=True app/` returns nothing; `scholarship_repo.py:91` `mark_confirmed_by_monitoring`; `source_monitor/graph.py:315`; ADR-0009 | `VERIFIED` means "re-sighted on an approved listing", not "confirmed on the scholarship's own official page"; no step opens that page for discovered records. **Decision 2026-10-25 (ADR-0013):** `verified` requires the scholarship's own official page with a deadline and eligibility present; listing-only records become `listed`; the 34 current rows are reclassified in feature 004 |
 | M-21 | Conflict resolution: official > recent > reliable (FR-VERIFY-7) | **Built** | `services/conflict_resolution.py`; ADR-0002 | None |
 | M-22 | Provenance on every record (FR-VERIFY-4; FR-INTEL-4) | **Built** | `models/source.py:185` (`scholarship_sources`); `scholarship_fields` | None |
-| M-23 | Failed fetch is never "none found"; retry/backoff (FR-VERIFY-6; NFR-REL-2; BP §33) | **Built** | `sources/retry_policy.py:14-16`; `source_fetch_log`; `tests/sources` | Provider (LLM) errors inside discovery are only logged, not recorded in `source_fetch_log` |
+| M-23 | Failed fetch is never "none found"; retry/backoff (FR-VERIFY-6; NFR-REL-2; BP §33) | **Built** | `sources/retry_policy.py:14-16`; `source_fetch_log`; `tests/sources` | (updated 2026-11-27, feature 003) Provider (LLM) failures are now recorded in `source_fetch_log` as `provider_quota` / `provider_error` / `provider_parse` / `deferred` outcomes on both the monitoring and the discovery path, and are kept out of source health and coverage (`services`, `tests/sources/test_official_fetch_provider_errors.py`) |
 | M-24 | Measured coverage, never 100% (FR-COV-1; FR-DISC-7; BP §30.4) | **Built** | `api/coverage.py:18`; `services/coverage.py` | Honest but tiny, because the registry is |
 | M-25 | Source health, failing flag (FR-HEALTH; 002 US3) | **Built** | `api/health.py:22,43`; ADR-0008 | None |
 | M-26 | Health recovery for API-access sources | **Deferred-by-decision** | ADR-0008 "Known gaps"; 002 tasks note | Moot until an API source exists |
@@ -129,10 +131,10 @@ Citations: BP = Blueprint section, PRD IDs as written in the PRD. Evidence is `p
 | M-30 | Funding classification, no binary flag (FR-INTEL-5; OD-6) | **Built** | seven-value `funding_status` (`tools/extract_listing.py` prompt) | None |
 | M-31 | Nine lifecycle states, deterministic transitions (FR-VERIFY-5; FR-LIFECYCLE) | **Built** | `services/lifecycle.py`; ADR-0009; lifecycle walk integration test | None |
 | M-32 | `expired` driven by the deadline passing | **Deferred-by-decision** | ADR-0009 "Known gaps" | Moot while every deadline is NULL |
-| M-33 | Freshness windows configurable per source (NFR-REL-1; OD-4) | **Built** | `freshness_window_days`, `update_frequency`; `services/verification.py:17` (180 d default) | Not used to schedule checks (M-36) |
+| M-33 | Freshness windows configurable per source (NFR-REL-1; OD-4) | **Built** | `freshness_window_days`, `update_frequency`; `services/verification.py:17` (180 d default) | (updated 2026-11-27, feature 003) Now used to schedule checks: the interval derives from `update_frequency`, is capped at half the freshness window and can be overridden per source (`services/cadence.py`) |
 | M-34 | Scheduled monitoring, deterministic, not an agent (FR-MON-1..5; NFR-REL-3; BP §35) | **Built** | `scheduling/scheduler.py:59`; `source_monitor/graph.py:542` | Selects only `discovery_role` + `web` sources (2 of 5) |
-| M-35 | Detect new / changed / closed / reopened / stale (FR-MON-3) | **Partial** | `services/listing_diff.py`; ADR-0006 | Only deadline, funding, degree level; requirement changes cannot be detected (ADR-0006); no content hash, so every run re-extracts with the LLM |
-| M-36 | Monitoring cost and cadence fit the free tier (NFR-REL-1; operational) | **Missing** | `source_monitor/graph.py:447` `bypass_cache=True`; `scheduler.py:59` 60 min | ~48 LLM calls/day (E) vs 20/day observed cap; no budget guard, hash skip, ETag, or per-source cadence; `core/llm.py` has no retry or quota guard |
+| M-35 | Detect new / changed / closed / reopened / stale (FR-MON-3) | **Partial** | `services/listing_diff.py`; ADR-0006 | Only deadline, funding, degree level; requirement changes cannot be detected (ADR-0006). (updated 2026-11-27, feature 003) A content fingerprint now skips unchanged pages with no LLM request (`services/content_fingerprint.py`); a link-only change is caught by the weekly forced re-check |
+| M-36 | Monitoring cost and cadence fit the free tier (NFR-REL-1; operational) | **Partial** | (updated 2026-11-27, feature 003) `core/llm_gate.py`, `services/llm_budget.py` (daily budget with a user-facing reserve and provider-quota pauses); `services/content_fingerprint.py`, `services/cadence.py`; `scheduling/scheduler.py` (cheap tick); `GET /monitoring/budget`, `/metrics` | Implemented on the feature branch, not yet deployed or measured: the ~48 calls/day (E) estimate is replaced by a counted number only after the first week on the VM (SC-001, runbook section 17). Deterministic rules for HEC are built but disabled until the parity check is approved |
 | M-37 | Re-match and alert owners, in-app + email (FR-ALERT; OD-8) | **Built** | `services/alerts.py`; `api/alerts.py:18-48`; ADR-0007 | Closed/reopened/stale alerts out of scope (ADR-0007 D2); email carries no link |
 | M-38 | Deadline-approaching reminders (BP §2 Planner row, Production tier) | **Deferred-by-decision** | BP §2 | Nothing built; also pointless until deadlines exist (M-28) |
 | M-39 | Alert channels extensible (OD-8) | **Built** | `alert_preferences`; `services/alerts.py` | Only in-app and SMTP exist |
@@ -255,6 +257,8 @@ All figures are estimates **(E)** unless stated. Call counts come from the call-
 
 ### 5.1 Current load
 
+(updated 2026-11-27, feature 003) The table below is the load measured on 2026-10-25, before feature 003. On the feature branch every provider call is counted in `llm_budget_ledger` and bounded by the daily allowance; the new load is read from the ledger (`GET /monitoring/budget`, runbook section 17), not estimated, after deployment.
+
 | Source of calls | Basis | Calls/day |
 |---|---|---|
 | Monitor: listing extraction | 2 sources (measured) x 24 runs/day (configured, 60 min); every run extracts (`bypass_cache=True`) | **~48 (E)** |
@@ -306,6 +310,7 @@ Folder names follow the existing `specs/00N-*` convention. Each item lists scope
 **Build order (updated 2026-10-25 per ADR-0012): 003 -> 004 -> 006 -> 005 -> 007 -> 008/009.** Source expansion (006) is pulled ahead of matching (005) but only after quota governance (003) and trustworthy records (004). Folder numbers are stable identifiers, not build order. The free tier is kept until 006, where the paid-tier decision is taken.
 
 ### 003 `quota-governance-and-cheap-monitoring` (do first)
+- **Status (2026-11-27):** implemented on branch `003-quota-governance`; deploy and the first week of measurements are owner steps (tasks T466-T468, T326).
 - **Scope:** LLM budget service with priorities and 429 back-off in `core/llm.py`; content-hash skip and ETag/Last-Modified; per-source cadence from `update_frequency`; record provider errors in `source_fetch_log` (not just logs); per-source `extraction_rules` hook (deterministic extraction first); budget visible in `/metrics`.
 - **Closes:** M-36, M-23 (provider-error gap), M-35 (hash), part of M-33.
 - **Why first:** every other item adds LLM load, and monitoring alone is already 2.4x over the cap. Without a guard, new features compete with background work and fail unpredictably.

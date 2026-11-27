@@ -153,6 +153,8 @@ The provider-failure rows are `fail`, which the failure-streak definition would 
 | Current LLM result for comparison | 32 items (`items_found` on the newest OK row) |
 | Parser | `beautifulsoup4` is already a declared dependency; no new dependency needed |
 
+**Update 2026-11-27 (T310):** the live page was fetched again for the committed fixture and now has 38 cards and 37 unique names (it had 43 and 38 on 2026-10-25); the committed fixture and its tests use the newer numbers. The verdict below is unchanged.
+
 **Verdict: feasible.** A declarative rule set (item selector, name from the `data-position` attribute, detail URL from the arrow link, optional category text, minimum item count, anomaly thresholds) reproduces everything the LLM can read from this page, deterministically and for free. It cannot produce deadlines or eligibility: those only exist on the 43 detail pages, which is feature 004's job (ADR-0013), so deterministic rules here do not make 004 unnecessary.
 
 **What changes when rules replace the LLM for HEC.**

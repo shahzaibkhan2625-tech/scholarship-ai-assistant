@@ -71,7 +71,9 @@ Values are read from the database at scrape time, so they survive restarts and a
     "generate": {"allowance": 20, "reserve": 8, "used": {"user_facing": 0, "backfill": 0, "monitoring": 0, "validation": 0},
                  "remaining": 20, "deferred": 0, "denied": 0, "provider_exhausted": 0, "discrepancy": 0,
                  "avoided_unchanged": 0, "avoided_rules": 0, "paused_until": null, "observed_limit": null},
-    "embed": {"allowance": null, "used": {}, "remaining": null}
+    "embed": {"allowance": null, "reserve": null, "used": {"user_facing": 0, "backfill": 0, "monitoring": 0, "validation": 0},
+              "remaining": null, "deferred": 0, "denied": 0, "provider_exhausted": 0, "discrepancy": 0,
+              "avoided_unchanged": 0, "avoided_rules": 0, "paused_until": null, "observed_limit": null}  // same shape as generate (updated 2026-11-27, implemented body)
   },
   "sources": [
     {"domain": "www.hec.gov.pk", "interval_minutes": 1440, "interval_source": "derived|override|default",

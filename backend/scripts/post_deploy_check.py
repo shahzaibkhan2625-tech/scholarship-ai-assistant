@@ -1,6 +1,8 @@
-"""Post-deploy checks for feature 010 (US9, FR-DEPLOY-2, SC-009).
+"""Post-deploy checks for feature 010 (US9, FR-DEPLOY-2, SC-009) and feature 003 (T464/T465).
 
-Run after the containers are recreated; see docs/operations-hardening.md "Deploy 010".
+Run after the containers are recreated; see docs/operations-hardening.md "Deploy 010" and "Deploy 003".
+Checks 1-8 are 010's; checks 9-13 are 003's (the Alembic head, the new tables' privileges, the operator budget
+view, a repeated manual run, and the manual start-up-line check). No new environment variable is needed.
 Everything comes from environment variables (nothing on the command line, nothing read from a
 file) and nothing secret is printed: a failure shows the check number, a fixed description and the
 HTTP status or exception class, never a URL, token, password or e-mail address.
@@ -19,6 +21,7 @@ is missing). Check 7 (the alert e-mail) cannot be automated and is always MANUAL
 
 import os
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -33,6 +36,10 @@ REQUIRED = (
     "OWNER_DATABASE_URL",
 )
 TIMEOUT_SECONDS = 20.0
+THREE_REVISION = "b4e7a91c3d52"  # feature 003's Alembic revision
+THREE_TABLES = ("llm_budget_ledger", "llm_budget_state", "source_check_state")
+RUN_POLL_SECONDS = 3.0
+RUN_TIMEOUT_SECONDS = 180.0
 METADATA_URL = "http://169.254.169.254/"
 WEAK_PASSWORD = "x" * 7  # one below the 8-byte minimum
 
@@ -82,6 +89,34 @@ class PsycopgSql:
                 return "refused"
             conn.rollback()  # DDL is transactional: nothing stays behind
             return "created"
+
+    def alembic_head(self, url: str) -> str | None:
+        import psycopg
+
+        with psycopg.connect(url, connect_timeout=15) as conn:
+            row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
+            return row[0] if row else None
+
+    def app_role_budget_tables(self, url: str) -> list[str]:
+        """SELECT and a no-row UPDATE on each 003 table as the app role, all rolled back. Returns the
+        `table:operation` pairs that failed (empty when the role can use every table)."""
+        import psycopg
+
+        problems: list[str] = []
+        for table in THREE_TABLES:
+            update_column = "count" if table == "llm_budget_ledger" else "updated_at" if table == "source_check_state" else "request_type"
+            for operation, statement in (
+                ("SELECT", f"SELECT 1 FROM {table} LIMIT 1"),
+                ("UPDATE", f"UPDATE {table} SET {update_column} = {update_column} WHERE false"),
+            ):
+                with psycopg.connect(url, connect_timeout=15) as conn:
+                    try:
+                        conn.execute(statement)
+                    except psycopg.errors.InsufficientPrivilege:
+                        problems.append(f"{table}:{operation}")
+                    finally:
+                        conn.rollback()
+        return problems
 
     def operator_count(self, url: str) -> int:
         import psycopg
@@ -191,9 +226,139 @@ def check_single_operator(sql, url: str) -> Result:
     return _ok(8, name)
 
 
-def run_checks(env, client, sql) -> list[Result]:
-    account, token = check_accounts(client, env["CHECK_ACCOUNT_EMAIL"], env["CHECK_ACCOUNT_PASSWORD"])
+# -- feature 003 (T465) --------------------------------------------------------------------------------------------
+
+
+def check_migration_head(sql, owner_url: str) -> Result:
+    name = "Alembic head is the 003 revision"
+    try:
+        head = sql.alembic_head(owner_url)
+    except Exception as exc:  # noqa: BLE001 - only the class name may be shown
+        return _fail(9, name, f"could not read the head: {type(exc).__name__}")
+    if head != THREE_REVISION:
+        return _fail(9, name, "the database head is not the 003 revision")
+    return _ok(9, name)
+
+
+def check_new_tables_usable(sql, app_url: str) -> Result:
+    name = "app role can SELECT and UPDATE the three 003 tables"
+    try:
+        problems = sql.app_role_budget_tables(app_url)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(10, name, f"could not run the probe: {type(exc).__name__}")
+    if problems:
+        return _fail(10, name, "not permitted: " + ", ".join(problems))
+    return _ok(10, name)
+
+
+def check_budget_view(client, check_token: str | None, operator_token: str) -> Result:
+    name = "GET /monitoring/budget: 403 for a non-operator, 200 for the operator"
+    if not check_token:
+        return _fail(11, name, "no check-account token (check 2 failed)")
+    _, failure = _expect(client, "GET", "/monitoring/budget", 11, name, 403, headers=_bearer(check_token))
+    if failure:
+        return _fail(11, name, "check account " + failure.reason)
+    _, failure = _expect(client, "GET", "/monitoring/budget", 11, name, 200, headers=_bearer(operator_token))
+    if failure:
+        return _fail(11, name, "operator " + failure.reason)
+    return _ok(11, name)
+
+
+def _json(response) -> dict | list:
+    try:
+        return response.json()
+    except ValueError:
+        return {}
+
+
+def _wait_for_run(client, headers, run_id, sleep) -> dict | None:
+    """Poll one run until it is no longer `running`; `None` when it does not finish in time."""
+    waited = 0.0
+    while waited <= RUN_TIMEOUT_SECONDS:
+        try:
+            response = client.get(f"/monitoring/runs/{run_id}", headers=headers)
+        except httpx.HTTPError:
+            return None
+        body = _json(response)
+        if response.status_code == 200 and isinstance(body, dict) and body.get("status") not in (None, "running"):
+            return body
+        sleep(RUN_POLL_SECONDS)
+        waited += RUN_POLL_SECONDS
+    return None
+
+
+def _wait_until_idle(client, headers, sleep) -> bool:
+    """A run another check started may still be going; only one run at a time is allowed."""
+    waited = 0.0
+    while waited <= RUN_TIMEOUT_SECONDS:
+        try:
+            response = client.get("/monitoring/runs", params={"limit": 1}, headers=headers)
+        except httpx.HTTPError:
+            return False
+        runs = _json(response) if response.status_code == 200 else []
+        if not runs or not isinstance(runs, list) or runs[0].get("status") != "running":
+            return True
+        sleep(RUN_POLL_SECONDS)
+        waited += RUN_POLL_SECONDS
+    return False
+
+
+def check_manual_runs_are_cheap(client, operator_token: str, sleep=time.sleep) -> Result:
+    """Two manual runs in a row. A manual run checks only the sources that are DUE (spec story 3, scenario 6), so
+    right after the first run the second normally checks nothing; it must never extract the same pages again.
+    Today's `allowed` total must never be above the allowance."""
+    name = "repeated manual run does not extract again; ledger within the allowance"
+    headers = _bearer(operator_token)
+    if not _wait_until_idle(client, headers, sleep):
+        return _fail(12, name, "a monitoring run was still in progress")
+    details = []
+    for attempt in (1, 2):
+        response, failure = _expect(client, "POST", "/monitoring/runs", 12, name, 202, headers=headers)
+        if failure:
+            return failure
+        run_id = _json(response).get("id")
+        if not run_id:
+            return _fail(12, name, "POST /monitoring/runs returned no run id")
+        detail = _wait_for_run(client, headers, run_id, sleep)
+        if detail is None:
+            return _fail(12, name, f"manual run {attempt} did not finish in time")
+        if detail.get("status") != "completed":
+            return _fail(12, name, f"manual run {attempt} ended {detail.get('status')}")
+        details.append(detail)
+    second = details[1]
+    if second.get("sources_processed", 0) > 0 and not second.get("sources_skipped") and not second.get("sources_deferred"):
+        return _fail(12, name, "the second run checked sources and extracted again instead of skipping them")
+    view, failure = _expect(client, "GET", "/monitoring/budget", 12, name, 200, headers=headers)
+    if failure:
+        return failure
+    generate = (_json(view).get("request_types") or {}).get("generate", {})
+    allowance, used = generate.get("allowance"), sum((generate.get("used") or {}).values())
+    if allowance is not None and used > allowance:
+        return _fail(12, name, "today's allowed total is above the allowance")
+    return _ok(12, name)
+
+
+def check_startup_line_manual() -> Result:
+    return Result(
+        13, "start-up configuration line is in the log", "MANUAL",
+        'sudo podman logs scholarship-ai-assistant_backend_1 | grep "scheduler configuration"',
+    )
+
+
+def run_checks_003(env, client, sql, check_token: str | None, sleep=time.sleep) -> list[Result]:
     return [
+        check_migration_head(sql, env["OWNER_DATABASE_URL"]),
+        check_new_tables_usable(sql, env["APP_DATABASE_URL"]),
+        check_budget_view(client, check_token, env["OPERATOR_TOKEN"]),
+        check_manual_runs_are_cheap(client, env["OPERATOR_TOKEN"], sleep),
+        check_startup_line_manual(),
+    ]
+
+
+def run_checks(env, client, sql, *, with_003: bool = False) -> list[Result]:
+    """010's eight checks; `with_003` appends feature 003's (numbered 9-13)."""
+    account, token = check_accounts(client, env["CHECK_ACCOUNT_EMAIL"], env["CHECK_ACCOUNT_PASSWORD"])
+    results = [
         check_health(client),
         account,
         check_operator_boundary(client, token, env["OPERATOR_TOKEN"]),
@@ -203,6 +368,9 @@ def run_checks(env, client, sql) -> list[Result]:
         check_alert_email_manual(),
         check_single_operator(sql, env["OWNER_DATABASE_URL"]),
     ]
+    if with_003:
+        results += run_checks_003(env, client, sql, token)
+    return results
 
 
 def main(argv=None, env=None, client=None, sql=None) -> int:
@@ -214,12 +382,12 @@ def main(argv=None, env=None, client=None, sql=None) -> int:
     if client is None:
         verify = env.get("SITE_VERIFY_TLS", "1") != "0"
         client = httpx.Client(base_url=env["SITE_URL"].rstrip("/"), timeout=TIMEOUT_SECONDS, verify=verify)
-    results = run_checks(env, client, sql or PsycopgSql())
+    results = run_checks(env, client, sql or PsycopgSql(), with_003=True)
     for result in results:
         detail = f" - {result.reason}" if result.reason else ""
         print(f"{result.status} {result.number}. {result.name}{detail}")
     failed = [r.number for r in results if r.status == "FAIL"]
-    print("RESULT: FAIL (checks " + ", ".join(map(str, failed)) + ")" if failed else "RESULT: no failures (check 7 is manual)")
+    print("RESULT: FAIL (checks " + ", ".join(map(str, failed)) + ")" if failed else "RESULT: no failures (checks 7 and 13 are manual)")
     return 1 if failed else 0
 
 
