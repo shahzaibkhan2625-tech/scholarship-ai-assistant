@@ -11,7 +11,10 @@ from app.models.audit import AuditLog
 
 def test_closed_action_set():
     assert audit_repo.AUDIT_ACTIONS == frozenset(
-        {"user.signup", "source.approve", "source.reject", "monitoring.run.manual", "submission.approve", "operator.grant"}
+        {
+            "user.signup", "source.approve", "source.reject", "monitoring.run.manual", "submission.approve",
+            "operator.grant", "source.rules.set",  # 003 FR-RULES-6 / D-1 adds the last one
+        }
     )
 
 

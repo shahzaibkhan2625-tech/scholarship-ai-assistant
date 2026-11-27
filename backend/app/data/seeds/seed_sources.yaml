@@ -117,6 +117,21 @@
     list_page_url: "https://www.hec.gov.pk/english/scholarshipsgrants/Pages/default.aspx"
     detail_url_pattern: null
     robots_checked: false
+    # 003 US5: deterministic extraction for the card listing. DISABLED here: it is switched on only after the
+    # parity check passes and the owner approves, with `python -m app.services.source_rules set` (never by
+    # re-seeding production: the seed loader would replace extraction_rules wholesale and reset a failing
+    # source). No category is excluded (plan decision 7); the schema has no such field.
+    deterministic:
+      version: 1
+      enabled: false
+      item_selector: "ul.card-info-container li.card"
+      name:
+        attribute: data-position
+      detail_url:
+        selector: "a.read-more-arrow"
+        attribute: href
+      provider_from_registry: true
+      min_items: 20
   constraints:
     min_request_delay_seconds: 2
     user_agent: "ScholarshipAIAssistant/1.0 (+source-registry; contact: source-registry@scholarship-ai-assistant.local)"

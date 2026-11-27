@@ -18,6 +18,7 @@ AUDIT_ACTIONS = frozenset(
         "monitoring.run.manual",
         "submission.approve",
         "operator.grant",
+        "source.rules.set",  # 003 FR-RULES-6 / D-1
     }
 )
 

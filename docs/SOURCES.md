@@ -67,6 +67,20 @@ disabled.
 - **`official_status: official` justification:** HEC is a statutory,
   government-chartered regulatory body for higher education in Pakistan.
 - **robots.txt / ToS status:** **UNVERIFIED**.
+- **Deterministic extraction (feature 003, DISABLED in the seed):** the card listing is server-rendered and
+  has a stable structure, so the seed carries a declarative rule set under
+  `extraction_rules.deterministic` (`enabled: false`; item selector, name from the `data-position`
+  attribute, detail link, minimum item count). With rules on, a check makes no LLM request; if the markup
+  changes and the rules match nothing, the check falls back to one gated LLM request and flags the rules for
+  review. No category is excluded. **Do not enable it by editing the seed or by re-seeding production**: the
+  seed loader replaces `extraction_rules` wholesale and would reset a `failing` source (EACEA) to `active`.
+  Enabling is a separate, owner-approved step: record the LLM snapshot of the committed fixture
+  (`record-snapshot`), run `parity` and review the report (`matched`, `LLM-only` blocks, `rules-only` is
+  flagged), then `python -m app.services.source_rules set --domain www.hec.gov.pk --operator-email <operator>
+  --rules-file <rules.json> --fixture backend/tests/fixtures/hec/listing.html --snapshot
+  backend/tests/fixtures/hec/llm_snapshot.json`. The command is audited and refuses to enable the rule set if
+  parity fails. The committed fixture (`backend/tests/fixtures/hec/listing.html`) is a trimmed copy of the real
+  page fetched on 2026-11-27 (38 cards, 37 unique names); the page had 43 cards when first measured on 2026-10-25.
 
 ### 5. KAUST Admissions (`www.kaust.edu.sa`)
 

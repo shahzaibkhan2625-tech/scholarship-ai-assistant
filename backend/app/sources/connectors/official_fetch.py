@@ -48,12 +48,14 @@ from app.data.repositories import check_state_repo, source_repo
 from app.data.repositories.db import safe_rollback
 from app.data.repositories.source_repo import SourceNotApprovedError
 from app.models.source import FetchStatus, VerificationStatus
+from app.schemas.extraction_rules import rules_for_source
 from app.schemas.source import SourceFetchLogCreate
 from app.services import cadence, content_fingerprint
 from app.services import llm_budget
 from app.services.lifecycle import DEFAULT_FRESHNESS_WINDOW_DAYS
 from app.sources.retry_policy import DEFAULT_MAX_ATTEMPTS, run_with_retry
 from app.tools.detect_candidate_links import find_candidate_links
+from app.tools import rule_extract
 from app.tools.extract_listing import ExtractListingOutput, extract_listing_from_page
 from app.tools.web_fetch import FetchResult, fetch_url
 
@@ -552,12 +554,50 @@ def fetch_and_extract_listing(
 
     _detect_and_record_candidate_sources(db, url, fetch_result.content or "")
 
-    try:
-        extraction = extract_listing(fetch_result.content or "", source_url=url)
-    except LlmPriorityMissing:
-        raise  # a missing priority scope is a programming error, never reported as an outage
-    except LlmError as error:
-        return _extraction_unavailable(error)
+    def _hold_rules_result(reason: str) -> ListingExtractionResult:
+        """FR-RULES-4: a count that departs sharply from the previous extraction is not applied. The operator is
+        flagged, no records change, the fingerprint is not stored, and the page is looked at again after the
+        source's interval (not on every tick)."""
+        retry_at = now + timedelta(minutes=_cadence_cap_minutes(source))
+        check_state_repo.update(
+            db, source_id, last_extraction_outcome="rules_held", next_attempt_at=retry_at,
+            rules_review_needed=True, rules_review_reason=reason, **common,
+        )
+        source_repo.log_fetch(
+            db,
+            SourceFetchLogCreate(
+                source_id=source_id, status=FetchStatus.OK, outcome="deferred", retry_count=0,
+                error=f"rules result held for review ({reason})", **log_context,
+            ),
+        )
+        return _result("deferred", retry_at=retry_at, cached=_cached_refs(db, source_id))
+
+    # 003 US5 (FR-RULES-1..4): enabled rules run before any LLM request; a match is applied (with the same
+    # grounding gate), an anomalous count is held, and no match falls back to the gated LLM and flags the rules.
+    extraction, used_rules = None, False
+    rules = rules_for_source(source.extraction_rules)
+    if rules is not None:
+        previous = _last_successful_extraction(db, source_id, url if resolved else None)
+        ruled = rule_extract.rule_extract(
+            fetch_result.content or "", rules, source_url=url, organization=source.organization,
+            previous_count=previous.items_found if previous is not None else None,
+        )
+        if ruled.matched and ruled.anomaly is not None:
+            return _hold_rules_result(ruled.anomaly)
+        if ruled.matched:
+            extraction, used_rules = ruled.output, True
+            llm_budget.record_avoided(db, "avoided_rules", now=now)
+            common = {**common, "rules_review_needed": False, "rules_review_reason": None}
+        else:
+            common = {**common, "rules_review_needed": True, "rules_review_reason": "no_match"}
+
+    if extraction is None:
+        try:
+            extraction = extract_listing(fetch_result.content or "", source_url=url)
+        except LlmPriorityMissing:
+            raise  # a missing priority scope is a programming error, never reported as an outage
+        except LlmError as error:
+            return _extraction_unavailable(error)
 
     if extraction.accepted_count == 0:
         # T135/A5+A8: a successful fetch yielding zero GROUNDED candidates
@@ -596,7 +636,7 @@ def fetch_and_extract_listing(
     # logged (not silently dropped) via the OK row's `error` note.
     check_state_repo.update(
         db, source_id, fingerprint=fingerprint, fingerprint_at=now, last_full_extraction_at=now,
-        last_extraction_outcome="ok", backoff_level=0, next_attempt_at=None, **common,
+        last_extraction_outcome="rules" if used_rules else "ok", backoff_level=0, next_attempt_at=None, **common,
     )
     log_note = (
         f"rejected {extraction.rejected_count} ungrounded candidate(s): {extraction.rejected_names[:5]}"
@@ -608,6 +648,7 @@ def fetch_and_extract_listing(
         SourceFetchLogCreate(
             source_id=source_id,
             status=FetchStatus.OK,
+            outcome="rules" if used_rules else None,
             retry_count=0,
             items_found=extraction.accepted_count,
             error=log_note,

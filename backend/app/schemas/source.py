@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from app.core.url_safety import static_hostname_rule
+from app.schemas.extraction_rules import DeterministicRules
 from app.models.source import (
     AccessMethod,
     CandidateSourceStatus,
@@ -43,6 +44,18 @@ def _validate_domain(value: str) -> str:
     if not _HOSTNAME_RE.match(value):
         raise ValueError("domain must be a bare hostname (e.g. 'www2.daad.de')")
     return value
+
+
+def validate_rule_keys(rules: dict) -> dict:
+    """003: validates the two keys the cadence and rules features own (`check_interval_minutes` for FR-CADENCE-3,
+    `deterministic` for FR-RULES-1) and returns `rules` untouched; every other key is left exactly as written."""
+    if "check_interval_minutes" in rules:
+        value = rules["check_interval_minutes"]
+        if isinstance(value, bool) or not isinstance(value, int) or value < MIN_CHECK_INTERVAL_MINUTES:
+            raise ValueError(f"check_interval_minutes must be an integer of at least {MIN_CHECK_INTERVAL_MINUTES}")
+    if "deterministic" in rules:
+        DeterministicRules.model_validate(rules["deterministic"])
+    return rules
 
 
 class SourceRegistryCreate(BaseModel):
@@ -75,16 +88,8 @@ class SourceRegistryCreate(BaseModel):
 
     @field_validator("extraction_rules")
     @classmethod
-    def _check_interval_is_valid(cls, rules: dict) -> dict:
-        """003 FR-CADENCE-3: the operator's interval override. Only this key is validated; every other key
-        of `extraction_rules` is returned untouched."""
-        if "check_interval_minutes" in rules:
-            value = rules["check_interval_minutes"]
-            if isinstance(value, bool) or not isinstance(value, int) or value < MIN_CHECK_INTERVAL_MINUTES:
-                raise ValueError(
-                    f"check_interval_minutes must be an integer of at least {MIN_CHECK_INTERVAL_MINUTES}"
-                )
-        return rules
+    def _rule_keys_are_valid(cls, rules: dict) -> dict:
+        return validate_rule_keys(rules)
 
     @model_validator(mode="after")
     def _listing_url_matches_domain(self) -> "SourceRegistryCreate":
