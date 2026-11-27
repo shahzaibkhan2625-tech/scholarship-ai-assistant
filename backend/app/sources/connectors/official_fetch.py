@@ -49,7 +49,7 @@ from app.data.repositories.db import safe_rollback
 from app.data.repositories.source_repo import SourceNotApprovedError
 from app.models.source import FetchStatus, VerificationStatus
 from app.schemas.source import SourceFetchLogCreate
-from app.services import content_fingerprint
+from app.services import cadence, content_fingerprint
 from app.services import llm_budget
 from app.services.lifecycle import DEFAULT_FRESHNESS_WINDOW_DAYS
 from app.sources.retry_policy import DEFAULT_MAX_ATTEMPTS, run_with_retry
@@ -306,19 +306,9 @@ class ListingExtractionResult:
 
 # 003: helpers for the unchanged-page skip (state transitions: data-model.md, source_check_state).
 _SUCCESS_OUTCOMES = frozenset({"ok", "rules"})
-_CADENCE_MINUTES_BY_FREQUENCY = {
-    "weekly": "cadence_weekly_minutes",
-    "monthly": "cadence_monthly_minutes",
-    "quarterly": "cadence_quarterly_minutes",
-    "annual": "cadence_annual_minutes",
-}
-
-
 def _cadence_cap_minutes(source) -> int:
-    """The source's check interval, the ceiling of the back-off (the cadence service of US3 owns the
-    full derivation; this reads the same defaults)."""
-    name = _CADENCE_MINUTES_BY_FREQUENCY.get(source.update_frequency or "", "cadence_undeclared_minutes")
-    return getattr(settings, name)
+    """The source's check interval, the ceiling of the back-off (derived by the cadence service)."""
+    return cadence.check_interval(source).minutes
 
 
 def _forced_recheck_due(source, state, now: datetime) -> bool:
@@ -576,7 +566,7 @@ def fetch_and_extract_listing(
         # scholarships found" -- logged and the source marked failing,
         # exactly like a real fetch failure, so it surfaces as a coverage gap.
         level = state.backoff_level + 1
-        delay = min(settings.unextractable_backoff_base_minutes * 2 ** min(level - 1, 20), _cadence_cap_minutes(source))
+        delay = cadence.backoff_minutes(level, settings.unextractable_backoff_base_minutes, _cadence_cap_minutes(source))
         check_state_repo.update(
             db, source_id, fingerprint=fingerprint, fingerprint_at=now, last_extraction_outcome="zero_candidates",
             backoff_level=level, next_attempt_at=now + timedelta(minutes=delay), **common,

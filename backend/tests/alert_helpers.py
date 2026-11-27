@@ -9,8 +9,9 @@ fetch/extract seams, patched classifier) and additionally:
   under test; ADR-0007 accepts the soft-preference call).
 """
 
+import itertools
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 from app.data.repositories import alert_repo, scholarship_repo, source_repo
@@ -98,8 +99,13 @@ class _Listing:
         return ExtractListingOutput(candidates=candidates, accepted_count=len(candidates), rejected_count=0)
 
 
+_fetch_counter = itertools.count(1)
+
+
 def _fetcher(url):
-    return FetchResult(url=url, success=True, status_code=200, html="<html>listing</html>")
+    # A new page body on every fetch: these runs model a listing that changes between runs (003: an identical
+    # body would be skipped as unchanged and never extracted).
+    return FetchResult(url=url, success=True, status_code=200, html=f"<html>listing {next(_fetch_counter)}</html>")
 
 
 def build_monitor_env(db_session_factory, monkeypatch):
@@ -140,7 +146,14 @@ def build_monitor_env(db_session_factory, monkeypatch):
         scoped_ids.add(source.id)
         return source
 
+    # 003 US3: a source is only checked when due, so successive runs see a day and an hour pass.
+    clock = {"runs": 0, "start": datetime.now(timezone.utc)}
+
     def run(**kwargs):
+        if kwargs.get("now") is None:
+            clock["runs"] += 1
+            moment = clock["start"] + timedelta(hours=25 * clock["runs"])
+            kwargs["now"] = lambda: moment
         return run_source_monitor(
             session, trigger=MonitoringTrigger.MANUAL, fetch=_fetcher, extract_listing=e.listing,
             sleep=lambda _d: None, **kwargs,

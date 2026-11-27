@@ -132,7 +132,15 @@ def env(db_session_factory, monkeypatch):
         scoped_ids.add(source.id)
         return source
 
+    # 003 US3: a source is only checked when it is due, so successive runs of one test must see time pass
+    # (a day and an hour per run) unless the test passes its own clock.
+    clock = {"runs": 0, "start": datetime.now(timezone.utc)}
+
     def run(now=None):
+        if now is None:
+            clock["runs"] += 1
+            moment = clock["start"] + timedelta(hours=25 * clock["runs"])
+            now = lambda: moment  # noqa: E731
         return run_source_monitor(
             session, trigger=MonitoringTrigger.MANUAL, fetch=e.fetcher, extract_listing=e.listing,
             sleep=lambda _d: None, now=now,

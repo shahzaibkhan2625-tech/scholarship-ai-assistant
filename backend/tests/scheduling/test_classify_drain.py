@@ -275,7 +275,15 @@ def tick(monkeypatch):
 
     calls = []
     monkeypatch.setattr(db_mod, "SessionLocal", lambda: _Session())
-    monkeypatch.setattr("app.workflows.source_monitor.graph.run_source_monitor", lambda s, **kw: calls.append("monitor"))
+    # 003 US3: the tick asks `due_work` first; these tests are about the drain that follows a busy tick.
+    monkeypatch.setattr(
+        "app.workflows.source_monitor.graph.due_work",
+        lambda s, now=None: SimpleNamespace(idle=False, due=1, candidates=0),
+    )
+    monkeypatch.setattr(
+        "app.workflows.source_monitor.graph.run_source_monitor",
+        lambda s, **kw: calls.append("monitor") or SimpleNamespace(sources_processed=1, sources_skipped=0, sources_deferred=0),
+    )
     monkeypatch.setattr(classify_backfill, "drain_classify_pending", lambda s, **kw: calls.append("drain"))
     return calls
 

@@ -67,7 +67,14 @@ def get_fetch_logs_for_run(db: Session, run_id: uuid.UUID) -> list[SourceFetchLo
 
 
 def update_run_counters(
-    db: Session, run_id: uuid.UUID, *, sources_processed: int, sources_failed: int, changes_detected: int
+    db: Session,
+    run_id: uuid.UUID,
+    *,
+    sources_processed: int,
+    sources_failed: int,
+    changes_detected: int,
+    sources_skipped: int = 0,
+    sources_deferred: int = 0,
 ) -> None:
     """Progress write; a finished run (`ended_at` set) is never modified."""
     db.execute(
@@ -77,6 +84,8 @@ def update_run_counters(
             sources_processed=sources_processed,
             sources_failed=sources_failed,
             changes_detected=changes_detected,
+            sources_skipped=sources_skipped,
+            sources_deferred=sources_deferred,
         )
     )
     db.commit()
@@ -90,6 +99,8 @@ def finish_run(
     sources_processed: int,
     sources_failed: int,
     changes_detected: int,
+    sources_skipped: int = 0,
+    sources_deferred: int = 0,
 ) -> bool:
     """Sets `ended_at` exactly once: the `WHERE ended_at IS NULL` guard makes a
     second call a no-op. Returns whether this call performed the finish."""
@@ -102,6 +113,8 @@ def finish_run(
             sources_processed=sources_processed,
             sources_failed=sources_failed,
             changes_detected=changes_detected,
+            sources_skipped=sources_skipped,
+            sources_deferred=sources_deferred,
         )
     )
     db.commit()

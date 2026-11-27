@@ -57,7 +57,7 @@ class _Recorder:
 
     def __call__(self, url):
         self.urls.append(url)
-        return FetchResult(url=url, success=True, status_code=200, html="<html>fixture listing</html>", final_url=url)
+        return FetchResult(url=url, success=True, status_code=200, html=f"<html>fixture listing {url}</html>", final_url=url)
 
 
 def _rows_for(session, source_id, fetched_url):

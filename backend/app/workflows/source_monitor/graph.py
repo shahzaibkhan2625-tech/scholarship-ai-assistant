@@ -78,13 +78,20 @@ from app.core import metrics
 from app.core.config import settings
 from app.core.llm_gate import LlmError, LlmPriorityMissing, Priority, llm_priority
 from app.core.logging import bind_log_context, log_context, reset_log_context
-from app.data.repositories import candidate_validation_repo, monitoring_repo, scholarship_repo, source_repo
+from app.data.repositories import (
+    candidate_validation_repo,
+    check_state_repo,
+    monitoring_repo,
+    scholarship_repo,
+    source_repo,
+)
 from app.models.monitoring import MonitoringRun, MonitoringStatus, MonitoringTrigger
 from app.models.scholarship import LifecycleStatus, Scholarship
 from app.models.source import FetchStatus, SourceRegistry, SourceStatus
 from app.schemas.source import SourceFetchLogCreate
 from app.scheduling.locks import source_lock
 from app.services import alerts as alerts_service
+from app.services import cadence
 from app.services import candidate_validation as candidate_validation_service
 from app.services import lifecycle as lifecycle_service
 from app.services import verification as verification_service
@@ -103,7 +110,7 @@ from app.workflows.ingestion.graph import run_ingestion
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["run_source_monitor"]
+__all__ = ["DueWork", "due_work", "run_source_monitor"]
 
 # D2(c): a run whose accepted_count falls below this fraction of the previous
 # successful run's items_found is treated as a suspect (partial) listing and
@@ -481,7 +488,7 @@ def _monitor_one_source(
             # `mark_seen_verified`, no stale sweep (an empty listed-names set would read as "everything was
             # removed" and could close records).
             stats.skipped, stats.fetch_status = True, "ok"
-            source_repo.touch_source_check(db, source_id, success=True)
+            source_repo.touch_source_check(db, source_id, success=True, now=clock())
             _apply_health_transition(db, source_id, success=True)
             return True
         if result.status == "deferred":
@@ -492,7 +499,7 @@ def _monitor_one_source(
         success = result.status == "ok"
         stats.fetch_failed = not success
         stats.fetch_status = "ok" if success else "fail"
-        source_repo.touch_source_check(db, source_id, success=success)
+        source_repo.touch_source_check(db, source_id, success=success, now=clock())
         _apply_health_transition(db, source_id, success=success)  # recovery must precede ingestion's source gate
 
         now = clock()
@@ -576,6 +583,34 @@ def _validate_candidates_step(
             return
 
 
+@dataclass(frozen=True)
+class DueWork:
+    """What a tick would do (003 US3, FR-CADENCE-1): sources due now, and whether any candidate needs validation."""
+
+    due: int
+    candidates: int
+
+    @property
+    def idle(self) -> bool:
+        return self.due == 0 and self.candidates == 0
+
+
+def _due_sources(db: Session, now: datetime) -> list[SourceRegistry]:
+    """The monitorable web sources that are due at `now`, stalest first (FR-CADENCE-2/3/5)."""
+    sources = source_repo.get_monitorable_sources(db, discovery_role=True, access_method="web")
+    return cadence.select_due(sources, check_state_repo.get_all(db), now)
+
+
+def due_work(db: Session, now: datetime | None = None) -> DueWork:
+    """The cheap tick's preflight: reads only, ends its read transaction, makes no network or LLM call."""
+    moment = now or _utcnow()
+    due = len(_due_sources(db, moment))
+    stale_before = moment - timedelta(days=settings.candidate_validation_recheck_days)
+    candidates = len(candidate_validation_repo.list_pending_needing_validation(db, stale_before=stale_before, limit=1))
+    db.commit()
+    return DueWork(due=due, candidates=candidates)
+
+
 def _record_run_end(status: MonitoringStatus, counters: _Counters, started: float) -> None:
     duration = time.monotonic() - started
     metrics.MONITORING_RUNS_TOTAL.labels(status=status.value).inc()
@@ -622,7 +657,8 @@ def _run_source_monitor(
     budget = rematch_budget if rematch_budget is not None else RematchBudget(settings.max_alert_rematches_per_run)
     finished = False
     try:
-        sources = source_repo.get_monitorable_sources(db, discovery_role=True, access_method="web")
+        # 003 FR-CADENCE-5: only the sources that are due, stalest first.
+        sources = _due_sources(db, (now or _utcnow)())
         for source_id in [source.id for source in sources]:
             with log_context(source_id=source_id):
                 stats = _SourceStats()
@@ -657,6 +693,8 @@ def _run_source_monitor(
                     sources_processed=counters.processed,
                     sources_failed=counters.failed,
                     changes_detected=counters.changes,
+                    sources_skipped=counters.skipped,
+                    sources_deferred=counters.deferred,
                 )
         _validate_candidates_step(db, validator, now or _utcnow)
         monitoring_repo.finish_run(
@@ -666,6 +704,8 @@ def _run_source_monitor(
             sources_processed=counters.processed,
             sources_failed=counters.failed,
             changes_detected=counters.changes,
+            sources_skipped=counters.skipped,
+            sources_deferred=counters.deferred,
         )
         finished = True
     finally:
@@ -679,6 +719,8 @@ def _run_source_monitor(
                     sources_processed=counters.processed,
                     sources_failed=counters.failed,
                     changes_detected=counters.changes,
+                    sources_skipped=counters.skipped,
+                    sources_deferred=counters.deferred,
                 )
             _record_run_end(MonitoringStatus.COMPLETED if finished else MonitoringStatus.FAILED, counters, started)
         finally:

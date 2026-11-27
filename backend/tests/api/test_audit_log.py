@@ -218,7 +218,11 @@ def test_scheduled_run_writes_no_audit_row(session, db_session_factory, monkeypa
     from app.data.repositories import db as db_mod
     from app.scheduling import scheduler
 
+    from app.workflows.source_monitor import graph
+
     monkeypatch.setattr(db_mod, "SessionLocal", db_session_factory)
+    # 003 US3: an idle tick makes no run row; report work due so the tick runs (and creates its row).
+    monkeypatch.setattr(graph, "due_work", lambda db, now=None: graph.DueWork(due=1, candidates=0))
     before = len(_rows(session, "monitoring.run.manual"))
     scheduler._run_scheduled_monitor()
     session.expire_all()

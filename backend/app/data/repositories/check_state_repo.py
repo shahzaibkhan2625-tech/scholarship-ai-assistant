@@ -22,6 +22,11 @@ def get(db: Session, source_id: uuid.UUID) -> SourceCheckState | None:
     return db.get(SourceCheckState, source_id)
 
 
+def get_all(db: Session) -> dict[uuid.UUID, SourceCheckState]:
+    """Every state row by source id (one query, for the due selection of a tick)."""
+    return {state.source_id: state for state in db.execute(select(SourceCheckState)).scalars()}
+
+
 def bootstrap_backoff_level(db: Session, source_id: uuid.UUID) -> int:
     """Count the most recent consecutive 'listing extraction yielded 0 candidates' fetch-log rows
     (newest first); the first other row ends the run. 0 when there is no such history."""

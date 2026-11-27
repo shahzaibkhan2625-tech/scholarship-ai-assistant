@@ -175,6 +175,54 @@ def test_background_body_swallows_workflow_errors(monkeypatch):
     api_mod._execute_run(uuid.uuid4())  # must not raise (the workflow already marked the run failed)
 
 
+# --- 003 run counters (T296, FR-OBS-3) ---------------------------------------------
+
+
+def _finished_run_with_counters(session, skipped, deferred):
+    from sqlalchemy import update
+
+    run = monitoring_repo.create_run(session, MonitoringTrigger.SCHEDULED)
+    session.execute(
+        update(MonitoringRun).where(MonitoringRun.id == run.id).values(sources_skipped=skipped, sources_deferred=deferred)
+    )
+    session.commit()
+    return run
+
+
+def test_run_list_and_detail_return_the_cost_counters(operator_user, session):
+    client, headers = operator_user["client"], operator_user["headers"]
+    run = _finished_run_with_counters(session, skipped=4, deferred=2)
+    listed = {r["id"]: r for r in client.get("/monitoring/runs?limit=100", headers=headers).json()}
+    assert listed[str(run.id)]["sources_skipped"] == 4 and listed[str(run.id)]["sources_deferred"] == 2
+    detail = client.get(f"/monitoring/runs/{run.id}", headers=headers).json()
+    assert detail["sources_skipped"] == 4 and detail["sources_deferred"] == 2
+
+
+def test_post_body_carries_the_counters_at_zero_and_the_route_takes_no_source_list(operator_user, session, background_calls):
+    monitoring_repo.fail_leftover_running_runs(session)
+    response = operator_user["client"].post("/monitoring/runs", headers=operator_user["headers"])
+    assert response.status_code == 202
+    body = response.json()
+    assert body["sources_skipped"] == 0 and body["sources_deferred"] == 0
+    # 002 route unchanged: the manual run takes no body and no source list
+    assert background_calls == [uuid.UUID(body["id"])]
+
+
+def test_counters_are_persisted_by_progress_and_finish_writes(session):
+    run = monitoring_repo.create_run(session, MonitoringTrigger.MANUAL)
+    monitoring_repo.update_run_counters(
+        session, run.id, sources_processed=3, sources_failed=0, changes_detected=1, sources_skipped=2, sources_deferred=1
+    )
+    session.refresh(run)
+    assert (run.sources_skipped, run.sources_deferred) == (2, 1)
+    monitoring_repo.finish_run(
+        session, run.id, status=MonitoringStatus.COMPLETED, sources_processed=3, sources_failed=0,
+        changes_detected=1, sources_skipped=3, sources_deferred=1,
+    )
+    session.refresh(run)
+    assert (run.sources_skipped, run.sources_deferred) == (3, 1)
+
+
 # --- lifespan (T183) --------------------------------------------------------------
 
 

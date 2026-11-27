@@ -23,6 +23,8 @@ from app.models.source import (
     SourceType,
 )
 
+MIN_CHECK_INTERVAL_MINUTES = 15  # mirrors services.cadence.MIN_INTERVAL_MINUTES (schemas import no services)
+
 _HOSTNAME_RE = re.compile(
     r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$"
 )
@@ -70,6 +72,19 @@ class SourceRegistryCreate(BaseModel):
     @classmethod
     def _domain_is_bare_hostname(cls, value: str) -> str:
         return _validate_domain(value)
+
+    @field_validator("extraction_rules")
+    @classmethod
+    def _check_interval_is_valid(cls, rules: dict) -> dict:
+        """003 FR-CADENCE-3: the operator's interval override. Only this key is validated; every other key
+        of `extraction_rules` is returned untouched."""
+        if "check_interval_minutes" in rules:
+            value = rules["check_interval_minutes"]
+            if isinstance(value, bool) or not isinstance(value, int) or value < MIN_CHECK_INTERVAL_MINUTES:
+                raise ValueError(
+                    f"check_interval_minutes must be an integer of at least {MIN_CHECK_INTERVAL_MINUTES}"
+                )
+        return rules
 
     @model_validator(mode="after")
     def _listing_url_matches_domain(self) -> "SourceRegistryCreate":

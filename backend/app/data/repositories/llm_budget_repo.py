@@ -63,6 +63,12 @@ def day_counts(db: Session, budget_day: date) -> dict[tuple[str, str, str], int]
     return {(r.request_type, r.priority_class, r.event): r.count for r in db.execute(stmt)}
 
 
+def count_older_than(db: Session, cutoff_day: date) -> int:
+    """How many ledger rows `prune_older_than` would delete."""
+    stmt = select(func.count()).select_from(LlmBudgetLedger).where(LlmBudgetLedger.budget_day < cutoff_day)
+    return db.execute(stmt).scalar_one()
+
+
 def prune_older_than(db: Session, cutoff_day: date) -> int:
     """Delete ledger rows for days before `cutoff_day`; the pause table is untouched."""
     result = db.execute(delete(LlmBudgetLedger).where(LlmBudgetLedger.budget_day < cutoff_day))

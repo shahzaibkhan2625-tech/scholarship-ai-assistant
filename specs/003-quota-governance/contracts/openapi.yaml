@@ -35,6 +35,19 @@ paths:
   # ---------------------------------------------------------------------
   # Monitoring (FR-MON)
   # ---------------------------------------------------------------------
+  /monitoring/budget:
+    get:
+      tags: [monitoring]
+      summary: "Today's LLM budget and each source's cadence (operator only, read-only; 003 FR-OBS-5)"
+      responses:
+        '200':
+          description: Budget and cadence view
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BudgetView' }
+        '401': { description: Missing or invalid token }
+        '403': { description: Operator access required }
+
   /monitoring/runs:
     get:
       tags: [monitoring]
@@ -396,6 +409,54 @@ components:
         sources_processed: { type: integer }
         sources_failed: { type: integer }
         changes_detected: { type: integer }
+        sources_skipped: { type: integer, default: 0, description: "003 FR-OBS-3: checks skipped as unchanged" }
+        sources_deferred: { type: integer, default: 0, description: "003 FR-OBS-3: checks deferred for budget, pause or back-off" }
+
+    BudgetRequestType:
+      type: object
+      required: [used]
+      properties:
+        allowance: { type: integer, nullable: true, description: "null = counted, not limited" }
+        reserve: { type: integer, nullable: true }
+        used:
+          type: object
+          additionalProperties: { type: integer }
+          description: "Today's allowed count per priority class (user_facing, backfill, monitoring, validation)"
+        remaining: { type: integer, nullable: true }
+        deferred: { type: integer, default: 0 }
+        denied: { type: integer, default: 0 }
+        provider_exhausted: { type: integer, default: 0 }
+        discrepancy: { type: integer, default: 0 }
+        avoided_unchanged: { type: integer, default: 0 }
+        avoided_rules: { type: integer, default: 0 }
+        paused_until: { type: string, format: date-time, nullable: true }
+        observed_limit: { type: integer, nullable: true }
+
+    BudgetSource:
+      type: object
+      required: [domain, interval_minutes, interval_source]
+      properties:
+        domain: { type: string }
+        interval_minutes: { type: integer }
+        interval_source: { type: string, enum: [derived, override, default] }
+        last_checked_at: { type: string, format: date-time, nullable: true }
+        next_due_at: { type: string, format: date-time, nullable: true }
+        noisy: { type: boolean, default: false }
+        rules_review_needed: { type: boolean, default: false }
+
+    BudgetView:
+      type: object
+      required: [budget_day, reset_at, classify_pending, request_types, sources]
+      properties:
+        budget_day: { type: string, format: date }
+        reset_at: { type: string, format: date-time }
+        classify_pending: { type: integer }
+        request_types:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/BudgetRequestType' }
+        sources:
+          type: array
+          items: { $ref: '#/components/schemas/BudgetSource' }
 
     MonitoringRunDetail:
       allOf:

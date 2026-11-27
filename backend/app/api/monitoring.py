@@ -14,8 +14,9 @@ from app.data.repositories import monitoring_repo
 from app.data.repositories.db import SessionLocal, get_db
 from app.models.monitoring import MonitoringTrigger
 from app.models.user import User
-from app.schemas.monitoring import MonitoringRunDetail, MonitoringRunRead
+from app.schemas.monitoring import BudgetRequestType, BudgetSource, BudgetView, MonitoringRunDetail, MonitoringRunRead
 from app.schemas.source import SourceFetchLogRead
+from app.services import llm_budget
 from app.workflows.source_monitor.graph import run_source_monitor
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,40 @@ def _execute_run(run_id: uuid.UUID) -> None:
             run_source_monitor(session, trigger=MonitoringTrigger.MANUAL, run_id=run_id)
         except Exception:  # noqa: BLE001
             logger.exception("manual monitoring run %s failed", run_id)
+
+
+@router.get(
+    "/monitoring/budget",
+    response_model=BudgetView,
+    responses={403: {"description": "operator access required"}},
+)
+def get_budget_view(
+    current_user: User = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> BudgetView:
+    """003 FR-OBS-5: today's LLM budget numbers and each source's cadence, read-only. Uses the same read
+    helpers as `/metrics`, so the two never disagree; no secret, provider payload or page content."""
+    snapshot = llm_budget.budget_snapshot(db)
+    sources = llm_budget.source_cadence_rows(db)
+    request_types = {
+        name: BudgetRequestType(
+            allowance=view.allowance,
+            reserve=view.reserve,
+            used=view.used,
+            remaining=view.remaining,
+            paused_until=view.paused_until,
+            observed_limit=view.observed_limit,
+            **view.events,
+        )
+        for name, view in snapshot.request_types.items()
+    }
+    return BudgetView(
+        budget_day=snapshot.budget_day,
+        reset_at=snapshot.reset_at,
+        classify_pending=snapshot.classify_pending,
+        request_types=request_types,
+        sources=[BudgetSource(**vars(row)) for row in sources],
+    )
 
 
 @router.get("/monitoring/runs", response_model=list[MonitoringRunRead])

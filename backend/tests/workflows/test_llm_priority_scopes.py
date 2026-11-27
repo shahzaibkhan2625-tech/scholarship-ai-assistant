@@ -43,7 +43,9 @@ def test_backfill_helper_runs_the_callable_as_backfill():
 
 def test_monitor_run_alert_step_and_validation_step_carry_their_classes(db_session_factory, monkeypatch):
     seen: dict[str, Priority | None] = {}
-    source = SimpleNamespace(id=uuid.uuid4())
+    source = SimpleNamespace(
+        id=uuid.uuid4(), last_checked_at=None, update_frequency=None, extraction_rules={}, freshness_window_days=None
+    )  # the fields the due selection reads (003 US3)
     monkeypatch.setattr(graph.source_repo, "get_monitorable_sources", lambda *a, **k: [source])
 
     def fake_monitor_one(db, run, source_id, stats, **kwargs):

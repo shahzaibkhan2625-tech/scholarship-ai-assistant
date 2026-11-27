@@ -4,7 +4,7 @@ check: health and the check timestamps move, nothing else does (no change detect
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 import pytest
@@ -63,13 +63,21 @@ def env(db_session_factory, monkeypatch):
     e = Env()
     e.session, e.source, e.state = session, source, state
 
+    # 003 US3: a source is only checked when due, so successive runs see a day and an hour pass (inside the
+    # 7-day forced re-check, so the unchanged page is still skipped).
+    clock = {"runs": 0, "start": datetime.now(timezone.utc)}
+
     def run(now=None):
+        if now is None:
+            clock["runs"] += 1
+            moment = clock["start"] + timedelta(hours=25 * clock["runs"])
+            now = lambda: moment  # noqa: E731
         return run_source_monitor(
             session, trigger=MonitoringTrigger.MANUAL, fetch=fetch, extract_listing=extract,
             sleep=lambda _d: None, now=now,
         )
 
-    e.run = run
+    e.run, e.clock = run, clock
     e.stored = lambda: {s.name: s for s in scholarship_repo.list_for_source(session, source.id)}
     yield e
     session.close()
@@ -128,7 +136,8 @@ def test_the_skipped_counter_and_the_avoided_ledger_event(env, caplog):
     from app.core.config import settings
     from zoneinfo import ZoneInfo
 
-    day = datetime.now(timezone.utc).astimezone(ZoneInfo(settings.llm_budget_timezone)).date()
+    second_run_at = env.clock["start"] + timedelta(hours=25 * 2)  # the ledger day follows the run's clock
+    day = second_run_at.astimezone(ZoneInfo(settings.llm_budget_timezone)).date()
     assert llm_budget_repo.count(env.session, day, "generate", "monitoring", "avoided_unchanged") == 1
 
 

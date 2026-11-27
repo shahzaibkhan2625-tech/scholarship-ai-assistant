@@ -80,8 +80,16 @@ def test_scheduled_job_runs_monitor_with_scheduled_trigger(monkeypatch):
     from app.models.monitoring import MonitoringTrigger
     import app.workflows.source_monitor.graph as graph_mod
 
+    from types import SimpleNamespace
+
     calls = []
-    monkeypatch.setattr(graph_mod, "run_source_monitor", lambda session, *, trigger, **kw: calls.append(trigger))
+    # 003 US3: the tick asks `due_work` first; here something is due, so it runs the monitor.
+    monkeypatch.setattr(graph_mod, "due_work", lambda session, now=None: graph_mod.DueWork(due=1, candidates=0))
+    monkeypatch.setattr(
+        graph_mod, "run_source_monitor",
+        lambda session, *, trigger, **kw: calls.append(trigger)
+        or SimpleNamespace(sources_processed=1, sources_skipped=0, sources_deferred=0),
+    )
     # Call directly with a stub session factory so no DB is touched.
     import app.data.repositories.db as db_mod
 

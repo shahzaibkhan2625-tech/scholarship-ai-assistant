@@ -15,7 +15,10 @@ floors, so the history that explains a source's current state is never pruned:
       the newest `items_found` row of floor (c) is usually one of those and would leave the
       extraction row, which the discovery cache and the baseline read, unprotected.
 
-Only `source_fetch_log` is touched. Pooler-safe: no locks, no session state, one
+`prune_ledger` (003) is the second job of the daily run: it deletes `llm_budget_ledger` rows older than
+`LLM_LEDGER_RETENTION_DAYS` and never touches the pause table.
+
+`prune_fetch_log` touches only `source_fetch_log`. Pooler-safe: no locks, no session state, one
 short transaction per batch. `source_ids` scopes the job (tests MUST pass it; the
 shared database holds real rows); `None` means every source (production).
 
@@ -27,19 +30,19 @@ import argparse
 import logging
 import uuid
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import all_, and_, bindparam, delete, func, select
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.data.repositories import source_repo
+from app.data.repositories import llm_budget_repo, source_repo
 from app.models.source import FetchStatus, SourceFetchLog
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["DEFAULT_BATCH_SIZE", "main", "prune_fetch_log"]
+__all__ = ["DEFAULT_BATCH_SIZE", "main", "prune_fetch_log", "prune_ledger"]
 
 DEFAULT_BATCH_SIZE = 1000
 
@@ -150,6 +153,23 @@ def prune_fetch_log(
         "all sources" if scope is None else f"{len(scope)} source(s)",
     )
     return total
+
+
+def prune_ledger(
+    db: Session, *, retention_days: int | None = None, today: date | None = None, dry_run: bool = False
+) -> int:
+    """003: delete ledger rows for budget days before `today - retention_days` (the cutoff day itself is kept).
+    Returns the rows deleted (under `dry_run`: that WOULD be deleted). One short transaction."""
+    retention_days = settings.llm_ledger_retention_days if retention_days is None else retention_days
+    if retention_days < 1:
+        raise ValueError("retention_days must be >= 1")
+    cutoff = (today or datetime.now(timezone.utc).date()) - timedelta(days=retention_days)
+    if dry_run:
+        return llm_budget_repo.count_older_than(db, cutoff)
+    deleted = llm_budget_repo.prune_older_than(db, cutoff)
+    db.commit()
+    logger.info("ledger retention deleted %s row(s) (cutoff day %s)", deleted, cutoff.isoformat())
+    return deleted
 
 
 def _uuid_arg(value: str) -> uuid.UUID:

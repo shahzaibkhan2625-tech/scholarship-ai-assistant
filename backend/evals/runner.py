@@ -18,6 +18,9 @@ rebuilt (research.md D7).
   scores CV/SOP claim traceability against spec.md SC-004's 100% target — a
   zero-tolerance gate like `matching_correctness`, since a single silently
   fabricated claim is exactly the failure this feature exists to prevent.
+- `quota_governance` (003 T308, backend/evals/cases/quota_governance.py) simulates a day of mixed traffic
+  against the LLM budget policy and scores its invariants (never above the allowance, reserve honoured, no
+  background request below its floor, no call during a provider pause). Zero tolerance, threshold 1.0.
 """
 
 from collections.abc import Callable
@@ -26,6 +29,7 @@ from dataclasses import dataclass
 THRESHOLD = 0.5
 _MATCHING_CORRECTNESS_THRESHOLD = 1.0
 _GENERATION_GROUNDEDNESS_THRESHOLD = 1.0
+_QUOTA_GOVERNANCE_THRESHOLD = 1.0
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,12 @@ def _score_generation_groundedness() -> float:
     return score()
 
 
+def _score_quota_governance() -> float:
+    from evals.cases.quota_governance import score
+
+    return score()
+
+
 CASES: list[EvalCase] = [
     EvalCase(name="matching_correctness", score_fn=_score_matching_correctness, threshold=_MATCHING_CORRECTNESS_THRESHOLD),
     EvalCase(name="qa_groundedness", score_fn=_score_qa_groundedness),
@@ -75,6 +85,7 @@ CASES: list[EvalCase] = [
         score_fn=_score_generation_groundedness,
         threshold=_GENERATION_GROUNDEDNESS_THRESHOLD,
     ),
+    EvalCase(name="quota_governance", score_fn=_score_quota_governance, threshold=_QUOTA_GOVERNANCE_THRESHOLD),
 ]
 
 
